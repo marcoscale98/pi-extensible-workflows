@@ -91,7 +91,7 @@
   <span class="tok-property">"tools"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"*"</span><span class="tok-punctuation">,</span> <span class="tok-string">"!write"</span><span class="tok-punctuation">]</span>
 <span class="tok-punctuation">}</span></code></pre>
         <p>Skills match discovered names, extensions match discovered normalized paths, and tools are limited to the current root or parent candidate set. Patterns cannot create unavailable capabilities. The legacy <code>disabledAgentResources</code> field is rejected.</p>
-        <p><code>piewf doctor</code> warns when active settings or role files still use <code>disabledAgentResources</code>, including empty values. The warning explains the selector polarity change and links to <a href="https://github.com/vekexasia/pi-extensible-workflows/issues/205">issue #205</a>; it does not make doctor exit with an error. Untrusted project settings and roles remain inactive and are not reported.</p>
+        <p><code>piewf doctor</code> reports an error when active settings or role files still use <code>disabledAgentResources</code>, including empty values, because the runtime rejects that configuration. The diagnostic explains the selector polarity change and links to <a href="https://github.com/vekexasia/pi-extensible-workflows/issues/205">issue #205</a>. It also warns when a positive-only <code>tools</code> selector does not form an allow-list; prepend <code>!*</code> when restriction is intended. Untrusted project settings and roles remain inactive and are not reported.</p>
       </section>
       <section id="tool-api">
         <h2>Tool API</h2>

@@ -688,16 +688,24 @@ function resourcePolicyWidened(ceiling: AgentResourcePolicy | undefined, candida
   if (selectorListWidened(ceiling.effective.extensions, candidate.effective.extensions)) return true;
   return selectorListWidened(ceiling.effective.tools ?? [], candidate.effective.tools ?? []);
 }
-function selectorSuffix(ceiling: readonly string[], candidate: readonly string[]): readonly string[] {
-  if (candidate.length < ceiling.length || ceiling.some((pattern, index) => candidate[index] !== pattern)) return [];
-  return candidate.slice(ceiling.length);
+function selectorNarrowing(ceiling: readonly string[], candidate: readonly string[]): readonly string[] {
+  const narrowing: string[] = [];
+  let candidateIndex = 0;
+  for (const pattern of ceiling) {
+    const matchIndex = candidate.indexOf(pattern, candidateIndex);
+    if (matchIndex < candidateIndex) return [];
+    for (const entry of candidate.slice(candidateIndex, matchIndex)) if (entry.startsWith("!")) narrowing.push(entry);
+    candidateIndex = matchIndex + 1;
+  }
+  for (const entry of candidate.slice(candidateIndex)) if (entry.startsWith("!")) narrowing.push(entry);
+  return narrowing;
 }
 function appendResourcePolicyNarrowing(ceiling: AgentResourcePolicy | undefined, candidate: AgentResourcePolicy | undefined): void {
   if (!ceiling || !candidate) return;
   const suffixes = {
-    skills: selectorSuffix(ceiling.effective.skills, candidate.effective.skills),
-    extensions: selectorSuffix(ceiling.effective.extensions, candidate.effective.extensions),
-    tools: selectorSuffix(ceiling.effective.tools ?? [], candidate.effective.tools ?? []),
+    skills: selectorNarrowing(ceiling.effective.skills, candidate.effective.skills),
+    extensions: selectorNarrowing(ceiling.effective.extensions, candidate.effective.extensions),
+    tools: selectorNarrowing(ceiling.effective.tools ?? [], candidate.effective.tools ?? []),
   };
   if (!suffixes.skills.length && !suffixes.extensions.length && !suffixes.tools.length) return;
   const call = candidate.selectorSources.call ?? {};

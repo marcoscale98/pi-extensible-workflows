@@ -2011,6 +2011,29 @@ void test("setup hooks may narrow the prepared resource policy", async () => {
     rmSync(rootDir, { recursive: true, force: true });
   }
 });
+void test("setup hooks preserve interleaved resource narrowing", async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-hook-interleaved-resource-policy-"));
+  const agentDir = join(rootDir, "agent");
+  const cwd = join(rootDir, "project");
+  mkdirSync(join(agentDir, "skills", "secret"), { recursive: true });
+  mkdirSync(join(agentDir, "skills", "kept"), { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", apiKey: "fixture", models: [{ id: "fixture-model", name: "Fixture model", reasoning: false, input: ["text"], contextWindow: 1_024, maxTokens: 128 }] } } }));
+  writeFileSync(join(agentDir, "auth.json"), "{}");
+  writeFileSync(join(agentDir, "skills", "secret", "SKILL.md"), "---\nname: secret\ndescription: Secret\n---\nSecret");
+  writeFileSync(join(agentDir, "skills", "kept", "SKILL.md"), "---\nname: kept\ndescription: Kept\n---\nKept");
+  const policy = (): AgentResourcePolicy => ({ globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["*", "!secret"], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["*", "!secret"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["*", "!secret"] }, project: {} } });
+  const prepared = await prepareAgentSetupForInspection({ ...root, cwd, agentDir, model: { provider: "fixture", model: "fixture-model" }, availableModels: new Set([...root.availableModels ?? [], "fixture/fixture-model"]), agentResourcePolicy: policy, agentSetupHooks: [{ name: "insert-narrowing", priority: 1, setup(agent) { const resourcePolicy = agent.sessionInput.resourcePolicy; if (resourcePolicy) resourcePolicy.effective = { ...resourcePolicy.effective, skills: [resourcePolicy.effective.skills[0] ?? "*", "!kept", ...resourcePolicy.effective.skills.slice(1)] }; } }] }, "work", { label: "worker", workflowName: "flow" }, localAgentTransport);
+  assert.equal(prepared.failure, undefined);
+  let session: Awaited<ReturnType<typeof createLocalPiSession>> | undefined;
+  try {
+    session = await createLocalPiSession(prepared.setup.sessionInput);
+    assert.deepEqual(session.getResourceInspection().skills, []);
+  } finally {
+    await session?.dispose();
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});
 
 void test("resource policy preserves explicit selector sources", async () => {
   const policy: AgentResourcePolicy = { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["global-cold"], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["global-cold"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["global-cold"] }, project: {} } };

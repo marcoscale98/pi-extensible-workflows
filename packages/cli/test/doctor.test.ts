@@ -320,7 +320,7 @@ void test("doctor respects untrusted projects and does not mutate fixtures", asy
   assert.equal(report.diagnostics.some(({ code }) => code === "AGENT_RESOURCE_SELECTOR_MIGRATION"), false);
   assert.equal(doctorExitCode(report), 0);
 });
-void test("doctor warns about legacy agent resource selectors in active settings and roles", async () => {
+void test("doctor reports errors for legacy agent resource selectors in active settings and roles", async () => {
   const paths = fixture();
   const globalSettings = join(paths.agentDir, "pi-extensible-workflows", "settings.json");
   const projectSettings = join(paths.cwd, ".pi", "pi-extensible-workflows", "settings.json");
@@ -340,9 +340,24 @@ void test("doctor warns about legacy agent resource selectors in active settings
     globalRole,
     projectRole,
   ].sort());
-  assert.ok(migrations.every(({ severity, message }) => severity === "warning" && message.includes("#205") && message.includes("pattern") && message.includes("skills") && message.includes("extensions") && message.includes("tools")));
+  assert.ok(migrations.every(({ severity, message, hint }) => severity === "error" && message.includes("#205") && message.includes("pattern") && message.includes("skills") && message.includes("extensions") && message.includes("tools") && hint?.includes("!*")));
+  assert.ok(report.diagnostics.some(({ code, source }) => code === "SETTINGS_INVALID" && source === globalSettings));
+  assert.ok(report.diagnostics.some(({ code }) => code === "ROLE_LOAD_BLOCKED"));
   assert.doesNotMatch(formatDoctorReport(report), /direct\.md.*AGENT_RESOURCE_SELECTOR_MIGRATION/);
   assert.match(formatDoctorReport(report), /https:\/\/github\.com\/vekexasia\/pi-extensible-workflows\/issues\/205/);
+  assert.match(formatDoctorReport(report), /unavailable: role loading failed/);
+  assert.equal(doctorExitCode(report), 1);
+});
+void test("doctor warns when a positive-only tool selector cannot form an allow-list", async () => {
+  const paths = fixture();
+  const globalSettings = join(paths.agentDir, "pi-extensible-workflows", "settings.json");
+  writeFileSync(globalSettings, JSON.stringify({ tools: ["read"] }));
+  const report = await withHome(paths.root, () => doctor({ ...paths, settingsPath: globalSettings, discoverPi: async () => pi() }));
+  const warning = report.diagnostics.find(({ code }) => code === "AGENT_RESOURCE_TOOL_SELECTOR_ALLOWLIST");
+  assert.ok(warning);
+  assert.equal(warning.severity, "warning");
+  assert.equal(warning.source, `${globalSettings}.tools`);
+  assert.match(warning.hint ?? "", /!\*/);
   assert.equal(doctorExitCode(report), 0);
 });
 void test("doctor reports effective resource selectors and unmatched patterns", async () => {
