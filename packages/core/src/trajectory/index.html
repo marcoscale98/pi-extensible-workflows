@@ -378,13 +378,9 @@
       return `${axis}${lane("Input", "input")}${lane("Model", "model")}${lane("Tools", "tools")}`;
     }
     const compactSkillReadPreview = (entry, entries = []) => {
-      if (toolNameOf(entry) !== "read" || !toolCallPartOf(entry)) return undefined;
       const content = entry.message?.content;
-      if (Array.isArray(content) && content.some((part) => {
-        if (typeof part === "string") return part.trim().length > 0;
-        const text = part?.type === "text" ? part.text : part?.type === "thinking" ? part.thinking : undefined;
-        return typeof text === "string" && text.trim().length > 0;
-      })) return undefined;
+      const toolCalls = Array.isArray(content) ? content.filter((part) => part && part.type === "toolCall") : [];
+      if (toolNameOf(entry) !== "read" || (!isToolResult(entry) && toolCalls.length !== 1)) return undefined;
       const args = toolArgsOf(entry, entries);
       if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
       const rawPath = args.file_path ?? args.path;
@@ -394,6 +390,7 @@
       const startLine = args.offset ?? 1;
       const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
       const lineRange = args.offset === undefined && args.limit === undefined ? "" : `:${startLine}${endLine ? `-${endLine}` : ""}`;
+      // Trajectory has no session cwd, so a root-level SKILL.md keeps this fallback label.
       return `[skill] ${pathParts.at(-2) || "SKILL.md"}${lineRange}`;
     };
 

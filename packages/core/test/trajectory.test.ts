@@ -80,9 +80,9 @@ void test("Trajectory compacts canonical skill reads without losing event detail
   const result = toolResult("skill-read");
   const entries = [call, result];
   assert.equal(helpers.compactSkillReadPreview(call, entries), "[skill] tigerstyle:1-400");
-  assert.equal(helpers.compactSkillReadPreview(result, entries), undefined);
+  assert.equal(helpers.compactSkillReadPreview(result, entries), "[skill] tigerstyle:1-400");
   assert.equal(helpers.eventPreview(call, entries), "[skill] tigerstyle:1-400");
-  assert.equal(helpers.eventPreview(result, entries), `read: ${JSON.stringify(skillArgs)} · 12ms`);
+  assert.equal(helpers.eventPreview(result, entries), "[skill] tigerstyle:1-400");
   assert.match(helpers.eventSearchText(call, entries), /read/);
   assert.match(helpers.eventSearchText(call, entries), /tigerstyle\/SKILL\.md/);
 
@@ -93,7 +93,17 @@ void test("Trajectory compacts canonical skill reads without losing event detail
   assert.equal(helpers.eventPreview(toolResult("nested-read"), [nestedCall, toolResult("nested-read")]), `read: ${JSON.stringify(nestedArgs)} · 12ms`);
 
   const textCall = { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Loading the skill now" }, { type: "toolCall", id: "text-read", name: "read", arguments: skillArgs }] } };
-  assert.equal(helpers.eventPreview(textCall, [textCall]), "Loading the skill now read");
+  assert.equal(helpers.compactSkillReadPreview(textCall, [textCall]), "[skill] tigerstyle:1-400");
+  assert.equal(helpers.eventPreview(textCall, [textCall]), "[skill] tigerstyle:1-400");
+
+  const multiCall = { type: "message", message: { role: "assistant", content: [
+    { type: "toolCall", id: "multi-skill", name: "read", arguments: skillArgs },
+    { type: "toolCall", id: "multi-other", name: "read", arguments: nestedArgs },
+    { type: "toolCall", id: "multi-bash", name: "bash", arguments: {} },
+  ] } };
+  assert.equal(helpers.compactSkillReadPreview(multiCall, [multiCall]), undefined);
+  assert.equal(helpers.eventPreview(multiCall, [multiCall]), "read read bash");
+  assert.equal(helpers.compactSkillReadPreview(toolResult("multi-skill"), [multiCall]), "[skill] tigerstyle:1-400");
 
   const filePathArgs = { file_path: "/tmp/other-skill/SKILL.md", offset: 2, limit: 1 };
   const filePathCall = readCall("file-path-read", filePathArgs);
