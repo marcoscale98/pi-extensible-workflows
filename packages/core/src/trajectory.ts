@@ -14,7 +14,7 @@ const DEFAULT_TRAJECTORY_PORT = 7432;
 const TRAJECTORY_IDLE_EXIT_MS = 5 * 60 * 1000;
 const TRAJECTORY_LOCK_NAME = "trajectory.lock";
 const TRAJECTORY_MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
-const TRAJECTORY_MAX_TRANSCRIPT_ENTRIES = 400;
+const TRAJECTORY_MAX_NON_TIMING_ENTRIES = 400;
 
 export type TrajectoryRun = {
   run: PersistedRun;
@@ -158,11 +158,11 @@ function transcriptToolCallId(value: unknown): string | undefined {
   for (const part of message.content) if (object(part) && typeof part.id === "string") return part.id;
   return undefined;
 }
+function isTimingTranscriptEntry(value: unknown): boolean { return object(value) && value.type === "custom" && value.customType === "pi-workflows:tool-timing"; }
 function timingToolCallId(value: unknown): string | undefined {
-  if (!object(value) || value.customType !== "pi-workflows:tool-timing" || !object(value.data)) return undefined;
+  if (!object(value) || !isTimingTranscriptEntry(value) || !object(value.data)) return undefined;
   return typeof value.data.toolCallId === "string" ? value.data.toolCallId : undefined;
 }
-function isTimingTranscriptEntry(value: unknown): boolean { return timingToolCallId(value) !== undefined; }
 async function readTranscript(path: string): Promise<readonly unknown[]> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
@@ -191,11 +191,11 @@ async function readTranscript(path: string): Promise<readonly unknown[]> {
         if (object(value)) entries.push(value);
       } catch { /* A partially written JSONL line is ignored until the next poll. */ }
     }
-    const retainedEntries = entries.filter((entry) => !isTimingTranscriptEntry(entry)).slice(-TRAJECTORY_MAX_TRANSCRIPT_ENTRIES);
+    const retainedEntries = entries.filter((entry) => !isTimingTranscriptEntry(entry)).slice(-TRAJECTORY_MAX_NON_TIMING_ENTRIES);
     const retainedIds = new Set(retainedEntries.map(transcriptToolCallId).filter((id): id is string => id !== undefined));
     const retainedTiming = entries.filter((entry) => { const id = timingToolCallId(entry); return id !== undefined && retainedIds.has(id); });
     const retained = new Set([...retainedEntries, ...retainedTiming]);
-    return entries.filter((entry) => retained.has(entry)).slice(-TRAJECTORY_MAX_TRANSCRIPT_ENTRIES);
+    return entries.filter((entry) => retained.has(entry));
   } catch { return []; }
   finally { await handle?.close(); }
 }

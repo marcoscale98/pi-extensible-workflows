@@ -50,6 +50,9 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
   assert.match(source, /root\.dataset\.timelineHasTime !== "true"/);
   assert.doesNotMatch(source, /paintBrush\(root, selector, range\); callback\(range\)/);
   assert.doesNotMatch(source, /\.range-edge\.end\.stacked \{ top: -31px; \}/);
+  assert.match(source, /function renderGantt\(record, timingsByAgent\)/);
+  assert.doesNotMatch(source, /summary !== "—"/);
+  assert.doesNotMatch(source, /agent-path/);
 });
 
 void test("trajectory transcript retention stays bounded with timing entries", async () => {
@@ -58,7 +61,7 @@ void test("trajectory transcript retention stays bounded with timing entries", a
   const home = join(root, "home");
   const sessionFile = join(root, "session.jsonl");
   mkdirSync(cwd, { recursive: true });
-  const transcript = Array.from({ length: 400 }, (_, index) => {
+  const transcript = Array.from({ length: 401 }, (_, index) => {
     const toolCallId = `call-${String(index)}`;
     return [
       { type: "message", message: { role: "toolResult", toolCallId } },
@@ -76,8 +79,9 @@ void test("trajectory transcript retention stays bounded with timing entries", a
     await store.create(run, createLaunchSnapshot({ script: "return true;", args: null, metadata: { name: "trajectory" }, settings: { concurrency: 1 }, models: ["fixture/fixture-model"], tools: [], agentTypes: [], roles: {}, schemas: [] }));
     const [loaded] = await createTrajectoryRunLoader(cwd, "session", home)();
     const entries = loaded?.transcripts.agent ?? [];
-    assert.equal(entries.length, 400);
-    assert.equal(entries.filter((entry) => (entry as { type?: string }).type === "custom").length, 200);
+    assert.equal(entries.length, 800);
+    assert.equal(entries.filter((entry) => (entry as { type?: string }).type === "custom").length, 400);
+    assert.equal(entries.some((entry) => JSON.stringify(entry).includes("call-0")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

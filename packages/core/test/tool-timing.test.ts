@@ -117,3 +117,18 @@ void test("tool timing extension supports a deterministic clock", () => {
   handlers.get("tool_execution_end")?.({ toolCallId: "call", toolName: "bash", isError: true });
   assert.deepEqual(entries, [{ type: TOOL_TIMING_ENTRY_TYPE, data: { toolCallId: "call", toolName: "bash", startedAt: 100, completedAt: 250, durationMs: 150, isError: true } }]);
 });
+
+void test("bounds unfinished tool timing state", () => {
+  let now = 100;
+  const entries: Array<{ type: string; data: unknown }> = [];
+  const handlers = new Map<string, (event: unknown) => void>();
+  const pi = {
+    on(name: string, handler: (event: unknown) => void) { handlers.set(name, handler); },
+    appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
+  } as unknown as ExtensionAPI;
+  void createToolTimingExtension(() => now)(pi);
+  for (let index = 0; index < 401; index += 1) handlers.get("tool_execution_start")?.({ toolCallId: `call-${String(index)}`, toolName: "bash" });
+  now = 200;
+  for (let index = 0; index < 401; index += 1) handlers.get("tool_execution_end")?.({ toolCallId: `call-${String(index)}`, toolName: "bash", isError: false });
+  assert.equal(entries.length, 400);
+});
