@@ -89,7 +89,7 @@ The strict top-level settings keys are exactly `concurrency`, `backgroundWidget`
 
 ### Trajectory
 
-`extensionSettings.trajectory.port` is the local Trajectory HTTP server port and must be a positive integer when configured. If Trajectory settings are absent, the server defaults to `7432`. A valid `PI_WORKFLOW_TRAJECTORY_PORT` environment variable overrides the configured port. `extensionSettings.trajectory.themes` enables the Harness, TTY, and Paper theme switcher; it defaults to `false` (TTY is always the default). `/workflow trajectory` starts or attaches to the local Trajectory server and opens its browser UI. Workflow-agent sessions persist one `pi-workflows:tool-timing` JSONL entry per completed tool with start, completion, duration, and error status; a tool that crashes before completion has no duration record.
+`extensionSettings.trajectory.port` is the local Trajectory HTTP server port and must be a positive integer when configured. If Trajectory settings are absent, the server defaults to `7432`. A valid `PI_WORKFLOW_TRAJECTORY_PORT` environment variable overrides the configured port. `extensionSettings.trajectory.themes` enables the Harness, TTY, and Paper theme switcher; it defaults to `false` (TTY is always the default). `/workflow trajectory` starts or attaches to the local Trajectory server and opens its browser UI. Workflow-agent sessions persist one `pi-workflows:tool-timing` JSONL entry per completed tool with start, completion, duration, and error status; a tool that crashes before completion has no duration record. Trajectory loads up to 400 non-timing transcript entries per agent and retains their matching timing records.
 
 ### Concurrency
 

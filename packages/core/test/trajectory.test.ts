@@ -32,6 +32,7 @@ void test("Trajectory agent grid groups persisted agent scopes", () => {
   assert.match(source, /JSON\.stringify\(\[agent\.structuralPath \?\? \[\], agent\.parentBreadcrumb \?\? null\]\)/);
   assert.match(source, /agentGridGroups\(phaseAgents\)/);
   assert.match(source, /class="agent-grid-scope"/);
+  assert.match(source, /class="agent-cell" title="\$\{esc\(toolSummary\)\}"/);
   assert.doesNotMatch(source, /const path = \[\.\.\.\(agent\.parentBreadcrumb/);
 });
 

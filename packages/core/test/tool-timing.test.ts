@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -116,6 +117,41 @@ void test("tool timing extension supports a deterministic clock", () => {
   now = 250;
   handlers.get("tool_execution_end")?.({ toolCallId: "call", toolName: "bash", isError: true });
   assert.deepEqual(entries, [{ type: TOOL_TIMING_ENTRY_TYPE, data: { toolCallId: "call", toolName: "bash", startedAt: 100, completedAt: 250, durationMs: 150, isError: true } }]);
+});
+
+void test("serialized tool timing extension runs in the Herdr bridge", async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-tool-timing-bridge-"));
+  const extensionPath = join(rootDir, "extensions.mjs");
+  const factorySource = Function.prototype.toString.call(createToolTimingExtension());
+  writeFileSync(extensionPath, `const factories = [${factorySource}];\nexport default async function(pi) { for (const factory of factories) await factory(pi); }\n`);
+  const entries: Array<{ type: string; data: unknown }> = [];
+  const handlers = new Map<string, (event: unknown) => void>();
+  const pi = {
+    on(name: string, handler: (event: unknown) => void) { handlers.set(name, handler); },
+    appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
+  } as unknown as ExtensionAPI;
+  try {
+    const bridge = await import(pathToFileURL(extensionPath).href) as { default: (pi: ExtensionAPI) => Promise<void> };
+    await bridge.default(pi);
+    handlers.get("tool_execution_start")?.({ toolCallId: "bridge-call", toolName: "bash" });
+    handlers.get("tool_execution_end")?.({ toolCallId: "bridge-call", toolName: "bash", isError: false });
+    assert.equal(entries.length, 1);
+    const entry = entries[0];
+    assert.ok(entry);
+    assert.equal(entry.type, TOOL_TIMING_ENTRY_TYPE);
+    assert.ok(isRecord(entry.data));
+    const { toolCallId, toolName, startedAt, completedAt, durationMs, isError } = entry.data;
+    assert.equal(toolCallId, "bridge-call");
+    assert.equal(toolName, "bash");
+    assert.equal(isError, false);
+    assert.equal(typeof startedAt, "number");
+    assert.equal(typeof completedAt, "number");
+    assert.equal(typeof durationMs, "number");
+    if (typeof startedAt !== "number" || typeof completedAt !== "number" || typeof durationMs !== "number") throw new Error("bridge timing entry has invalid numeric fields");
+    assert.equal(completedAt - startedAt, durationMs);
+  } finally {
+    rmSync(rootDir, { recursive: true, force: true });
+  }
 });
 
 void test("bounds unfinished tool timing state", () => {

@@ -182,7 +182,6 @@ function inlineFactorySource(extension: InlineExtension): string {
 function createInlineExtensionBridge(prepared: Readonly<PreparedAgentSession>): ExtensionBridge | undefined {
   const timingFactory = createToolTimingExtension();
   const factories = prepared.extensionFactories?.includes(timingFactory) ? [...(prepared.extensionFactories ?? [])] : [...(prepared.extensionFactories ?? []), timingFactory];
-  if (!factories.length) return undefined;
   const extensionPath = join(tmpdir(), `pi-herdr-extensions-${String(process.pid)}-${randomBytes(6).toString("hex")}.mjs`);
   const source = `const factories = [${factories.map(inlineFactorySource).join(",")}];\nexport default async function(pi) { for (const factory of factories) await factory(pi); }\n`;
   writeFileSync(extensionPath, source, { encoding: "utf8", mode: 0o600 });

@@ -15,8 +15,8 @@ export interface ToolTimingEntry {
 // NOTE: The entry type literal must match TOOL_TIMING_ENTRY_TYPE; it is local for the same serialization boundary.
 type ClockedToolTimingExtension = (pi: ExtensionAPI, clock?: () => number) => void;
 // Bound unfinished executions so missing end events cannot grow session state indefinitely.
-const MAX_ACTIVE_TOOL_TIMINGS = 400;
 const toolTimingExtension: ClockedToolTimingExtension = (pi, clock = Date.now) => {
+  const MAX_ACTIVE_TOOL_TIMINGS = 400;
   const starts = new Map<string, { toolName: string; startedAt: number }>();
   pi.on("tool_execution_start", (event: ToolExecutionStartEvent) => {
     if (!starts.has(event.toolCallId) && starts.size >= MAX_ACTIVE_TOOL_TIMINGS) return;
