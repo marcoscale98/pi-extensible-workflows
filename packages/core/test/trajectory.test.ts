@@ -211,7 +211,12 @@ void test("Trajectory summarizes assistant tool calls without dropping searchabl
   const threeTools = assistant([call("read", "read-1", {}), call("bash", "bash-1", {}), call("grep", "grep-1", {})]);
   assert.deepEqual(previewParts(threeTools, [threeTools]), { text: "", names: ["read", "bash", "grep"], overflow: 0 });
 
+  const contextToolCall = { type: "custom", message: { content: [call("bash", "context-bash", { command: "git status" })] } };
+  assert.match(helpers.eventSearchText(contextToolCall, [contextToolCall]), /git status/);
+
   assert.match(source, /\.pill\.tool/);
+  assert.match(source, /\.preview \.pill\.tool \{[^}]*margin-right: 4px/);
+  assert.match(source, /\.preview \.preview-tool \{[^}]*font-size: 9px[^}]*padding: 1px 4px/);
   assert.match(source, /renderAssistantToolCalls/);
   assert.match(source, /toolCalls\.map\(\(call\)/);
   assert.match(source, /toolArgsOf\(call, entries\)/);
