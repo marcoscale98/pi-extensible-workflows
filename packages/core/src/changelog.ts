@@ -1,6 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { atomicJson, json } from "./io.js";
 import { object } from "./utils.js";
 
@@ -11,6 +12,8 @@ const MAX_NOTICE_CHARACTERS = 6_000;
 
 type ChangelogEntry = { version: string; body: string };
 type PackageMetadata = { directory: string; version: string };
+
+type ChangelogContext = Pick<ExtensionContext, "hasUI" | "mode"> & { ui: Pick<ExtensionContext["ui"], "notify"> };
 
 function packageMetadata(value: unknown, directory: string): PackageMetadata | undefined {
   if (!object(value) || value.name !== PACKAGE_NAME || typeof value.version !== "string" || !value.version.trim()) return undefined;
@@ -55,16 +58,11 @@ function parseChangelog(markdown: string): ChangelogEntry[] {
 }
 
 async function readChangelog(directory: string): Promise<ChangelogEntry[]> {
-  const candidates = [join(directory, "CHANGELOG.md"), join(directory, "..", "CHANGELOG.md")];
-  for (const path of candidates) {
-    try {
-      return parseChangelog(await readFile(path, "utf8"));
-    } catch (error: unknown) {
-      if (object(error) && error.code === "ENOENT") continue;
-      return [];
-    }
+  try {
+    return parseChangelog(await readFile(join(directory, "CHANGELOG.md"), "utf8"));
+  } catch {
+    return [];
   }
-  return [];
 }
 
 function releaseEntries(entries: readonly ChangelogEntry[], currentVersion: string, previousVersion: string | undefined): ChangelogEntry[] {
@@ -83,11 +81,13 @@ function noticeText(version: string, entries: readonly ChangelogEntry[]): string
   return `pi-extensible-workflows updated to ${version}\n\n${bounded}`;
 }
 
-function noticeFunction(context: unknown): ((message: string) => Promise<void>) | undefined {
-  if (!object(context) || context.hasUI !== true || context.mode === "print" || context.mode === "json" || !object(context.ui) || typeof context.ui.notify !== "function") return undefined;
-  const ui = context.ui;
-  const notify = context.ui.notify;
-  return async (message: string) => { await Reflect.apply(notify, ui, [message, "info"]); };
+function noticeFunction(context: ChangelogContext): ((message: string) => Promise<void>) | undefined {
+  if (!context.hasUI || (context.mode !== "tui" && context.mode !== "rpc")) return undefined;
+  const { ui } = context;
+  return (message: string) => {
+    ui.notify(message, "info");
+    return Promise.resolve();
+  };
 }
 
 async function lastNotifiedVersion(path: string): Promise<string | undefined> {
@@ -99,7 +99,7 @@ async function lastNotifiedVersion(path: string): Promise<string | undefined> {
   }
 }
 
-export async function showChangelogNotice(context: unknown, agentDir: string, packageDirectory?: string): Promise<void> {
+export async function showChangelogNotice(context: ChangelogContext, agentDir: string, packageDirectory?: string): Promise<void> {
   const notify = noticeFunction(context);
   if (!notify) return;
   try {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { showChangelogNotice } from "../src/changelog.js";
 
 async function packageFixture(version: string, changelog: string): Promise<string> {
@@ -13,7 +14,9 @@ async function packageFixture(version: string, changelog: string): Promise<strin
   return root;
 }
 
-function noticeContext(notices: string[], mode = "tui") {
+type ChangelogContext = Pick<ExtensionContext, "hasUI" | "mode"> & { ui: Pick<ExtensionContext["ui"], "notify"> };
+
+function noticeContext(notices: string[], mode: ExtensionContext["mode"] = "tui"): ChangelogContext {
   return { hasUI: true, mode, ui: { notify(message: string) { notices.push(message); } } };
 }
 
@@ -56,6 +59,20 @@ void test("does not mark print or JSON sessions as seen", async () => {
   await showChangelogNotice(noticeContext(notices, "json"), agentDir, packageRoot);
   assert.deepEqual(notices, []);
   assert.equal(existsSync(join(agentDir, "pi-extensible-workflows", "changelog-state.json")), false);
+});
+
+void test("does not read a changelog outside the package directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-extensible-workflows-changelog-parent-"));
+  const nodeModules = join(root, "node_modules");
+  const packageRoot = join(nodeModules, "pi-extensible-workflows");
+  mkdirSync(packageRoot, { recursive: true });
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "pi-extensible-workflows", version: "1.0.0" }));
+  writeFileSync(join(nodeModules, "CHANGELOG.md"), "# Unrelated changelog\n## [1.0.0]\n\n- Unrelated\n");
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-extensible-workflows-changelog-parent-agent-"));
+  const notices: string[] = [];
+
+  await showChangelogNotice(noticeContext(notices), agentDir, packageRoot);
+  assert.deepEqual(notices, []);
 });
 
 void test("tolerates malformed changelog and state or persistence failures", async () => {

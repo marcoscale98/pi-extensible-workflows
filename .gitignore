@@ -1,3 +1,4 @@
 dist/
 node_modules/
 .tmp/
+packages/core/CHANGELOG.md

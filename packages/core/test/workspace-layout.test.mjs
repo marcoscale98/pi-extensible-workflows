@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -38,4 +39,18 @@ test("the repository keeps the public package in the core workspace", () => {
   assert.equal(cli.version, root.version);
   assert.equal(cli.bin.piewf, "./dist/src/cli.js");
   assert.equal(cli.publishConfig.access, "public");
+});
+
+test("pack staging does not overwrite a package-local changelog", () => {
+  const destination = resolve(coreRoot, "CHANGELOG.md");
+  const script = resolve(repositoryRoot, "scripts/stage-core-changelog.mjs");
+  writeFileSync(destination, "package-local changelog");
+  try {
+    assert.throws(() => execFileSync(process.execPath, [script, "stage"], { stdio: "pipe" }), /Refusing to overwrite/);
+    execFileSync(process.execPath, [script, "clean"]);
+    assert.equal(readFileSync(destination, "utf8"), "package-local changelog");
+  } finally {
+    rmSync(destination, { force: true });
+    execFileSync(process.execPath, [script, "clean"]);
+  }
 });

@@ -1,12 +1,31 @@
-import { copyFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = resolve(root, "CHANGELOG.md");
 const destination = resolve(root, "packages/core/CHANGELOG.md");
+const marker = resolve(root, ".tmp", "core-changelog-staged");
 const action = process.argv[2];
 
-if (action === "stage") copyFileSync(source, destination);
-else if (action === "clean") rmSync(destination, { force: true });
+function stage() {
+  if (existsSync(destination)) throw new Error(`Refusing to overwrite ${destination}`);
+  mkdirSync(dirname(marker), { recursive: true });
+  writeFileSync(marker, "");
+  try {
+    copyFileSync(source, destination);
+  } catch (error) {
+    rmSync(marker, { force: true });
+    throw error;
+  }
+}
+
+function clean() {
+  if (!existsSync(marker)) return;
+  rmSync(destination, { force: true });
+  rmSync(marker, { force: true });
+}
+
+if (action === "stage") stage();
+else if (action === "clean") clean();
 else throw new Error("Expected stage or clean");
