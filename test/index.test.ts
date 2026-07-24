@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { join, resolve } from "node:path";
@@ -3250,6 +3250,27 @@ void test("permission-sandboxed child cannot read files, reach network, or spawn
   const hostile = runWorkflow(`export const meta={name:'hostile',description:'hostile'}; try { const fs = globalThis.constructor.constructor('return require("node:fs")')(); return fs.readFileSync('/etc/hostname','utf8'); } catch(e) { return 'blocked:'+e.code; }`);
   const result = await hostile.result as string;
   assert.match(result, /blocked:/);
+});
+
+void test("workflow workers support a symlinked temporary directory", async () => {
+  const tmpdirVariable = process.platform === "win32" ? "TEMP" : "TMPDIR";
+  const originalTmpdir = process.env[tmpdirVariable];
+  const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-symlinked-tmp-"));
+  const realTmpdir = join(root, "real");
+  const symlinkedTmpdir = join(root, "link");
+  mkdirSync(realTmpdir);
+  symlinkSync(realTmpdir, symlinkedTmpdir, process.platform === "win32" ? "junction" : "dir");
+  process.env[tmpdirVariable] = symlinkedTmpdir;
+
+  try {
+    assert.equal(await runWorkflow("return 42;").result, 42);
+  } finally {
+    if (originalTmpdir === undefined) {
+      if (tmpdirVariable === "TEMP") delete process.env.TEMP;
+      else delete process.env.TMPDIR;
+    } else process.env[tmpdirVariable] = originalTmpdir;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 void test("workflow cancellation reaches an active top-level scheduler agent", async () => {

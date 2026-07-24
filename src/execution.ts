@@ -1,5 +1,5 @@
 import { fork, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -386,7 +386,7 @@ function workflowErrorFromWorker(error: WorkerErrorShape): WorkflowError {
 export function runWorkflow(script: string, args: JsonValue = null, bridge: WorkflowBridge = {}, signal?: AbortSignal): WorkflowExecution {
   encoded(args);
   const config = JSON.stringify({ script: instrumentWorkflow(script), args: structuredClone(args), functions: bridge.functions ?? {}, variables: bridge.variables ?? {} });
-  const childDir = mkdtempSync(join(tmpdir(), "pi-wf-"));
+  const childDir = realpathSync(mkdtempSync(join(tmpdir(), "pi-wf-")));
   const childFile = join(childDir, "child.cjs");
   writeFileSync(childFile, childSource);
   const child: ChildProcess = fork(childFile, [String(RPC_LIMIT_BYTES), config], {
