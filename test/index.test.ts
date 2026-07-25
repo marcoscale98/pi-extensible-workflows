@@ -3306,6 +3306,20 @@ void test("worker watchdog terminates a synchronous heartbeat stall after five s
   const elapsed = performance.now() - started;
   assert.ok(elapsed >= 4900 && elapsed < 6500, `watchdog fired after ${String(elapsed)}ms`);
 });
+void test("worker watchdog tolerates host suspension while agent work is pending", { timeout: 8000 }, async () => {
+  let started!: () => void;
+  let release!: () => void;
+  let agentCalls = 0;
+  const agentStarted = new Promise<void>((resolve) => { started = resolve; });
+  const agentResult = new Promise<string>((resolve) => { release = () => { resolve("done"); }; });
+  const run = runWorkflow(`return await agent("wait");`, null, { agent: async () => { agentCalls += 1; started(); return agentResult; } });
+  await agentStarted;
+  execFileSync(process.execPath, ["-e", "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5500)"]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  release();
+  assert.equal(await run.result, "done");
+  assert.equal(agentCalls, 1);
+});
 
 void test("worker enforces 10 MB boundaries on individual and final JSON values", async () => {
   const oversized = "x".repeat(RPC_LIMIT_BYTES);

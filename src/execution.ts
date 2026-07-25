@@ -13,6 +13,7 @@ import { instrumentWorkflow, validateAgentOptions, validateShellCommand, validat
 export const RPC_LIMIT_BYTES = 10 * 1024 * 1024;
 type WorkerErrorShape = { code?: string; message: string; authored?: boolean; failedAt?: string };
 export const HEARTBEAT_TIMEOUT_MS = 5000;
+const HEARTBEAT_INTERVAL_MS = 1000;
 
 const OUTCOME_ERRORS = new Set<string>(["AGENT_TIMEOUT", "AGENT_FAILED", "RESULT_INVALID"]);
 const WORK_RESULT_BRAND = "__workResult";
@@ -64,7 +65,7 @@ process.on("message", raw => {
   if (message.ok) request.resolve(message.value);
   else request.reject(workflowError(message.error));
 });
-const heartbeat = setInterval(() => send({ type: "heartbeat" }), 1000);
+const heartbeat = setInterval(() => send({ type: "heartbeat" }), ${HEARTBEAT_INTERVAL_MS});
 send({ type: "heartbeat" });
 const BRAND = "${WORK_RESULT_BRAND}";
 const workError = (code, message) => Object.assign(new Error(message), { code });
@@ -407,7 +408,16 @@ export function runWorkflow(script: string, args: JsonValue = null, bridge: Work
   const controller = new AbortController();
   let settled = false;
   let rejectResult: (error: WorkflowError) => void = () => undefined;
-  let watchdog = setTimeout(() => { stop("WORKER_UNRESPONSIVE", "Workflow worker missed its five-second heartbeat"); }, HEARTBEAT_TIMEOUT_MS);
+  let lastHeartbeatAt = performance.now();
+  let lastWatchdogCheckAt = lastHeartbeatAt;
+  const watchdog = setInterval(() => {
+    const now = performance.now();
+    // Parent and worker timers both stop during host sleep; grant a fresh timeout after wake.
+    const hostWasSuspended = now - lastWatchdogCheckAt >= HEARTBEAT_TIMEOUT_MS;
+    lastWatchdogCheckAt = now;
+    if (hostWasSuspended) { lastHeartbeatAt = now; return; }
+    if (now - lastHeartbeatAt >= HEARTBEAT_TIMEOUT_MS) stop("WORKER_UNRESPONSIVE", "Workflow worker missed its five-second heartbeat");
+  }, HEARTBEAT_INTERVAL_MS);
   const result = new Promise<JsonValue>((resolve, reject) => {
     rejectResult = reject;
     child.on("message", (raw: unknown) => {
@@ -415,7 +425,7 @@ export function runWorkflow(script: string, args: JsonValue = null, bridge: Work
         if (typeof raw !== "string" || Buffer.byteLength(raw) > RPC_LIMIT_BYTES) fail("RPC_LIMIT_EXCEEDED", "RPC value exceeds the 10 MB JSON boundary");
         const message = JSON.parse(raw) as { type?: string; id?: number; method?: string; args?: JsonValue[]; ok?: boolean; value?: JsonValue; error?: WorkerErrorShape };
         if (!jsonValue(message)) fail("RPC_LIMIT_EXCEEDED", "Worker RPC must contain JSON-compatible values");
-        if (message.type === "heartbeat") { clearTimeout(watchdog); watchdog = setTimeout(() => { stop("WORKER_UNRESPONSIVE", "Workflow worker missed its five-second heartbeat"); }, HEARTBEAT_TIMEOUT_MS); return; }
+        if (message.type === "heartbeat") { lastHeartbeatAt = performance.now(); return; }
         if (message.type === "result") { encoded(message.value); finish(); resolve(message.value ?? null); return; }
         if (message.type === "error") { finish(); reject(workflowErrorFromWorker(message.error ?? { code: "INTERNAL_ERROR", message: "Worker failed" })); return; }
         if (message.type === "rpc" && message.id !== undefined) void handleRpc(message.id, message.method ?? "", message.args ?? []);
@@ -430,7 +440,7 @@ export function runWorkflow(script: string, args: JsonValue = null, bridge: Work
       setTimeout(() => { if (!child.killed) child.kill("SIGKILL"); }, 1000).unref();
     }
   }
-  function finish() { settled = true; clearTimeout(watchdog); signal?.removeEventListener("abort", cancel); killChild(); rmSync(childDir, { recursive: true, force: true }); }
+  function finish() { settled = true; clearInterval(watchdog); signal?.removeEventListener("abort", cancel); killChild(); rmSync(childDir, { recursive: true, force: true }); }
   function stop(code: WorkflowErrorCode, message: string) { if (settled) return; controller.abort(); finish(); rejectResult(new WorkflowError(code, message)); }
   function branded(result: Record<string, JsonValue>): JsonValue { return { ...result, [WORK_RESULT_BRAND]: true }; }
   async function handleRpc(id: number, method: string, values: JsonValue[]) {
