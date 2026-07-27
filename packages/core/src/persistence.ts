@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { renameSync, rmSync, writeFileSync } from "node:fs";
-import { access, link, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, link, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
@@ -705,7 +705,7 @@ export class RunStore {
       let worktreeCreated = false;
       try {
         const root = (await git(this.cwd, ["rev-parse", "--show-toplevel"])).trim();
-        const launchRelative = relative(root, this.cwd);
+        const launchRelative = relative(await realpath(root), await realpath(this.cwd));
         if (launchRelative.startsWith("..")) throw new Error("launch cwd is outside the repository");
         await this.cleanupMarker(markerPath);
         await mkdir(dirname(path), { recursive: true, mode: 0o700 });
