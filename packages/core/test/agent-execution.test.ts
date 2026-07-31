@@ -842,6 +842,39 @@ void test("per-attempt timeout is typed and terminal", async () => {
   await assert.rejects(executor.execute("slow", { label: "slow", workflowName: "flow", timeoutMs: 10 }), (error: unknown) => error instanceof WorkflowError && error.code === "AGENT_TIMEOUT" && Array.isArray((error as WorkflowError & { attempts: unknown[] }).attempts));
 });
 
+void test("local workflow sessions bind extensions before their first prompt", async () => {
+  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
+  assert.ok(originalPrompt);
+  let sessionStarts = 0;
+  const messages: string[] = [];
+  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
+    pi.on("session_start", async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      sessionStarts += 1;
+      pi.sendMessage({ customType: "startup-probe", content: "startup context", display: false });
+    });
+  };
+  AgentSession.prototype.prompt = async function (text) {
+    const nativeMessages = (this as unknown as { messages: readonly { role: string; customType?: string }[] }).messages;
+    messages.push(...nativeMessages.map((message) => message.role === "custom" ? `custom:${message.customType ?? ""}` : message.role));
+    messages.push(`user:${text}`);
+    (this as unknown as { agent: { state: { messages: unknown[] } } }).agent.state.messages.push({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
+  };
+  try {
+    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "session-start-lifecycle", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
+    const session = await localAgentTransport.createSession(prepared, {} as never);
+    try {
+      await session.prompt("first user message");
+      assert.equal(sessionStarts, 1);
+      assert.deepEqual(messages, ["custom:startup-probe", "user:first user message"]);
+      assert.deepEqual(session.getLastAssistant(), undefined);
+    } finally {
+      await session.dispose();
+    }
+  } finally {
+    Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
+  }
+});
 void test("local session suspend and resume retain the session seam with a stubbed prompt", async () => {
   const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
   const originalSessionFile = Object.getOwnPropertyDescriptor(AgentSession.prototype, "sessionFile");
