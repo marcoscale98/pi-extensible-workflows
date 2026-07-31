@@ -25,6 +25,7 @@ export interface PiSession {
   steer?(text: string): Promise<void>;
   abort?(): Promise<void>;
   dispose(): void;
+  readonly extensionRunner?: { emit(event: { type: "session_shutdown"; reason: "quit" }): Promise<unknown> };
 };
 export interface PiPromptInspection {
   readonly prompt: string;
@@ -323,6 +324,10 @@ function workflowAgentState(native: PiSession, prepared: Readonly<PreparedAgentS
   return { model, ...(model.thinking ? { thinking: model.thinking } : {}), tools: [...tools], ...(native.systemPrompt === undefined ? {} : { systemPrompt: native.systemPrompt }) };
 }
 function localSessionEvent(event: unknown): WorkflowAgentSessionEvent { return event as WorkflowAgentSessionEvent; }
+async function disposeNativeSession(native: PiSession): Promise<void> {
+  await native.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
+  native.dispose();
+}
 export async function createLocalWorkflowAgentSession(prepared: Readonly<PreparedAgentSession>, context: Readonly<AgentTransportContext>): Promise<WorkflowAgentSession> {
   void context;
   const input: SessionInput = {
@@ -375,14 +380,14 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
       if (disposed || suspended || !native.sessionFile) return;
       coreUnsubscribe?.();
       sessionUnsubscribe?.();
-      native.dispose();
+      await disposeNativeSession(native);
       suspended = true;
     },
     async resumeFromHandoff() {
       const sessionFile = native.sessionFile;
       if (disposed || !sessionFile) return;
       await Promise.allSettled(prompts);
-      if (!suspended) native.dispose();
+      if (!suspended) await disposeNativeSession(native);
       native = await createLocalPiSession({ ...input, sessionPath: sessionFile });
       suspended = false;
       bindNative(native);
@@ -394,7 +399,8 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
         await Promise.allSettled(prompts);
         coreUnsubscribe?.();
         sessionUnsubscribe?.();
-        native.dispose();
+        if (suspended) native.dispose();
+        else await disposeNativeSession(native);
       })();
       await disposal;
     },

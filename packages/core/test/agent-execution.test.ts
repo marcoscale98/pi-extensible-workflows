@@ -875,6 +875,24 @@ void test("local workflow sessions bind extensions before their first prompt", a
     Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
   }
 });
+void test("local workflow sessions shut down extensions before disposal and handoff replacement", async () => {
+  const lifecycle: string[] = [];
+  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
+    pi.on("session_start", (event) => { lifecycle.push(`start:${event.reason}`); });
+    pi.on("session_shutdown", (event) => { lifecycle.push(`shutdown:${event.reason}`); });
+  };
+  const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "session-shutdown-lifecycle", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
+  const normal = await localAgentTransport.createSession(prepared, {} as never);
+  await normal.dispose();
+  const handoff = await localAgentTransport.createSession(prepared, {} as never);
+  try {
+    await handoff.suspendForHandoff?.();
+    await handoff.resumeFromHandoff?.();
+  } finally {
+    await handoff.dispose();
+  }
+  assert.deepEqual(lifecycle, ["start:startup", "shutdown:quit", "start:startup", "shutdown:quit", "start:startup", "shutdown:quit"]);
+});
 void test("local session suspend and resume retain the session seam with a stubbed prompt", async () => {
   const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
   const originalSessionFile = Object.getOwnPropertyDescriptor(AgentSession.prototype, "sessionFile");
