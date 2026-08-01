@@ -331,11 +331,20 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
     id: "herdr",
     async createSession(prepared, sessionContext) {
       const session: HerdrSession = await local.createSession(prepared, sessionContext);
+      const suspendAndLaunch = async (prompt: string | undefined): Promise<PaneHandle> => {
+        let suspended = false;
+        try {
+          if (session.suspendForHandoff) { await session.suspendForHandoff(); suspended = true; }
+          else { await session.abort(); suspended = true; }
+          return await launchPane({ session, prepared, identity: context.identity, run: context.run, attempt: sessionContext.attempt, runner, fullyInspectable, env, signal: sessionContext.signal, prompt, workspaces, tuiIndex: context.tuiIndex, tuiLabel: context.tuiLabel });
+        } catch (error) {
+          if (suspended) { try { await session.resumeFromHandoff?.(); } catch { /* Preserve the pane launch failure. */ } }
+          throw error;
+        }
+      };
       let opened;
       try {
-        await session.suspendForHandoff?.();
-        if (!session.suspendForHandoff) await session.abort();
-        opened = await launchPane({ session, prepared, identity: context.identity, run: context.run, attempt: sessionContext.attempt, runner, fullyInspectable, env, signal: sessionContext.signal, prompt: prepared.initialPrompt, workspaces, tuiIndex: context.tuiIndex, tuiLabel: context.tuiLabel });
+        opened = await suspendAndLaunch(prepared.initialPrompt);
       } catch (error) {
         await session.dispose();
         throw error;
@@ -349,10 +358,7 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
         async prompt(text) {
           if (disposed) throw new Error("Herdr workflow session is disposed");
           let current = active;
-          if (!current) {
-            await session.suspendForHandoff?.();
-            current = await launchPane({ session, prepared, identity: context.identity, run: context.run, attempt: sessionContext.attempt, runner, fullyInspectable, env, signal: sessionContext.signal, prompt: text, workspaces, tuiIndex: context.tuiIndex, tuiLabel: context.tuiLabel });
-          }
+          if (!current) current = await suspendAndLaunch(text);
           active = current;
           try {
             await current.monitor;

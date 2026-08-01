@@ -168,6 +168,10 @@ function accounting(stats: WorkflowAgentSessionStats): AgentAccounting {
   return { input: stats.tokens.input, output: stats.tokens.output, cacheRead: stats.tokens.cacheRead, cacheWrite: stats.tokens.cacheWrite, cost: stats.cost };
 }
 function canonicalSourcePath(path: string): string { try { return realpathSync(path); } catch { return resolve(path); } }
+const WORKFLOW_HOST_ENTRIES = new Set([
+  canonicalSourcePath(resolve(dirname(fileURLToPath(import.meta.url)), "../../src/index.ts")),
+  canonicalSourcePath(resolve(dirname(fileURLToPath(import.meta.url)), "index.js")),
+]);
 function canonicalExtensionSelector(selector: string): string {
   const negated = selector.startsWith("!");
   const body = negated ? selector.slice(1) : selector;
@@ -266,7 +270,7 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     const discoveredExtensions = [...new Set(resolved.extensions.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => canonicalSourcePath(path)))];
     const extensionSelectors = policy.effective.extensions.map((selector) => ({ original: selector, matching: canonicalExtensionSelector(selector) }));
     const excludedExtensions = new Set(disabledResources(extensionSelectors.map(({ matching }) => matching), discoveredExtensions));
-    const extensionPaths = discoveredExtensions.filter((path) => !excludedExtensions.has(path));
+    const extensionPaths = discoveredExtensions.filter((path) => !excludedExtensions.has(path) && !WORKFLOW_HOST_ENTRIES.has(path));
     const unmatchedExtensions = extensionSelectors.filter(({ matching }) => unmatchedResourcePatterns([matching], discoveredExtensions).length > 0).map(({ original }) => original);
     Object.assign(policy, { excludedExtensions: [...excludedExtensions], unmatchedExtensions });
     const skillPaths = [...new Set(resolved.skills.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => path))];

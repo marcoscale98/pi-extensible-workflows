@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
-import workflowExtension, { createLaunchSnapshot, FairAgentScheduler, formatNavigatorDashboard, formatNavigatorRun, persistActiveAgentAttempt, persistAgentAttempts, registerWorkflowExtension, runWorkflow, shellIdentityPath, structuralPath, WorkflowAgentExecutor, WorkflowError, type JsonValue, type WorkflowExtension } from "../src/index.js";
+import workflowExtension, { createLaunchSnapshot, FairAgentScheduler, formatNavigatorDashboard, formatNavigatorRun, loadingRegistry, localAgentTransport, persistActiveAgentAttempt, persistAgentAttempts, registerWorkflowExtension, runWorkflow, shellIdentityPath, structuralPath, WorkflowAgentExecutor, WorkflowError, type JsonValue, type WorkflowExtension } from "../src/index.js";
 import { createLocalPiSession } from "../src/agent-execution.js";
 import { listRunIds, runsDirectory, RunStore } from "../src/persistence.js";
 import type { SessionInput } from "../src/agent-execution.js";
@@ -623,48 +623,61 @@ void test("setup hooks conditionally install an inline Pi extension for one agen
   assert.equal(inputs.filter(({ options }) => options?.advisor !== true).length, 1);
   assert.deepEqual(installed, ["scoped-advisor"]);
 });
-void test("parent registry survives nested agent session lifecycle", async () => {
-  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-registry-session-"));
+void test("production child discovery does not replace the frozen parent workflow registry", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-registry-production-"));
+  const childRoot = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-registry-child-"));
+  const agentDir = join(childRoot, "agent");
+  const cwd = join(childRoot, "project");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  const lifecycleFile = join(childRoot, "lifecycle.txt");
+  const packageRoot = realpathSync(process.cwd());
+  const hostEntry = realpathSync(join(packageRoot, "dist/src/index.js"));
+  const benignExtension = join(childRoot, "benign-extension.mjs");
+  writeFileSync(benignExtension, `import { appendFileSync } from "node:fs"; export default function(pi) { pi.on("session_start", (event) => appendFileSync(${JSON.stringify(lifecycleFile)}, "start:" + event.reason + "\\n")); pi.on("session_shutdown", (event) => appendFileSync(${JSON.stringify(lifecycleFile)}, "shutdown:" + event.reason + "\\n")); }`);
+  writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [packageRoot], extensions: [hostEntry, benignExtension] }));
+  const policy = { globalSettingsPath: join(agentDir, "settings.json"), projectSettingsPath: join(cwd, ".pi", "settings.json"), projectTrusted: false, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: [], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [] };
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; details: { value?: unknown } }> }> = [];
   let start: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
-  let nestedLifecycleRan = false;
-  const createSession = async (): Promise<TestPiSession> => ({
-    transport: "local", session: { transport: "local", sessionId: "nested", locator: { sessionFile: "/sessions/nested.jsonl" } }, messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }], getSessionStats: sessionStats,
-    prompt: async () => {
-      const nestedHome = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-nested-registry-"));
-      let nestedStart: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
-      let nestedShutdown: (() => Promise<void>) | undefined;
-      workflowExtension({ registerTool() {}, registerCommand() {}, getActiveTools: () => ["workflow"], on(name: string, handler: unknown) { if (name === "session_start") nestedStart = handler as typeof nestedStart; if (name === "session_shutdown") nestedShutdown = handler as typeof nestedShutdown; } } as never, nestedHome);
-      assert.ok(nestedStart && nestedShutdown);
-      await nestedStart({}, { cwd: nestedHome, sessionManager: { getSessionId: () => "nested" } });
-      await nestedShutdown();
-      nestedLifecycleRan = true;
-    },
-    steer: async () => {}, dispose() {},
-  });
-  workflowExtension({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow", "workflow_catalog"], on(name: string, handler: unknown) { if (name === "session_start") start = handler as typeof start; } } as never, home, async () => {}, testTransport(createSession));
+  workflowExtension({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow", "workflow_catalog"], on(name: string, handler: unknown) { if (name === "session_start") start = handler as typeof start; } } as never, home, async () => {});
   registerWorkflowExtension({
-    version: "1.0.0", headline: "Registry session",
-    functions: {
-      afterNested: {
-        description: "Run after a nested session",
-        input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false },
-        output: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false },
-        run: (input) => ({ value: input.value as string }),
-      },
-    },
+    version: "1.0.0", headline: "Registry probe", description: "Registry probe acceptance",
+    functions: { probe: { description: "Probe the parent registry", input: { type: "object", additionalProperties: false }, output: { type: "string" }, run: () => "probe" } },
   });
   assert.ok(start);
   await start({}, { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "parent" } });
+  const parentRegistry = loadingRegistry();
+  const parentFunctions = Object.keys(parentRegistry.functions()).sort();
   const workflow = tools.find(({ name }) => name === "workflow");
   const catalog = tools.find(({ name }) => name === "workflow_catalog");
   assert.ok(workflow && catalog);
-  const result = await workflow.execute("id", { name: "registry-session", script: "await agent('nested'); return afterNested({value:'after'});", foreground: true }, new AbortController().signal, undefined, { cwd: home, hasUI: false, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "parent" } });
-  assert.equal(nestedLifecycleRan, true);
-  assert.deepEqual(result.details.value, { value: "after" });
-  const listed = JSON.parse((await catalog.execute()).content[0]?.text ?? "null") as { functions: Array<{ name: string }> };
-  assert.equal(listed.functions.some(({ name }) => name === "afterNested"), true);
-  registerAcceptanceExtension();
+  const checkpoint = async () => ({
+    registry: loadingRegistry(),
+    frozen: loadingRegistry().frozen,
+    functions: Object.keys(loadingRegistry().functions()).sort(),
+    workflow: (await workflow.execute("id", { name: "registry-probe", script: "return probe({});", foreground: true }, new AbortController().signal, undefined, { cwd: home, hasUI: false, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "parent" } })).details.value,
+    catalog: JSON.parse((await catalog.execute()).content[0]?.text ?? "null") as { functions: Array<{ name: string }> },
+  });
+  let child: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  let afterCreation: Awaited<ReturnType<typeof checkpoint>> | undefined;
+  let afterDisposal: Awaited<ReturnType<typeof checkpoint>>;
+  try {
+    child = await localAgentTransport.createSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], sessionLabel: "registry-child", resourcePolicy: policy }, {} as never);
+    afterCreation = await checkpoint();
+  } finally {
+    await child?.dispose();
+    afterDisposal = await checkpoint();
+  }
+  assert.ok(afterCreation);
+  for (const observed of [afterCreation, afterDisposal]) {
+    assert.equal(observed.registry, parentRegistry);
+    assert.equal(observed.frozen, true);
+    assert.deepEqual(observed.functions, parentFunctions);
+    assert.equal(observed.functions.includes("probe"), true);
+    assert.equal(observed.workflow, "probe");
+    assert.equal(observed.catalog.functions.some(({ name }) => name === "probe"), true);
+  }
+  assert.deepEqual(readFileSync(lifecycleFile, "utf8").trim().split("\n"), ["start:startup", "shutdown:quit"]);
 });
 void test("registered function context exposes callback worktree references", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-worktree-reference-"));
