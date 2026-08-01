@@ -168,9 +168,11 @@ function accounting(stats: WorkflowAgentSessionStats): AgentAccounting {
   return { input: stats.tokens.input, output: stats.tokens.output, cacheRead: stats.tokens.cacheRead, cacheWrite: stats.tokens.cacheWrite, cost: stats.cost };
 }
 function canonicalSourcePath(path: string): string { try { return realpathSync(path); } catch { return resolve(path); } }
+const extensionDirectory = dirname(fileURLToPath(import.meta.url));
+const workflowPackageRoot = basename(dirname(extensionDirectory)) === "dist" ? resolve(extensionDirectory, "../..") : resolve(extensionDirectory, "..");
 const WORKFLOW_HOST_ENTRIES = new Set([
-  canonicalSourcePath(resolve(dirname(fileURLToPath(import.meta.url)), "../../src/index.ts")),
-  canonicalSourcePath(resolve(dirname(fileURLToPath(import.meta.url)), "index.js")),
+  canonicalSourcePath(resolve(workflowPackageRoot, "src/index.ts")),
+  canonicalSourcePath(resolve(workflowPackageRoot, "dist/src/index.js")),
 ]);
 function canonicalExtensionSelector(selector: string): string {
   const negated = selector.startsWith("!");
