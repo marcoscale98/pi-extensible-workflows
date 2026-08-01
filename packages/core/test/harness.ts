@@ -13,7 +13,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -109,7 +109,7 @@ export class TestHarness {
    * Add fixtures with `addRun()`, then call `launch()`.
    */
   static create(options: { prefix?: string; model?: string; sessionId?: string } = {}): TestHarness {
-    const cwd = realpathSync(mkdtempSync(join(tmpdir(), `pi-wf-${options.prefix ?? "test"}-`)));
+    const cwd = mkdtempSync(join(tmpdir(), `pi-wf-${options.prefix ?? "test"}-`));
     const sessionId = options.sessionId ?? randomUUID();
     return new TestHarness(cwd, sessionId, options.model);
   }

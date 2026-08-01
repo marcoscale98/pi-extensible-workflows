@@ -1,4 +1,4 @@
-import type { CreateAgentSessionOptions, InlineExtension, SessionManager, SessionStartEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { CreateAgentSessionOptions, InlineExtension, SessionManager, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 export const RUN_STATES = ["queued", "running", "pausing", "paused", "awaiting_input", "completed", "failed", "stopped", "interrupted", "budget_exhausted"] as const;
 export const AGENT_STATES = ["queued", "running", "waiting_for_child", "paused", "retrying", "completed", "failed", "cancelled"] as const;
@@ -164,7 +164,6 @@ export interface SessionInput {
   tools: SessionTools;
   sessionLabel: string;
   sessionPath?: string;
-  sessionStartEvent?: SessionStartEvent;
   sessionManager?: SessionManager;
   agentDir?: string;
   customTools?: SessionCustomTools;

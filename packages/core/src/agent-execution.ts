@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
-import { createAgentSession, DefaultPackageManager, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultPackageManager, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager, type SessionStartEvent, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type AgentMessage = { role: string; content?: unknown; stopReason?: string; errorMessage?: string; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } } };
 type LocalSessionShutdownReason = "quit" | "resume";
@@ -25,7 +25,7 @@ export interface PiSession {
   prompt(text: string): Promise<void>;
   steer?(text: string): Promise<void>;
   abort?(): Promise<void>;
-  dispose(reason?: LocalSessionShutdownReason): Promise<void>;
+  dispose(): Promise<void>;
 };
 export interface PiPromptInspection {
   readonly prompt: string;
@@ -241,7 +241,9 @@ async function preparePiPrompt(native: PiSession, text: string): Promise<PiPromp
   } finally { unsubscribe?.(); }
 }
 
-export async function createLocalPiSession(input: SessionInput): Promise<PiSession> {
+interface LocalPiSessionHandle { readonly session: PiSession; shutdown(reason: LocalSessionShutdownReason): Promise<void> }
+export async function createLocalPiSession(input: SessionInput): Promise<PiSession> { return (await createLocalPiSessionHandle(input)).session; }
+async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent?: SessionStartEvent): Promise<LocalPiSessionHandle> {
   const agentDir = input.agentDir ?? getAgentDir();
   const systemPromptSource = workflowSystemPromptPath(input.cwd, agentDir, input.resourcePolicy?.projectTrusted ?? true);
   const systemPromptOptions = input.systemPrompt !== undefined ? { systemPromptOverride: () => input.systemPrompt } : systemPromptSource !== undefined ? { systemPrompt: systemPromptSource } : {};
@@ -296,21 +298,21 @@ export async function createLocalPiSession(input: SessionInput): Promise<PiSessi
     resourceLoader = new DefaultResourceLoader({ cwd: input.cwd, agentDir, ...(input.additionalSkillPaths?.length ? { additionalSkillPaths: [...input.additionalSkillPaths] } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(contextFilesOverride ? { agentsFilesOverride: contextFilesOverride } : {}), ...systemPromptOptions, ...(input.systemPromptAppend ? { appendSystemPromptOverride: (base) => [...base, input.systemPromptAppend ?? ""] } : {}) });
     await resourceLoader.reload();
   }
-  const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, ...(settingsManager ? { settingsManager } : {}), ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(resourceLoader ? { resourceLoader } : {}), ...(input.sessionStartEvent ? { sessionStartEvent: input.sessionStartEvent } : {}), sessionManager: manager });
+  const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, ...(settingsManager ? { settingsManager } : {}), ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(resourceLoader ? { resourceLoader } : {}), ...(sessionStartEvent ? { sessionStartEvent } : {}), sessionManager: manager });
   const nativeDispose = session.dispose.bind(session);
   let disposal: Promise<void> | undefined;
-  const dispose = (reason: LocalSessionShutdownReason = "quit"): Promise<void> => disposal ??= (async () => {
+  const shutdown = (reason: LocalSessionShutdownReason): Promise<void> => disposal ??= (async () => {
     try {
       if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
     } finally {
       nativeDispose();
     }
   })();
-  Object.assign(session, { dispose });
+  Object.assign(session, { dispose: () => shutdown("quit") });
   try {
     await session.bindExtensions({ mode: "print" });
   } catch (error) {
-    await dispose();
+    await shutdown("quit").catch(() => undefined);
     throw error;
   }
   const resourcePaths = resourceLoader ? { extensions: resourceLoader.getExtensions().extensions.filter(({ path }) => !path.startsWith("<")).map(({ resolvedPath }) => canonicalSourcePath(resolvedPath)), skills: resourceLoader.getSkills().skills.map(({ filePath }) => canonicalSourcePath(filePath)) } : undefined;
@@ -321,7 +323,7 @@ export async function createLocalPiSession(input: SessionInput): Promise<PiSessi
     const systemSource = systemPromptSource;
     return { extensions: resourceLoader?.getExtensions().extensions.filter(({ path }) => !path.startsWith("<")).map(({ resolvedPath }) => canonicalSourcePath(resolvedPath)) ?? [], skills: skills?.skills.map(({ name }) => name) ?? [], diagnostics, ...(systemSource ? { systemPromptSource: systemSource } : resourceLoader?.getSystemPrompt() !== undefined ? { systemPromptSource: "Pi resource loader" } : {}) };
   };
-  return Object.assign(session, {
+  const managedSession = Object.assign(session, {
     getLeafId: () => manager.getLeafId(),
     getToolDefinitions: () => session.getAllTools().map(({ name, description, parameters, promptGuidelines }) => ({ name, description, parameters, ...(promptGuidelines ? { promptGuidelines } : {}) })),
     preparePrompt: (text: string) => preparePiPrompt(session as unknown as PiSession, text),
@@ -329,6 +331,7 @@ export async function createLocalPiSession(input: SessionInput): Promise<PiSessi
     ...(resourcePaths ? { herdrResourcePaths: resourcePaths } : {}),
     ...(resourceLoader ? { herdrContextFiles: resourceLoader.getAgentsFiles().agentsFiles } : {}),
   }) as unknown as PiSession;
+  return { session: managedSession, shutdown };
 }
 function workflowAgentMessage(message: AgentMessage | undefined): WorkflowAgentMessage | undefined { return message ? { role: message.role, ...(message.content === undefined ? {} : { content: message.content }), ...(message.stopReason === undefined ? {} : { stopReason: message.stopReason }), ...(message.errorMessage === undefined ? {} : { errorMessage: message.errorMessage }), ...(message.usage === undefined ? {} : { usage: message.usage }) } : undefined; }
 function latestUsableAssistant(messages: readonly AgentMessage[]): WorkflowAgentMessage | undefined { for (let index = messages.length - 1; index >= 0; index -= 1) { const candidate = workflowAgentMessage(messages[index]); if (candidate?.role === "assistant" && !isEmptyAbortedAssistant(candidate)) return candidate; } return undefined; }
@@ -348,7 +351,8 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     ...(prepared.systemPromptAppend ? { systemPromptAppend: prepared.systemPromptAppend } : {}), ...(prepared.extensionFactories?.length ? { extensionFactories: [...prepared.extensionFactories] } : {}),
     ...(prepared.additionalSkillPaths?.length ? { additionalSkillPaths: [...prepared.additionalSkillPaths] } : {}), ...(prepared.contextFiles === undefined ? {} : { contextFiles: [...prepared.contextFiles] }), ...(prepared.resourcePolicy ? { resourcePolicy: structuredClone(prepared.resourcePolicy) } : {}), ...(prepared.options ? { options: { ...prepared.options } } : {}),
   };
-  let native = await createLocalPiSession(input);
+  let nativeHandle = await createLocalPiSessionHandle(input);
+  let native = nativeHandle.session;
   let disposal: Promise<void> | undefined;
   let aborting: Promise<void> | undefined;
   let lifecycle: Promise<void> | undefined;
@@ -360,9 +364,14 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   let coreUnsubscribe: (() => void) | undefined;
   let sessionUnsubscribe: (() => void) | undefined;
   const notify = async (event: WorkflowAgentSessionEvent) => { for (const listener of listeners) await listener(event); };
-  const bindNative = (next: PiSession) => {
+  const unbindNative = () => {
     coreUnsubscribe?.();
     sessionUnsubscribe?.();
+    coreUnsubscribe = undefined;
+    sessionUnsubscribe = undefined;
+  };
+  const bindNative = (next: PiSession) => {
+    unbindNative();
     coreUnsubscribe = next.agent?.subscribe?.((event) => notify(localSessionEvent(event)));
     sessionUnsubscribe = next.subscribe?.((event) => { if (typeof event === "object" && event !== null && (event as { type?: unknown }).type === "agent_settled") void notify(localSessionEvent(event)); });
   };
@@ -374,8 +383,8 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     return next;
   };
   bindNative(native);
-  const startAbort = (duringDisposal = false) => {
-    if (state === "suspended" || (!duringDisposal && state !== "active")) return Promise.resolve();
+  const startAbort = () => {
+    if (state !== "active") return Promise.resolve();
     return aborting ??= Promise.resolve().then(() => native.abort?.()).then(() => undefined).finally(() => { aborting = undefined; });
   };
   const suspend = async (): Promise<void> => {
@@ -384,9 +393,9 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     if (state === "resuming") { await resumeOperation; return suspend(); }
     state = "suspending";
     suspendOperation = enqueue(async () => {
-      coreUnsubscribe?.();
-      sessionUnsubscribe?.();
-      try { await native.dispose("resume"); }
+      await Promise.allSettled(prompts);
+      unbindNative();
+      try { await nativeHandle.shutdown("resume"); }
       catch (error) { if (state === "suspending") state = "suspended"; throw error; }
       if (state === "suspending") state = "suspended";
     });
@@ -404,11 +413,15 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     const operation = enqueue(async () => {
       try {
         await Promise.allSettled(prompts);
-        if (!wasSuspended) await native.dispose("resume");
+        if (!wasSuspended) {
+          unbindNative();
+          await nativeHandle.shutdown("resume");
+        }
         if (isClosing()) return;
-        const next = await createLocalPiSession({ ...input, sessionPath: sessionFile, sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile: sessionFile } });
-        if (isClosing()) { await next.dispose(); return; }
-        native = next;
+        const nextHandle = await createLocalPiSessionHandle({ ...input, sessionPath: sessionFile }, { type: "session_start", reason: "resume", previousSessionFile: sessionFile });
+        if (isClosing()) { await nextHandle.shutdown("quit"); return; }
+        nativeHandle = nextHandle;
+        native = nativeHandle.session;
         bindNative(native);
         state = "active";
       } catch (error) {
@@ -422,14 +435,14 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   const disposeSession = async (): Promise<void> => {
     if (disposal) { await disposal; return; }
     if (state === "disposed") return;
+    const abort = state === "active" ? startAbort() : Promise.resolve();
     state = "disposing";
     disposal = enqueue(async () => {
       try {
-        try { await startAbort(true); } catch { /* Abort failure must not prevent the prompt from settling. */ }
+        try { await abort; } catch { /* Abort failure must not prevent the prompt from settling. */ }
         await Promise.allSettled(prompts);
-        coreUnsubscribe?.();
-        sessionUnsubscribe?.();
-        await native.dispose();
+        unbindNative();
+        await nativeHandle.shutdown("quit");
       } finally {
         state = "disposed";
       }
