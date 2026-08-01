@@ -147,8 +147,8 @@ void test("opens the active session after the handoff boundary and releases on p
   assert.ok(runCommand.includes("PI_CODING_AGENT_DIR='/agent'"));
   assert.ok(runCommand.includes("--model 'openai/gpt:high'"));
   assert.ok(runCommand.includes("--tools 'read'"));
-  assert.match(runCommand, /--system-prompt '\/tmp\/pi-herdr-system-prompt-/);
-  assert.match(runCommand, /--append-system-prompt '\/tmp\/pi-herdr-append-prompt-/);
+  assert.ok(runCommand.includes(`--system-prompt '${join(tmpdir(), "pi-herdr-system-prompt-")}`));
+  assert.ok(runCommand.includes(`--append-system-prompt '${join(tmpdir(), "pi-herdr-append-prompt-")}`));
   assert.ok(runCommand.includes("--skill '/skill'"));
   assert.ok(runCommand.includes("--extension '/allowed-extension.mjs'"));
   assert.ok(runCommand.includes("--skill '/allowed-skill/SKILL.md'"));
@@ -341,7 +341,7 @@ void test("routes fully inspectable agents into one labeled workflow workspace",
   assert.ok(runCommand.includes("--system-prompt '/repo/.pi/pi-extensible-workflows/SYSTEM.md'"));
   assert.match(runCommand, /--no-context-files/);
   assert.match(runCommand, /--append-system-prompt '.*pi-herdr-context-prompt-/);
-  assert.ok(runCommand.includes("@'/tmp/pi-herdr-prompt-"));
+  assert.ok(runCommand.includes(`@'${join(tmpdir(), "pi-herdr-prompt-")}`));
   assert.ok(runCommand.length < 4096);
 });
 void test("hands off sequential fully inspectable prompts and cleans the active tab on abort", async () => {
