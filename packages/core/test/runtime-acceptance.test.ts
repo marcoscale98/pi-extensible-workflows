@@ -447,7 +447,7 @@ void test("production Pi seam installs child tools and registers native steering
   const childTool = { name: "agent", label: "Child", description: "child", parameters: Type.Object({}), async execute() { return { content: [{ type: "text" as const, text: "ok" }], details: {} }; } };
   const session = await createLocalPiSession({ cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], customTools: [childTool], sessionLabel: "issue-9-acceptance" });
   assert.ok(session.agent?.state.tools.some(({ name }) => name === "agent"));
-  session.dispose();
+  await session.dispose();
   let steer: ((message: string) => void | Promise<void>) | undefined;
   const received: string[] = [];
   const executor = new WorkflowAgentExecutor({ cwd: "/repo", model: { provider: "openai", model: "gpt" }, tools: new Set() }, testTransport(async () => ({ transport: "local", session: { transport: "local", sessionId: "s", locator: { sessionFile: "/s" } }, messages: [{ role: "assistant", content: [{ type: "text", text: "ok" }] }], getSessionStats: sessionStats, prompt: async () => {}, steer: async (message) => { received.push(message); }, dispose() {} })));

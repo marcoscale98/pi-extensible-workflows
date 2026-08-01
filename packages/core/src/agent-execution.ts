@@ -7,6 +7,7 @@ import { Value } from "typebox/value";
 import { createAgentSession, DefaultPackageManager, DefaultResourceLoader, getAgentDir, ModelRuntime, SessionManager, SettingsManager, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type AgentMessage = { role: string; content?: unknown; stopReason?: string; errorMessage?: string; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } } };
+type LocalSessionShutdownReason = "quit" | "resume";
 export interface PiSession {
   readonly sessionId: string;
   readonly sessionFile: string | undefined;
@@ -24,8 +25,7 @@ export interface PiSession {
   prompt(text: string): Promise<void>;
   steer?(text: string): Promise<void>;
   abort?(): Promise<void>;
-  dispose(): void;
-  readonly extensionRunner?: { emit(event: { type: "session_shutdown"; reason: "quit" }): Promise<unknown> };
+  dispose(reason?: LocalSessionShutdownReason): Promise<void>;
 };
 export interface PiPromptInspection {
   readonly prompt: string;
@@ -296,8 +296,23 @@ export async function createLocalPiSession(input: SessionInput): Promise<PiSessi
     resourceLoader = new DefaultResourceLoader({ cwd: input.cwd, agentDir, ...(input.additionalSkillPaths?.length ? { additionalSkillPaths: [...input.additionalSkillPaths] } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(contextFilesOverride ? { agentsFilesOverride: contextFilesOverride } : {}), ...systemPromptOptions, ...(input.systemPromptAppend ? { appendSystemPromptOverride: (base) => [...base, input.systemPromptAppend ?? ""] } : {}) });
     await resourceLoader.reload();
   }
-  const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, ...(settingsManager ? { settingsManager } : {}), ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(resourceLoader ? { resourceLoader } : {}), sessionManager: manager });
-  try { await session.bindExtensions({ mode: "print" }); } catch (error) { session.dispose(); throw error; }
+  const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, ...(settingsManager ? { settingsManager } : {}), ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(resourceLoader ? { resourceLoader } : {}), ...(input.sessionStartEvent ? { sessionStartEvent: input.sessionStartEvent } : {}), sessionManager: manager });
+  const nativeDispose = session.dispose.bind(session);
+  let disposal: Promise<void> | undefined;
+  const dispose = (reason: LocalSessionShutdownReason = "quit"): Promise<void> => disposal ??= (async () => {
+    try {
+      if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
+    } finally {
+      nativeDispose();
+    }
+  })();
+  Object.assign(session, { dispose });
+  try {
+    await session.bindExtensions({ mode: "print" });
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
   const resourcePaths = resourceLoader ? { extensions: resourceLoader.getExtensions().extensions.filter(({ path }) => !path.startsWith("<")).map(({ resolvedPath }) => canonicalSourcePath(resolvedPath)), skills: resourceLoader.getSkills().skills.map(({ filePath }) => canonicalSourcePath(filePath)) } : undefined;
   const resourceInspection = (): PiResourceInspection => {
     const extensions = resourceLoader?.getExtensions();
@@ -324,10 +339,6 @@ function workflowAgentState(native: PiSession, prepared: Readonly<PreparedAgentS
   return { model, ...(model.thinking ? { thinking: model.thinking } : {}), tools: [...tools], ...(native.systemPrompt === undefined ? {} : { systemPrompt: native.systemPrompt }) };
 }
 function localSessionEvent(event: unknown): WorkflowAgentSessionEvent { return event as WorkflowAgentSessionEvent; }
-async function disposeNativeSession(native: PiSession): Promise<void> {
-  await native.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
-  native.dispose();
-}
 export async function createLocalWorkflowAgentSession(prepared: Readonly<PreparedAgentSession>, context: Readonly<AgentTransportContext>): Promise<WorkflowAgentSession> {
   void context;
   const input: SessionInput = {
@@ -340,10 +351,12 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   let native = await createLocalPiSession(input);
   let disposal: Promise<void> | undefined;
   let aborting: Promise<void> | undefined;
-  let suspended = false;
+  let lifecycle: Promise<void> | undefined;
+  let state: "active" | "suspending" | "suspended" | "resuming" | "disposing" | "disposed" = "active";
+  let suspendOperation: Promise<void> | undefined;
+  let resumeOperation: Promise<void> | undefined;
   const prompts = new Set<Promise<WorkflowAgentTurnResult>>();
   const listeners = new Set<(event: WorkflowAgentSessionEvent) => void | Promise<void>>();
-  let disposed = false;
   let coreUnsubscribe: (() => void) | undefined;
   let sessionUnsubscribe: (() => void) | undefined;
   const notify = async (event: WorkflowAgentSessionEvent) => { for (const listener of listeners) await listener(event); };
@@ -353,10 +366,75 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     coreUnsubscribe = next.agent?.subscribe?.((event) => notify(localSessionEvent(event)));
     sessionUnsubscribe = next.subscribe?.((event) => { if (typeof event === "object" && event !== null && (event as { type?: unknown }).type === "agent_settled") void notify(localSessionEvent(event)); });
   };
+  const enqueue = (operation: () => Promise<void>): Promise<void> => {
+    const previous = lifecycle;
+    const next = previous ? previous.then(operation, operation) : operation();
+    lifecycle = next;
+    void next.then(() => { if (lifecycle === next) lifecycle = undefined; }, () => { if (lifecycle === next) lifecycle = undefined; });
+    return next;
+  };
   bindNative(native);
-  const startAbort = () => {
-    if (suspended) return Promise.resolve();
+  const startAbort = (duringDisposal = false) => {
+    if (state === "suspended" || (!duringDisposal && state !== "active")) return Promise.resolve();
     return aborting ??= Promise.resolve().then(() => native.abort?.()).then(() => undefined).finally(() => { aborting = undefined; });
+  };
+  const suspend = async (): Promise<void> => {
+    if (state === "suspended" || state === "disposing" || state === "disposed" || !native.sessionFile) return;
+    if (state === "suspending") { await suspendOperation; return; }
+    if (state === "resuming") { await resumeOperation; return suspend(); }
+    state = "suspending";
+    suspendOperation = enqueue(async () => {
+      coreUnsubscribe?.();
+      sessionUnsubscribe?.();
+      try { await native.dispose("resume"); }
+      catch (error) { if (state === "suspending") state = "suspended"; throw error; }
+      if (state === "suspending") state = "suspended";
+    });
+    await suspendOperation;
+  };
+  const isActive = () => state === "active";
+  const isClosing = () => state === "disposing" || state === "disposed";
+  const resume = async (): Promise<void> => {
+    if (state === "suspending") { await suspendOperation; return resume(); }
+    if (state === "resuming") { if (resumeOperation) await resumeOperation; return; }
+    if (state === "disposing" || state === "disposed" || !native.sessionFile) return;
+    const sessionFile = native.sessionFile;
+    const wasSuspended = state === "suspended";
+    state = "resuming";
+    const operation = enqueue(async () => {
+      try {
+        await Promise.allSettled(prompts);
+        if (!wasSuspended) await native.dispose("resume");
+        if (isClosing()) return;
+        const next = await createLocalPiSession({ ...input, sessionPath: sessionFile, sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile: sessionFile } });
+        if (isClosing()) { await next.dispose(); return; }
+        native = next;
+        bindNative(native);
+        state = "active";
+      } catch (error) {
+        if (state === "resuming") state = "suspended";
+        throw error;
+      }
+    });
+    resumeOperation = operation;
+    try { await operation; } finally { if (resumeOperation === operation) resumeOperation = undefined; }
+  };
+  const disposeSession = async (): Promise<void> => {
+    if (disposal) { await disposal; return; }
+    if (state === "disposed") return;
+    state = "disposing";
+    disposal = enqueue(async () => {
+      try {
+        try { await startAbort(true); } catch { /* Abort failure must not prevent the prompt from settling. */ }
+        await Promise.allSettled(prompts);
+        coreUnsubscribe?.();
+        sessionUnsubscribe?.();
+        await native.dispose();
+      } finally {
+        state = "disposed";
+      }
+    });
+    await disposal;
   };
   const reference: WorkflowAgentSessionReference = { transport: "local", sessionId: native.sessionId, ...(native.sessionFile ? { locator: { sessionFile: native.sessionFile } } : {}) };
   const session = {
@@ -369,41 +447,20 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     subscribe(listener: (event: WorkflowAgentSessionEvent) => void) { listeners.add(listener); listener({ type: "state_changed", state: workflowAgentState(native, prepared) }); return () => listeners.delete(listener); },
     subscribeAsync(listener: (event: WorkflowAgentSessionEvent) => void | Promise<void>) { listeners.add(listener); void Promise.resolve(listener({ type: "state_changed", state: workflowAgentState(native, prepared) })).catch(() => undefined); return () => listeners.delete(listener); },
     async prompt(text: string) {
-      if (disposed) throw new WorkflowError("INTERNAL_ERROR", "Local workflow session is disposed");
-      const prompt = Promise.resolve().then(async () => { await native.prompt(text); const assistant = latestUsableAssistant(native.messages); return assistant ? { assistant } : {}; });
+      if (!isActive()) throw new WorkflowError("INTERNAL_ERROR", "Local workflow session is not active");
+      const prompt = (async () => { await native.prompt(text); const assistant = latestUsableAssistant(native.messages); return assistant ? { assistant } : {}; })();
       prompts.add(prompt);
       try { return await prompt; } finally { prompts.delete(prompt); }
     },
-    async steer(text: string) { if (!native.steer) throw new WorkflowError("INTERNAL_ERROR", "Local workflow session does not support steering"); await native.steer(text); },
-    async abort() { if (disposed) return; await startAbort(); },
-    async suspendForHandoff() {
-      if (disposed || suspended || !native.sessionFile) return;
-      coreUnsubscribe?.();
-      sessionUnsubscribe?.();
-      await disposeNativeSession(native);
-      suspended = true;
+    async steer(text: string) {
+      if (!isActive()) throw new WorkflowError("INTERNAL_ERROR", "Local workflow session is not active");
+      if (!native.steer) throw new WorkflowError("INTERNAL_ERROR", "Local workflow session does not support steering");
+      await native.steer(text);
     },
-    async resumeFromHandoff() {
-      const sessionFile = native.sessionFile;
-      if (disposed || !sessionFile) return;
-      await Promise.allSettled(prompts);
-      if (!suspended) await disposeNativeSession(native);
-      native = await createLocalPiSession({ ...input, sessionPath: sessionFile });
-      suspended = false;
-      bindNative(native);
-    },
-    async dispose() {
-      disposal ??= (async () => {
-        disposed = true;
-        try { await startAbort(); } catch { /* Abort failure must not prevent the prompt from settling. */ }
-        await Promise.allSettled(prompts);
-        coreUnsubscribe?.();
-        sessionUnsubscribe?.();
-        if (suspended) native.dispose();
-        else await disposeNativeSession(native);
-      })();
-      await disposal;
-    },
+    async abort() { if (!isActive()) return; await startAbort(); },
+    suspendForHandoff: suspend,
+    resumeFromHandoff: resume,
+    dispose: disposeSession,
   };
   return session;
 }

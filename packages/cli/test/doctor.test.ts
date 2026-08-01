@@ -234,7 +234,9 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   mkdirSync(join(paths.agentDir, "skills", "invalid_skill"), { recursive: true });
   writeFileSync(join(paths.agentDir, "skills", "invalid_skill", "SKILL.md"), "---\ndescription: Invalid name fixture\n---\nInvalid skill");
   mkdirSync(join(paths.agentDir, "extensions"), { recursive: true });
-  writeFileSync(join(paths.agentDir, "extensions", "doctor-hook.ts"), "export default (pi) => { pi.on('before_agent_start', (event) => ({ systemPrompt: event.systemPrompt + '\\nHOOK:' + event.prompt })); };\n");
+  const shutdownMarker = join(paths.root, "doctor-shutdown.marker");
+  writeFileSync(join(paths.agentDir, "extensions", "doctor-hook.ts"), `import { appendFileSync } from "node:fs"; export default (pi) => { pi.on('before_agent_start', (event) => ({ systemPrompt: event.systemPrompt + '\\nHOOK:' + event.prompt })); pi.on('session_shutdown', async () => { await new Promise((resolve) => setTimeout(resolve, 25)); appendFileSync(${JSON.stringify(shutdownMarker)}, 'shutdown'); }); };
+`);
   writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nthinking: high\ntools: [read, grep]\ndisabledAgentResources:\n  skills: [review-skill]\n  extensions: [missing-extension]\n---\nReview role");
   const registry = new WorkflowRegistry();
   registry.register({ version: "1.0.0", headline: "Doctor setup", agentSetupHooks: { adjust: { setup(agent, context) { assert.equal(context.mode, "inspection"); assert.equal(agent.prepared.model.model, "fixture-model"); assert.equal(agent.prepared.model.thinking, "high"); agent.options.model = "fixture/override-model"; agent.options.thinking = "low"; agent.options.tools = ["grep"]; } } } });
@@ -256,6 +258,7 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   assert.ok(inspection.systemPrompt.text.includes("HOOK:"));
   assert.match(inspection.systemPrompt.text, /Review role/);
   assert.equal(report.diagnostics.some(({ code, severity }) => code === "ROLE_INSPECTION" && severity === "error"), false);
+  assert.equal(readFileSync(shutdownMarker, "utf8"), "shutdown");
   assert.equal(doctorExitCode(report), 0);
   const formatted = formatDoctorReport(report);
   assert.match(formatted, /## Role inspection/);

@@ -842,56 +842,204 @@ void test("per-attempt timeout is typed and terminal", async () => {
   await assert.rejects(executor.execute("slow", { label: "slow", workflowName: "flow", timeoutMs: 10 }), (error: unknown) => error instanceof WorkflowError && error.code === "AGENT_TIMEOUT" && Array.isArray((error as WorkflowError & { attempts: unknown[] }).attempts));
 });
 
-void test("local workflow sessions bind extensions before their first prompt", async () => {
-  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
-  assert.ok(originalPrompt);
-  let sessionStarts = 0;
-  const messages: string[] = [];
-  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
-    pi.on("session_start", async () => {
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      sessionStarts += 1;
-      pi.sendMessage({ customType: "startup-probe", content: "startup context", display: false });
-    });
-  };
-  AgentSession.prototype.prompt = async function (text) {
-    const nativeMessages = (this as unknown as { messages: readonly { role: string; customType?: string }[] }).messages;
-    messages.push(...nativeMessages.map((message) => message.role === "custom" ? `custom:${message.customType ?? ""}` : message.role));
-    messages.push(`user:${text}`);
-    (this as unknown as { agent: { state: { messages: unknown[] } } }).agent.state.messages.push({ role: "user", content: [{ type: "text", text }], timestamp: Date.now() });
-  };
-  try {
-    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "session-start-lifecycle", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
-    const session = await localAgentTransport.createSession(prepared, {} as never);
-    try {
-      await session.prompt("first user message");
-      assert.equal(sessionStarts, 1);
-      assert.deepEqual(messages, ["custom:startup-probe", "user:first user message"]);
-      assert.deepEqual(session.getLastAssistant(), undefined);
-    } finally {
-      await session.dispose();
-    }
-  } finally {
-    Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
-  }
-});
-void test("local workflow sessions shut down extensions before disposal and handoff replacement", async () => {
+void test("direct local Pi sessions shut down extensions when disposed", async () => {
   const lifecycle: string[] = [];
   const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
     pi.on("session_start", (event) => { lifecycle.push(`start:${event.reason}`); });
     pi.on("session_shutdown", (event) => { lifecycle.push(`shutdown:${event.reason}`); });
   };
-  const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "session-shutdown-lifecycle", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
-  const normal = await localAgentTransport.createSession(prepared, {} as never);
-  await normal.dispose();
-  const handoff = await localAgentTransport.createSession(prepared, {} as never);
+  const session = await createLocalPiSession({ cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "direct-session-lifecycle", extensionFactories: [extensionFactory] });
+  await Promise.all([session.dispose(), session.dispose()]);
+  assert.deepEqual(lifecycle, ["start:startup", "shutdown:quit"]);
+});
+void test("local Pi sessions shut down after partial extension binding failure", async () => {
+  const originalBind = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
+  assert.ok(originalBind);
+  const lifecycle: string[] = [];
+  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
+    pi.on("session_start", () => { lifecycle.push("start"); });
+    pi.on("session_shutdown", () => { lifecycle.push("shutdown"); });
+  };
+  AgentSession.prototype.bindExtensions = async function (bindings) {
+    await Reflect.apply(originalBind.value as (this: AgentSession, value: typeof bindings) => Promise<void>, this, [bindings]);
+    throw new Error("binding failed");
+  };
   try {
-    await handoff.suspendForHandoff?.();
-    await handoff.resumeFromHandoff?.();
+    await assert.rejects(createLocalPiSession({ cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "partial-binding-lifecycle", extensionFactories: [extensionFactory] }), /binding failed/);
+    assert.deepEqual(lifecycle, ["start", "shutdown"]);
   } finally {
-    await handoff.dispose();
+    Object.defineProperty(AgentSession.prototype, "bindExtensions", originalBind);
   }
-  assert.deepEqual(lifecycle, ["start:startup", "shutdown:quit", "start:startup", "shutdown:quit", "start:startup", "shutdown:quit"]);
+});
+void test("local session handoff reports resume lifecycle context", async () => {
+  const lifecycle: Array<{ type: string; reason: string; previousSessionFile?: string }> = [];
+  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
+    pi.on("session_start", (event) => { lifecycle.push({ type: event.type, reason: event.reason, ...(event.previousSessionFile ? { previousSessionFile: event.previousSessionFile } : {}) }); });
+    pi.on("session_shutdown", (event) => { lifecycle.push({ type: event.type, reason: event.reason }); });
+  };
+  const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "handoff-lifecycle", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
+  const session = await localAgentTransport.createSession(prepared, {} as never);
+  const locator = session.reference.locator;
+  assert.equal(typeof locator, "object");
+  const sessionFile = locator && typeof locator === "object" && "sessionFile" in locator ? locator.sessionFile : undefined;
+  assert.equal(typeof sessionFile, "string");
+  if (typeof sessionFile !== "string") throw new Error("session file is missing");
+  try {
+    await Promise.all([session.suspendForHandoff?.(), session.suspendForHandoff?.()]);
+    await session.resumeFromHandoff?.();
+  } finally {
+    await session.dispose();
+  }
+  assert.deepEqual(lifecycle, [
+    { type: "session_start", reason: "startup" },
+    { type: "session_shutdown", reason: "resume" },
+    { type: "session_start", reason: "resume", previousSessionFile: sessionFile },
+    { type: "session_shutdown", reason: "quit" },
+  ]);
+});
+void test("local session can retry after a failed resume", async () => {
+  const originalBind = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
+  assert.ok(originalBind);
+  let bindCalls = 0;
+  AgentSession.prototype.bindExtensions = async function (bindings) {
+    bindCalls += 1;
+    if (bindCalls === 2) throw new Error("resume binding failed");
+    await Reflect.apply(originalBind.value as (this: AgentSession, value: typeof bindings) => Promise<void>, this, [bindings]);
+  };
+  let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  try {
+    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "failed-resume-retry" } satisfies import("../src/types.js").PreparedAgentSession;
+    session = await localAgentTransport.createSession(prepared, {} as never);
+    await session.suspendForHandoff?.();
+    const resume = session.resumeFromHandoff?.bind(session);
+    assert.ok(resume);
+    await assert.rejects(resume(), /resume binding failed/);
+    await assert.doesNotReject(resume());
+    assert.equal(bindCalls, 3);
+  } finally {
+    await session?.dispose();
+    Object.defineProperty(AgentSession.prototype, "bindExtensions", originalBind);
+  }
+});
+void test("local session suspends after a concurrent resume completes", async () => {
+  const originalBind = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
+  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
+  assert.ok(originalBind && originalPrompt);
+  let bindCalls = 0;
+  let releaseBind!: () => void;
+  let markBindStarted!: () => void;
+  let promptCalls = 0;
+  const bindGate = new Promise<void>((resolve) => { releaseBind = resolve; });
+  const bindStarted = new Promise<void>((resolve) => { markBindStarted = resolve; });
+  AgentSession.prototype.bindExtensions = async function (bindings) {
+    bindCalls += 1;
+    if (bindCalls === 2) { markBindStarted(); await bindGate; }
+    await Reflect.apply(originalBind.value as (this: AgentSession, value: typeof bindings) => Promise<void>, this, [bindings]);
+  };
+  AgentSession.prototype.prompt = async function () { promptCalls += 1; };
+  let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  let resume: Promise<void> | undefined;
+  let suspend: Promise<void> | undefined;
+  try {
+    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "concurrent-resume-suspend" } satisfies import("../src/types.js").PreparedAgentSession;
+    session = await localAgentTransport.createSession(prepared, {} as never);
+    await session.suspendForHandoff?.();
+    const resumeFromHandoff = session.resumeFromHandoff?.bind(session);
+    const suspendForHandoff = session.suspendForHandoff?.bind(session);
+    assert.ok(resumeFromHandoff && suspendForHandoff);
+    resume = resumeFromHandoff();
+    await bindStarted;
+    suspend = suspendForHandoff();
+    releaseBind();
+    await Promise.all([resume, suspend]);
+    await assert.rejects(session.prompt("must remain suspended"), (error: unknown) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR");
+    assert.equal(promptCalls, 0);
+  } finally {
+    releaseBind();
+    await Promise.allSettled([resume, suspend]);
+    await session?.dispose();
+    Object.defineProperty(AgentSession.prototype, "bindExtensions", originalBind);
+    Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
+  }
+});
+void test("local session serializes overlapping suspension and disposal", async () => {
+  let releaseShutdown!: () => void;
+  let markShutdownStarted!: () => void;
+  const shutdownGate = new Promise<void>((resolve) => { releaseShutdown = resolve; });
+  const shutdownStarted = new Promise<void>((resolve) => { markShutdownStarted = resolve; });
+  const reasons: string[] = [];
+  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
+    pi.on("session_shutdown", async (event) => { reasons.push(event.reason); markShutdownStarted(); await shutdownGate; });
+  };
+  let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  let suspend: Promise<void> | undefined;
+  let dispose: Promise<void> | undefined;
+  try {
+    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "overlapping-handoff-disposal", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
+    session = await localAgentTransport.createSession(prepared, {} as never);
+    suspend = session.suspendForHandoff?.();
+    await shutdownStarted;
+    dispose = session.dispose();
+    releaseShutdown();
+    await Promise.all([suspend, dispose]);
+    assert.deepEqual(reasons, ["resume"]);
+  } finally {
+    releaseShutdown();
+    await Promise.allSettled([suspend, dispose]);
+    await session?.dispose();
+  }
+});
+void test("local session rejects prompts while handoff teardown is in flight", async () => {
+  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
+  assert.ok(originalPrompt);
+  let shutdownStarted!: () => void;
+  let releaseShutdown!: () => void;
+  let promptCalls = 0;
+  const shutdownGate = new Promise<void>((resolve) => { releaseShutdown = resolve; });
+  const shutdownReady = new Promise<void>((resolve) => { shutdownStarted = resolve; });
+  AgentSession.prototype.prompt = async function () { promptCalls += 1; };
+  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
+    pi.on("session_shutdown", async () => { shutdownStarted(); await shutdownGate; });
+  };
+  try {
+    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "handoff-prompt-race", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
+    const session = await localAgentTransport.createSession(prepared, {} as never);
+    const suspend = session.suspendForHandoff?.();
+    await shutdownReady;
+    await assert.rejects(session.prompt("must not start"), (error: unknown) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR");
+    releaseShutdown();
+    await suspend;
+    assert.equal(promptCalls, 0);
+    await session.dispose();
+  } finally {
+    Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
+  }
+});
+void test("local session suspension does not wait for an in-flight prompt", async () => {
+  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
+  assert.ok(originalPrompt);
+  let releasePrompt!: () => void;
+  let markPromptStarted!: () => void;
+  const promptGate = new Promise<void>((resolve) => { releasePrompt = resolve; });
+  const promptStarted = new Promise<void>((resolve) => { markPromptStarted = resolve; });
+  AgentSession.prototype.prompt = async function () { markPromptStarted(); await promptGate; };
+  let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  let prompt: Promise<unknown> | undefined;
+  let suspend: Promise<void> | undefined;
+  try {
+    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "handoff-in-flight-prompt" } satisfies import("../src/types.js").PreparedAgentSession;
+    session = await localAgentTransport.createSession(prepared, {} as never);
+    prompt = session.prompt("work");
+    await promptStarted;
+    suspend = session.suspendForHandoff?.();
+    const completed = await Promise.race([suspend?.then(() => true) ?? Promise.resolve(true), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(false); }, 50); })]);
+    assert.equal(completed, true);
+  } finally {
+    releasePrompt();
+    await Promise.allSettled([prompt, suspend]);
+    await session?.dispose();
+    Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
+  }
 });
 void test("local session suspend and resume retain the session seam with a stubbed prompt", async () => {
   const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
@@ -948,7 +1096,7 @@ void test("production native Pi session installs nested scheduler tools", async 
   const nestedTool = { name: "agent", label: "Child Agent", description: "Start child", parameters: Type.Object({}), async execute() { return { content: [{ type: "text" as const, text: "ok" }], details: {} }; } };
   const session = await createLocalPiSession({ cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], customTools: [nestedTool], sessionLabel: "scheduler-production-seam" });
   assert.ok(session.agent?.state.tools.some(({ name }) => name === "agent"));
-  session.dispose();
+  await session.dispose();
 });
 void test("local transport waits for an in-flight prompt and abort before disposing", async () => {
   const originalAbort = Object.getOwnPropertyDescriptor(AgentSession.prototype, "abort");
@@ -1670,7 +1818,7 @@ void test("filters disabled native extensions before factories and skills before
   assert.equal(commands.some(({ name }) => name === "skill:disabled-skill"), false);
   assert.deepEqual(resourcePolicy.unmatchedSkills, []);
   assert.deepEqual(resourcePolicy.unmatchedExtensions, []);
-  session.dispose();
+  await session.dispose();
   const trustedPolicy = { globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted: true, global: { skills: ["disabled-skill"], extensions: [resolve(disabledExtension)] }, project: { skills: ["project-disabled-skill"], extensions: [resolve(projectDisabledExtension)] }, effective: { skills: ["disabled-skill", "project-disabled-skill"], extensions: [resolve(disabledExtension), resolve(projectDisabledExtension)] }, unmatchedSkills: [], unmatchedExtensions: [] };
   const trusted = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: ["read"], sessionLabel: "resource-trusted", resourcePolicy: trustedPolicy });
   const trustedLoaded = (trusted as unknown as { resourceLoader: { getSkills(): { skills: Array<{ name: string }> }; getExtensions(): { extensions: Array<{ resolvedPath: string }> } } }).resourceLoader;
@@ -1682,10 +1830,10 @@ void test("filters disabled native extensions before factories and skills before
   assert.ok(trustedLoaded.getExtensions().extensions.every(({ resolvedPath }) => resolvedPath !== resolve(projectDisabledExtension)));
   assert.deepEqual(trustedPolicy.unmatchedSkills, []);
   assert.deepEqual(trustedPolicy.unmatchedExtensions, []);
-  trusted.dispose();
+  await trusted.dispose();
   const parent = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: ["read"], sessionLabel: "resource-parent" });
   assert.match(parent.systemPrompt ?? "", /disabled-skill/);
-  parent.dispose();
+  await parent.dispose();
 });
 
 void test("treats role system prompt bodies as literal content", async () => {
@@ -1703,7 +1851,7 @@ void test("treats role system prompt bodies as literal content", async () => {
     assert.ok(session.systemPrompt?.startsWith(promptBody));
     assert.doesNotMatch(session.systemPrompt ?? "", /This file must not be loaded/);
   } finally {
-    session.dispose();
+    await session.dispose();
   }
 });
 void test("loads workflow SYSTEM.md with project trust and precedence", async () => {
@@ -1725,11 +1873,11 @@ void test("loads workflow SYSTEM.md with project trust and precedence", async ()
     assert.match(untrusted.systemPrompt ?? "", /Global workflow system/);
     assert.doesNotMatch(untrusted.systemPrompt ?? "", /Project workflow system/);
     assert.match(untrusted.systemPrompt ?? "", /Role append/);
-    untrusted.dispose();
+    await untrusted.dispose();
     const trusted = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], sessionLabel: "system-trusted", resourcePolicy: policy(true) });
     assert.match(trusted.systemPrompt ?? "", /Project workflow system/);
     assert.doesNotMatch(trusted.systemPrompt ?? "", /Global workflow system/);
-    trusted.dispose();
+    await trusted.dispose();
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
   }
@@ -1760,7 +1908,7 @@ void test("applies ordered minimatch resource exclusions and records concrete ma
   assert.deepEqual(resourcePolicy.excludedExtensions, [resolve(disabledExtension)]);
   assert.deepEqual(resourcePolicy.unmatchedSkills, []);
   assert.deepEqual(resourcePolicy.unmatchedExtensions, []);
-  session.dispose();
+  await session.dispose();
 });
 void test("filters local context files by the role scope policy", async () => {
   const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-context-files-"));
@@ -1779,7 +1927,7 @@ void test("filters local context files by the role scope policy", async () => {
   try {
     assert.deepEqual((session as unknown as { herdrContextFiles?: readonly { path: string; content: string }[] }).herdrContextFiles?.map(({ content }) => content), ["global", "ancestor", "project"]);
   } finally {
-    session.dispose();
+    await session.dispose();
   }
 });
 
@@ -1797,5 +1945,5 @@ void test("selected skill paths load in native Pi sessions", async () => {
   const session = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], sessionLabel: "bundle-skill", additionalSkillPaths: [skillDir] });
   const loaded = (session as unknown as { resourceLoader: { getSkills(): { skills: Array<{ name: string }> } } }).resourceLoader;
   assert.ok(loaded.getSkills().skills.some(({ name }) => name === "bundle-skill"));
-  session.dispose();
+  await session.dispose();
 });

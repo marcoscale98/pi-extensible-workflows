@@ -279,7 +279,7 @@ async function inspectRoleSession(cwd: string, agentDir: string, roleName: strin
     for (const item of [...resources.diagnostics, ...promptResult.diagnostics]) setupDiagnostics.push(diagnostic(item.type === "error" ? "error" : "warning", "ROLE_INSPECTION", item.message, item.source));
     return { role: roleName, path: rolePath, model: actualModel, tools: state?.tools.map(({ name }) => name) ?? [...prepared.setup.sessionInput.tools], resources: { skills: resources.skills, extensions: resources.extensions, excludedSkills: policy.excludedSkills ?? [], excludedExtensions: policy.excludedExtensions ?? [], unmatchedSkills: policy.unmatchedSkills, unmatchedExtensions: policy.unmatchedExtensions }, systemPrompt: { probe: prompt, expandedProbe: promptResult.expandedPrompt, text: promptResult.systemPrompt, ...(resources.systemPromptSource ? { source: resources.systemPromptSource } : {}) }, setup: { hooks: prepared.summary.hookNames, diagnostics: setupDiagnostics } };
   } catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", error instanceof Error ? error.message : String(error), rolePath)); diagnostics.push(...setupDiagnostics); return undefined; }
-  finally { session.dispose(); }
+  finally { await session.dispose(); }
 }
 function resourcePolicySource(settingsSource: string): string { return settingsSource; }
 export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport> {

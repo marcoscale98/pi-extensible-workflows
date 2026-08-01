@@ -39,6 +39,8 @@ return await agent(
 
 The main Pi agent writes these scripts on the fly for each task; an external review or approval flow can write one to a JavaScript file and launch it with `scriptPath`. Extensions can add reusable functions, and completed workflows can resume without rerunning completed work.
 
+Direct consumers of `createLocalPiSession()` receive a session with extensions already bound. Await `session.dispose()` so `session_shutdown` runs before the native session is released; disposal is idempotent.
+
 Learn more about roles, workflow contracts, and extension APIs in the documentation:
 
 - [Workflow tool and invocation API](https://vekexasia.github.io/pi-extensible-workflows/developers.html#tool-api)
