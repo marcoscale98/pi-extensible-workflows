@@ -1020,7 +1020,7 @@ void test("local session serializes overlapping suspension and disposal with one
     dispose = session.dispose();
     releaseShutdown();
     await Promise.all([suspend, dispose]);
-    assert.deepEqual(reasons, ["resume"]);
+    assert.deepEqual(reasons, ["resume", "quit"]);
     assert.equal(nativeDisposals, 1);
   } finally {
     releaseShutdown();
@@ -1097,6 +1097,40 @@ void test("local session suspension waits for an in-flight prompt", async () => 
       Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
       await session?.dispose();
     }
+  }
+});
+void test("local session disposal aborts a prompt while suspension is waiting", async () => {
+  const originalAbort = Object.getOwnPropertyDescriptor(AgentSession.prototype, "abort");
+  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
+  assert.ok(originalAbort && originalPrompt);
+  let releasePrompt!: () => void;
+  let markPromptStarted!: () => void;
+  let aborts = 0;
+  const promptGate = new Promise<void>((resolve) => { releasePrompt = resolve; });
+  const promptStarted = new Promise<void>((resolve) => { markPromptStarted = resolve; });
+  AgentSession.prototype.prompt = async function () { markPromptStarted(); await promptGate; };
+  AgentSession.prototype.abort = async function () { aborts += 1; releasePrompt(); };
+  let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  let prompt: Promise<unknown> | undefined;
+  let suspend: Promise<void> | undefined;
+  let dispose: Promise<void> | undefined;
+  try {
+    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "suspending-disposal-abort" } satisfies import("../src/types.js").PreparedAgentSession;
+    session = await localAgentTransport.createSession(prepared, {} as never);
+    prompt = session.prompt("work");
+    await promptStarted;
+    suspend = session.suspendForHandoff?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    dispose = session.dispose();
+    const settled = await Promise.race([Promise.all([prompt, suspend, dispose]).then(() => true), new Promise<boolean>((resolve) => setTimeout(() => { resolve(false); }, 100))]);
+    assert.equal(settled, true);
+    assert.equal(aborts, 1);
+  } finally {
+    releasePrompt();
+    await Promise.allSettled([prompt, suspend, dispose]);
+    Object.defineProperty(AgentSession.prototype, "abort", originalAbort);
+    Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
+    await session?.dispose();
   }
 });
 void test("local session suspend and resume retain the session seam with a stubbed prompt", async () => {

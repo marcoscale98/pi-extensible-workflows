@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -626,6 +627,7 @@ void test("setup hooks conditionally install an inline Pi extension for one agen
 void test("production child discovery does not replace the frozen parent workflow registry", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-registry-production-"));
   const childRoot = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-registry-child-"));
+  try {
   const agentDir = join(childRoot, "agent");
   const cwd = join(childRoot, "project");
   mkdirSync(agentDir, { recursive: true });
@@ -636,7 +638,6 @@ void test("production child discovery does not replace the frozen parent workflo
   const benignExtension = join(childRoot, "benign-extension.mjs");
   writeFileSync(benignExtension, `import { appendFileSync } from "node:fs"; export default function(pi) { pi.on("session_start", (event) => appendFileSync(${JSON.stringify(lifecycleFile)}, "start:" + event.reason + "\\n")); pi.on("session_shutdown", (event) => appendFileSync(${JSON.stringify(lifecycleFile)}, "shutdown:" + event.reason + "\\n")); }`);
   writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [packageRoot], extensions: [hostEntry, benignExtension] }));
-  const policy = { globalSettingsPath: join(agentDir, "settings.json"), projectSettingsPath: join(cwd, ".pi", "settings.json"), projectTrusted: false, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: [], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [] };
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; details: { value?: unknown } }> }> = [];
   let start: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
   workflowExtension({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow", "workflow_catalog"], on(name: string, handler: unknown) { if (name === "session_start") start = handler as typeof start; } } as never, home, async () => {});
@@ -662,7 +663,7 @@ void test("production child discovery does not replace the frozen parent workflo
   let afterCreation: Awaited<ReturnType<typeof checkpoint>> | undefined;
   let afterDisposal: Awaited<ReturnType<typeof checkpoint>>;
   try {
-    child = await localAgentTransport.createSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], sessionLabel: "registry-child", resourcePolicy: policy }, {} as never);
+    child = await localAgentTransport.createSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], sessionLabel: "registry-child", extensionFactories: [() => {}] }, {} as never);
     afterCreation = await checkpoint();
   } finally {
     await child?.dispose();
@@ -678,6 +679,10 @@ void test("production child discovery does not replace the frozen parent workflo
     assert.equal(observed.catalog.functions.some(({ name }) => name === "probe"), true);
   }
   assert.deepEqual(readFileSync(lifecycleFile, "utf8").trim().split("\n"), ["start:startup", "shutdown:quit"]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+    await rm(childRoot, { recursive: true, force: true });
+  }
 });
 void test("registered function context exposes callback worktree references", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-worktree-reference-"));

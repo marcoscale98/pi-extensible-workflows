@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import extension, { breadcrumbLabel, createHerdrExtension, isFullyInspectableMode } from "../dist/index.js";
-import { createLiveSessionHandoff, loadingRegistry, localAgentTransport, openHerdrWorkspacePane, resetWorkflowRegistry } from "pi-extensible-workflows";
+import { createLiveSessionHandoff, loadingRegistry, localAgentTransport, resetWorkflowRegistry } from "pi-extensible-workflows";
 
 const piRuntime = { executable: process.execPath, entrypoint: "/originating/pi-coding-agent/dist/cli.js" };
 
@@ -156,7 +156,7 @@ void test("opens the active session after the handoff boundary and releases on p
   assert.match(runCommand, /--no-skills/);
   assert.match(runCommand, /--no-approve/);
   assert.ok(runCommand.includes("'Continue the current workflow task from this session.'"));
-  assert.doesNotMatch(runCommand, /@'\/tmp\/pi-herdr-prompt-/);
+  assert.equal(runCommand.includes(`@'${join(tmpdir(), "pi-herdr-prompt-")}`), false);
   assert.match(runCommand, /--extension '.*pi-herdr-extensions-/);
   assert.ok(calls.some(([command, subcommand]) => command === "pane" && subcommand === "release-agent"));
   assert.equal(handoff.state, "completed");
@@ -243,6 +243,7 @@ void test("reports terminal turns as idle", async () => {
 
 void test("resumes and terminally disposes the local session when initial Herdr pane launch fails", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-initial-launch-failure-"));
+  try {
   const agentDir = join(root, "agent");
   const cwd = join(root, "project");
   mkdirSync(agentDir, { recursive: true });
@@ -250,9 +251,11 @@ void test("resumes and terminally disposes the local session when initial Herdr 
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
   writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
   const lifecycle = [];
+  let sessionNumber = 0;
   const recorder = (pi) => {
-    pi.on("session_start", (event) => lifecycle.push(`start:${event.reason}`));
-    pi.on("session_shutdown", (event) => lifecycle.push(`shutdown:${event.reason}`));
+    const id = ++sessionNumber;
+    pi.on("session_start", (event) => lifecycle.push(`start:${id}:${event.reason}`));
+    pi.on("session_shutdown", (event) => lifecycle.push(`shutdown:${id}:${event.reason}`));
   };
   const calls = [];
   const runner = async (args) => {
@@ -262,38 +265,105 @@ void test("resumes and terminally disposes the local session when initial Herdr 
     if (args[0] === "pane" && args[1] === "run") throw new Error("pane launch failed");
     return "";
   };
-  const workspaces = {
-    async open(_run, request) {
-      const opened = await openHerdrWorkspacePane({ ...request, workspaceLabel: `workflow ${_run.workflow.name}` }, runner);
-      if (typeof opened === "string") throw new Error("Herdr did not create a workspace pane.");
-      return opened;
-    },
-    async close() {},
-    async closeAll() {},
-  };
-  const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner, workspaces });
+  const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
   const agent = { transport: localAgentTransport };
   const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
   extension.agentSetupHooks.fullyInspectable.setup(agent, context);
   const prepared = { cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], extensionFactories: [recorder], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
   const descriptor = Object.getOwnPropertyDescriptor(AgentSession.prototype, "dispose");
+  const bindDescriptor = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
   assert.ok(descriptor && typeof descriptor.value === "function");
+  assert.ok(bindDescriptor && typeof bindDescriptor.value === "function");
+  let bindCalls = 0;
   const disposals = new Map();
   Object.defineProperty(AgentSession.prototype, "dispose", { ...descriptor, value: function (...args) { disposals.set(this, (disposals.get(this) ?? 0) + 1); return descriptor.value.apply(this, args); } });
+  Object.defineProperty(AgentSession.prototype, "bindExtensions", { ...bindDescriptor, value: async function (bindings) { bindCalls += 1; if (bindCalls === 2) throw new Error("resume binding failed"); return bindDescriptor.value.call(this, bindings); } });
   try {
     await assert.rejects(agent.transport.createSession(prepared, { ...context, attempt: 1 }), (error) => error instanceof Error && error.message === "pane launch failed");
   } finally {
     Object.defineProperty(AgentSession.prototype, "dispose", descriptor);
+    Object.defineProperty(AgentSession.prototype, "bindExtensions", bindDescriptor);
   }
   const lifecycleAfterCleanup = [...lifecycle];
   const disposalsAfterCleanup = [...disposals.values()];
-  assert.deepEqual(lifecycle, ["start:startup", "shutdown:resume", "start:resume", "shutdown:quit"]);
+  assert.deepEqual(lifecycle, ["start:1:startup", "shutdown:1:resume", "shutdown:2:quit", "shutdown:1:quit"]);
+  assert.equal(bindCalls, 2);
   assert.equal(disposals.size, 2);
   assert.deepEqual(disposalsAfterCleanup, [1, 1]);
   await new Promise((resolve) => globalThis.setImmediate(resolve));
   assert.deepEqual(lifecycle, lifecycleAfterCleanup);
   assert.deepEqual([...disposals.values()], disposalsAfterCleanup);
   assert.equal(calls.filter(([command, subcommand]) => command === "pane" && subcommand === "run").length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+void test("preserves an initial pane launch error when local disposal also fails", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-extension-disposal-error-precedence-"));
+  const agentDir = join(root, "agent");
+  mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  const runner = async (args) => {
+    if (args[0] === "workspace" && args[1] === "create") return JSON.stringify({ result: { workspace: { workspace_id: "workspace" }, tab: { tab_id: "tab-root" }, root_pane: { pane_id: "pane-root" } } });
+    if (args[0] === "tab" && args[1] === "create") return JSON.stringify({ result: { tab: { tab_id: "tab-child" }, root_pane: { pane_id: "pane-child" } } });
+    if (args[0] === "pane" && args[1] === "run") throw new Error("pane launch failed");
+    return "";
+  };
+  const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
+  const agent = { transport: { id: "local", async createSession(value) { return { reference: { transport: "local", sessionId: "session", locator: { sessionFile: "/tmp/session.jsonl" } }, suspendForHandoff: async () => {}, resumeFromHandoff: async () => {}, getLastAssistant: () => ({ role: "assistant", content: [{ type: "toolCall", name: "read" }] }), getState: () => ({ model: value.model, tools: value.tools }), getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), dispose: async () => { throw new Error("dispose failed"); } }; } } };
+  const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
+  extension.agentSetupHooks.fullyInspectable.setup(agent, context);
+  try {
+    await assert.rejects(agent.transport.createSession({ cwd: root, model: { provider: "fake", model: "model" }, tools: [], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime }, { ...context, attempt: 1 }), (error) => error instanceof Error && error.message === "pane launch failed");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+void test("disposes a Herdr wrapper while a subsequent pane is still launching", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-extension-launch-disposal-race-"));
+  const agentDir = join(root, "agent");
+  mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  const calls = [];
+  let paneRuns = 0;
+  let firstProcessReports = 0;
+  let secondClosed = false;
+  let releaseLaunch;
+  const launchGate = new Promise((resolve) => { releaseLaunch = resolve; });
+  const runner = async (args) => {
+    calls.push([...args]);
+    if (args[0] === "workspace" && args[1] === "create") return JSON.stringify({ result: { workspace: { workspace_id: "workspace" }, tab: { tab_id: "root-tab" }, root_pane: { pane_id: "root-pane" } } });
+    if (args[0] === "tab" && args[1] === "create") { const number = calls.filter(([command, subcommand]) => command === "tab" && subcommand === "create").length; return JSON.stringify({ result: { tab: { tab_id: `tab-${number}` }, root_pane: { pane_id: `pane-${number}` } } }); }
+    if (args[0] === "pane" && args[1] === "run") { paneRuns += 1; if (paneRuns === 2) await launchGate; return ""; }
+    if (args[0] === "tab" && args[1] === "close") { if (args[2] === "tab-2") secondClosed = true; return ""; }
+    if (args[0] === "pane" && args[1] === "process-info") {
+      if (args[3] === "pane-1") return firstProcessReports++ === 0 ? JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } }) : JSON.stringify({ result: { process_info: { foreground_processes: [] } } });
+      return secondClosed ? JSON.stringify({ result: { process_info: { foreground_processes: [] } } }) : JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } });
+    }
+    return "";
+  };
+  const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
+  const agent = { transport: { id: "local", async createSession(value) { return { reference: { transport: "local", sessionId: "session", locator: { sessionFile: "/tmp/session.jsonl" } }, suspendForHandoff: async () => {}, resumeFromHandoff: async () => {}, getLastAssistant: () => ({ role: "assistant", content: [{ type: "toolCall", name: "read" }] }), getState: () => ({ model: value.model, tools: value.tools }), getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), prompt: async () => ({ assistant: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] } }), abort: async () => {}, dispose: async () => {} }; } } };
+  const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
+  extension.agentSetupHooks.fullyInspectable.setup(agent, context);
+  const prepared = { cwd: root, model: { provider: "fake", model: "model" }, tools: [], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
+  const session = await agent.transport.createSession(prepared, { ...context, attempt: 1 });
+  let pending;
+  try {
+    await session.prompt("first");
+    pending = session.prompt("second");
+    while (paneRuns < 2) await new Promise((resolve) => globalThis.setImmediate(resolve));
+    const disposal = session.dispose();
+    releaseLaunch();
+    const settled = await Promise.race([Promise.allSettled([pending, disposal]).then(() => true), new Promise((resolve) => globalThis.setTimeout(() => resolve(false), 500))]);
+    assert.equal(settled, true);
+    assert.equal(secondClosed, true);
+  } finally {
+    releaseLaunch();
+    secondClosed = true;
+    await Promise.allSettled([pending, session.dispose()]);
+    await rm(root, { recursive: true, force: true });
+  }
 });
 void test("routes fully inspectable agents into one labeled workflow workspace", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-full-"));

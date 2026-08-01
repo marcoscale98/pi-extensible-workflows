@@ -251,7 +251,7 @@ function createWorkflowWorkspaces(runner: HerdrCommandRunner): WorkspaceManager 
         return pane.workspaceId;
       });
       workspaces.set(run.runId, workspace);
-      try { return workspacePane(await opening); } catch (error) { workspaces.delete(run.runId); throw error; }
+      try { return workspacePane(await opening); } catch (error) { workspaces.delete(run.runId); await workspace.catch(() => undefined); throw error; }
     },
     async close(runId: string): Promise<void> {
       const workspace = workspaces.get(runId);
@@ -342,11 +342,18 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
           throw error;
         }
       };
+      let launching: Promise<PaneHandle> | undefined;
+      const beginLaunch = (prompt: string | undefined): Promise<PaneHandle> => {
+        const next = suspendAndLaunch(prompt);
+        launching = next;
+        void next.then(() => { if (launching === next) launching = undefined; }, () => { if (launching === next) launching = undefined; });
+        return next;
+      };
       let opened;
       try {
-        opened = await suspendAndLaunch(prepared.initialPrompt);
+        opened = await beginLaunch(prepared.initialPrompt);
       } catch (error) {
-        await session.dispose();
+        await session.dispose().catch(() => undefined);
         throw error;
       }
       let disposed = false;
@@ -358,7 +365,7 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
         async prompt(text) {
           if (disposed) throw new Error("Herdr workflow session is disposed");
           let current = active;
-          if (!current) current = await suspendAndLaunch(text);
+          if (!current) current = await beginLaunch(text);
           active = current;
           try {
             await current.monitor;
@@ -380,6 +387,9 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
         async dispose() {
           if (disposed) return;
           disposed = true;
+          if (launching) {
+            try { active = await launching; } catch { /* The launch failure is reported by its caller. */ }
+          }
           if (active) {
             await active.closeRemote();
             await active.close();

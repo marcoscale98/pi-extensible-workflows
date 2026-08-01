@@ -301,19 +301,38 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     });
     await resourceLoader.reload();
   } else if (input.systemPrompt !== undefined || systemPromptSource !== undefined || input.systemPromptAppend || input.extensionFactories?.length || input.additionalSkillPaths?.length || input.contextFiles !== undefined) {
-    resourceLoader = new DefaultResourceLoader({ cwd: input.cwd, agentDir, ...(input.additionalSkillPaths?.length ? { additionalSkillPaths: [...input.additionalSkillPaths] } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(contextFilesOverride ? { agentsFilesOverride: contextFilesOverride } : {}), ...systemPromptOptions, ...(input.systemPromptAppend ? { appendSystemPromptOverride: (base) => [...base, input.systemPromptAppend ?? ""] } : {}) });
+    settingsManager = SettingsManager.create(input.cwd, agentDir, { projectTrusted: true });
+    const packageManager = new DefaultPackageManager({ cwd: input.cwd, agentDir, settingsManager });
+    const resolved = await packageManager.resolve();
+    const extensionPaths = [...new Set(resolved.extensions.filter(({ enabled }) => enabled).map(({ path }) => canonicalSourcePath(path)).filter((path) => !WORKFLOW_HOST_ENTRIES.has(path)))];
+    resourceLoader = new DefaultResourceLoader({ cwd: input.cwd, agentDir, settingsManager, noExtensions: true, additionalExtensionPaths: extensionPaths, ...(input.additionalSkillPaths?.length ? { additionalSkillPaths: [...input.additionalSkillPaths] } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(contextFilesOverride ? { agentsFilesOverride: contextFilesOverride } : {}), ...systemPromptOptions, ...(input.systemPromptAppend ? { appendSystemPromptOverride: (base) => [...base, input.systemPromptAppend ?? ""] } : {}) });
     await resourceLoader.reload();
   }
   const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, ...(settingsManager ? { settingsManager } : {}), ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(resourceLoader ? { resourceLoader } : {}), ...(sessionStartEvent ? { sessionStartEvent } : {}), sessionManager: manager });
   const nativeDispose = session.dispose.bind(session);
   let disposal: Promise<void> | undefined;
-  const shutdown = (reason: LocalSessionShutdownReason): Promise<void> => disposal ??= (async () => {
-    try {
-      if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
-    } finally {
-      nativeDispose();
+  let shutdownReason: LocalSessionShutdownReason | undefined;
+  let terminalShutdownEmitted = false;
+  const shutdown = (reason: LocalSessionShutdownReason): Promise<void> => {
+    if (disposal) {
+      if (reason === "quit" && shutdownReason === "resume" && !terminalShutdownEmitted) {
+        terminalShutdownEmitted = true;
+        return disposal.catch(() => undefined).then(async () => {
+          if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
+        });
+      }
+      return disposal;
     }
-  })();
+    shutdownReason = reason;
+    disposal = (async () => {
+      try {
+        if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
+      } finally {
+        nativeDispose();
+      }
+    })();
+    return disposal;
+  };
   Object.assign(session, { dispose: () => shutdown("quit") });
   try {
     await session.bindExtensions({ mode: "print" });
@@ -390,7 +409,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   };
   bindNative(native);
   const startAbort = () => {
-    if (state !== "active") return Promise.resolve();
+    if (state !== "active" && state !== "suspending") return Promise.resolve();
     return aborting ??= Promise.resolve().then(() => native.abort?.()).then(() => undefined).finally(() => { aborting = undefined; });
   };
   const suspend = async (): Promise<void> => {
@@ -441,7 +460,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   const disposeSession = async (): Promise<void> => {
     if (disposal) { await disposal; return; }
     if (state === "disposed") return;
-    const abort = state === "active" ? startAbort() : Promise.resolve();
+    const abort = state === "active" || state === "suspending" ? startAbort() : Promise.resolve();
     state = "disposing";
     disposal = enqueue(async () => {
       try {
