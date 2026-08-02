@@ -261,8 +261,8 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
   if (!model) throw new WorkflowError("UNKNOWN_MODEL", `Unknown model: ${input.model.provider}/${input.model.model}`);
   const customTools = [...(input.customTools ?? []), ...(input.resultTool ? [input.resultTool] : [])];
   const tools = [...new Set([...input.tools, ...customTools.map(({ name }) => name)])];
-  let settingsManager: SettingsManager | undefined;
-  let resourceLoader: DefaultResourceLoader | undefined;
+  let settingsManager: SettingsManager;
+  let resourceLoader: DefaultResourceLoader;
   const policy = input.resourcePolicy;
   if (policy) {
     settingsManager = SettingsManager.create(input.cwd, agentDir, { projectTrusted: false });
@@ -300,7 +300,7 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
       ...systemPromptOptions,
     });
     await resourceLoader.reload();
-  } else if (input.systemPrompt !== undefined || systemPromptSource !== undefined || input.systemPromptAppend || input.extensionFactories?.length || input.additionalSkillPaths?.length || input.contextFiles !== undefined) {
+  } else {
     settingsManager = SettingsManager.create(input.cwd, agentDir, { projectTrusted: true });
     const packageManager = new DefaultPackageManager({ cwd: input.cwd, agentDir, settingsManager });
     const resolved = await packageManager.resolve();
@@ -308,22 +308,11 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     resourceLoader = new DefaultResourceLoader({ cwd: input.cwd, agentDir, settingsManager, noExtensions: true, additionalExtensionPaths: extensionPaths, ...(input.additionalSkillPaths?.length ? { additionalSkillPaths: [...input.additionalSkillPaths] } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(contextFilesOverride ? { agentsFilesOverride: contextFilesOverride } : {}), ...systemPromptOptions, ...(input.systemPromptAppend ? { appendSystemPromptOverride: (base) => [...base, input.systemPromptAppend ?? ""] } : {}) });
     await resourceLoader.reload();
   }
-  const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, ...(settingsManager ? { settingsManager } : {}), ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), ...(resourceLoader ? { resourceLoader } : {}), ...(sessionStartEvent ? { sessionStartEvent } : {}), sessionManager: manager });
+  const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, settingsManager, ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), resourceLoader, ...(sessionStartEvent ? { sessionStartEvent } : {}), sessionManager: manager });
   const nativeDispose = session.dispose.bind(session);
   let disposal: Promise<void> | undefined;
-  let shutdownReason: LocalSessionShutdownReason | undefined;
-  let terminalShutdownEmitted = false;
   const shutdown = (reason: LocalSessionShutdownReason): Promise<void> => {
-    if (disposal) {
-      if (reason === "quit" && shutdownReason === "resume" && !terminalShutdownEmitted) {
-        terminalShutdownEmitted = true;
-        return disposal.catch(() => undefined).then(async () => {
-          if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
-        });
-      }
-      return disposal;
-    }
-    shutdownReason = reason;
+    if (disposal) return disposal;
     disposal = (async () => {
       try {
         if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
@@ -340,21 +329,21 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     await shutdown("quit").catch(() => undefined);
     throw error;
   }
-  const resourcePaths = resourceLoader ? { extensions: resourceLoader.getExtensions().extensions.filter(({ path }) => !path.startsWith("<")).map(({ resolvedPath }) => canonicalSourcePath(resolvedPath)), skills: resourceLoader.getSkills().skills.map(({ filePath }) => canonicalSourcePath(filePath)) } : undefined;
+  const resourcePaths = { extensions: resourceLoader.getExtensions().extensions.filter(({ path }) => !path.startsWith("<")).map(({ resolvedPath }) => canonicalSourcePath(resolvedPath)), skills: resourceLoader.getSkills().skills.map(({ filePath }) => canonicalSourcePath(filePath)) };
   const resourceInspection = (): PiResourceInspection => {
-    const extensions = resourceLoader?.getExtensions();
-    const skills = resourceLoader?.getSkills();
-    const diagnostics = [...(extensions?.errors ?? []).map(({ path, error }) => ({ type: "error" as const, message: error, source: path })), ...(skills?.diagnostics ?? []).map(({ type, path, message }) => ({ type, message, ...(path ? { source: path } : {}) }))];
+    const extensions = resourceLoader.getExtensions();
+    const skills = resourceLoader.getSkills();
+    const diagnostics = [...extensions.errors.map(({ path, error }) => ({ type: "error" as const, message: error, source: path })), ...skills.diagnostics.map(({ type, path, message }) => ({ type, message, ...(path ? { source: path } : {}) }))];
     const systemSource = systemPromptSource;
-    return { extensions: resourceLoader?.getExtensions().extensions.filter(({ path }) => !path.startsWith("<")).map(({ resolvedPath }) => canonicalSourcePath(resolvedPath)) ?? [], skills: skills?.skills.map(({ name }) => name) ?? [], diagnostics, ...(systemSource ? { systemPromptSource: systemSource } : resourceLoader?.getSystemPrompt() !== undefined ? { systemPromptSource: "Pi resource loader" } : {}) };
+    return { extensions: resourceLoader.getExtensions().extensions.filter(({ path }) => !path.startsWith("<")).map(({ resolvedPath }) => canonicalSourcePath(resolvedPath)), skills: skills.skills.map(({ name }) => name), diagnostics, ...(systemSource ? { systemPromptSource: systemSource } : resourceLoader.getSystemPrompt() !== undefined ? { systemPromptSource: "Pi resource loader" } : {}) };
   };
   const managedSession = Object.assign(session, {
     getLeafId: () => manager.getLeafId(),
     getToolDefinitions: () => session.getAllTools().map(({ name, description, parameters, promptGuidelines }) => ({ name, description, parameters, ...(promptGuidelines ? { promptGuidelines } : {}) })),
     preparePrompt: (text: string) => preparePiPrompt(session as unknown as PiSession, text),
     getResourceInspection: resourceInspection,
-    ...(resourcePaths ? { herdrResourcePaths: resourcePaths } : {}),
-    ...(resourceLoader ? { herdrContextFiles: resourceLoader.getAgentsFiles().agentsFiles } : {}),
+    herdrResourcePaths: resourcePaths,
+    herdrContextFiles: resourceLoader.getAgentsFiles().agentsFiles,
   }) as unknown as PiSession;
   return { session: managedSession, shutdown };
 }
@@ -384,6 +373,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   let state: "active" | "suspending" | "suspended" | "resuming" | "disposing" | "disposed" = "active";
   let suspendOperation: Promise<void> | undefined;
   let resumeOperation: Promise<void> | undefined;
+  let resumingActive = false;
   const prompts = new Set<Promise<WorkflowAgentTurnResult>>();
   const listeners = new Set<(event: WorkflowAgentSessionEvent) => void | Promise<void>>();
   let coreUnsubscribe: (() => void) | undefined;
@@ -409,7 +399,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   };
   bindNative(native);
   const startAbort = () => {
-    if (state !== "active" && state !== "suspending") return Promise.resolve();
+    if (state !== "active" && state !== "suspending" && !(state === "resuming" && resumingActive)) return Promise.resolve();
     return aborting ??= Promise.resolve().then(() => native.abort?.()).then(() => undefined).finally(() => { aborting = undefined; });
   };
   const suspend = async (): Promise<void> => {
@@ -434,6 +424,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     if (state === "disposing" || state === "disposed" || !native.sessionFile) return;
     const sessionFile = native.sessionFile;
     const wasSuspended = state === "suspended";
+    resumingActive = !wasSuspended;
     state = "resuming";
     const operation = enqueue(async () => {
       try {
@@ -455,12 +446,12 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
       }
     });
     resumeOperation = operation;
-    try { await operation; } finally { if (resumeOperation === operation) resumeOperation = undefined; }
+    try { await operation; } finally { if (resumeOperation === operation) { resumeOperation = undefined; resumingActive = false; } }
   };
   const disposeSession = async (): Promise<void> => {
     if (disposal) { await disposal; return; }
     if (state === "disposed") return;
-    const abort = state === "active" || state === "suspending" ? startAbort() : Promise.resolve();
+    const abort = startAbort();
     state = "disposing";
     disposal = enqueue(async () => {
       try {

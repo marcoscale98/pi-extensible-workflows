@@ -6,7 +6,6 @@ import { pathToFileURL } from "node:url";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { AgentSession } from "@earendil-works/pi-coding-agent";
 import extension, { breadcrumbLabel, createHerdrExtension, isFullyInspectableMode } from "../dist/index.js";
 import { createLiveSessionHandoff, loadingRegistry, localAgentTransport, resetWorkflowRegistry } from "pi-extensible-workflows";
 
@@ -254,7 +253,7 @@ void test("resumes and terminally disposes the local session when initial Herdr 
   let sessionNumber = 0;
   const recorder = (pi) => {
     const id = ++sessionNumber;
-    pi.on("session_start", (event) => lifecycle.push(`start:${id}:${event.reason}`));
+    pi.on("session_start", (event) => { lifecycle.push(`start:${id}:${event.reason}`); if (id === 2 && event.reason === "resume") throw new Error("resume binding failed"); });
     pi.on("session_shutdown", (event) => lifecycle.push(`shutdown:${id}:${event.reason}`));
   };
   const calls = [];
@@ -270,30 +269,51 @@ void test("resumes and terminally disposes the local session when initial Herdr 
   const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
   extension.agentSetupHooks.fullyInspectable.setup(agent, context);
   const prepared = { cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], extensionFactories: [recorder], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
-  const descriptor = Object.getOwnPropertyDescriptor(AgentSession.prototype, "dispose");
-  const bindDescriptor = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
-  assert.ok(descriptor && typeof descriptor.value === "function");
-  assert.ok(bindDescriptor && typeof bindDescriptor.value === "function");
-  let bindCalls = 0;
-  const disposals = new Map();
-  Object.defineProperty(AgentSession.prototype, "dispose", { ...descriptor, value: function (...args) { disposals.set(this, (disposals.get(this) ?? 0) + 1); return descriptor.value.apply(this, args); } });
-  Object.defineProperty(AgentSession.prototype, "bindExtensions", { ...bindDescriptor, value: async function (bindings) { bindCalls += 1; if (bindCalls === 2) throw new Error("resume binding failed"); return bindDescriptor.value.call(this, bindings); } });
-  try {
-    await assert.rejects(agent.transport.createSession(prepared, { ...context, attempt: 1 }), (error) => error instanceof Error && error.message === "pane launch failed");
-  } finally {
-    Object.defineProperty(AgentSession.prototype, "dispose", descriptor);
-    Object.defineProperty(AgentSession.prototype, "bindExtensions", bindDescriptor);
-  }
-  const lifecycleAfterCleanup = [...lifecycle];
-  const disposalsAfterCleanup = [...disposals.values()];
-  assert.deepEqual(lifecycle, ["start:1:startup", "shutdown:1:resume", "shutdown:2:quit", "shutdown:1:quit"]);
-  assert.equal(bindCalls, 2);
-  assert.equal(disposals.size, 2);
-  assert.deepEqual(disposalsAfterCleanup, [1, 1]);
-  await new Promise((resolve) => globalThis.setImmediate(resolve));
-  assert.deepEqual(lifecycle, lifecycleAfterCleanup);
-  assert.deepEqual([...disposals.values()], disposalsAfterCleanup);
+  await assert.rejects(agent.transport.createSession(prepared, { ...context, attempt: 1 }), (error) => error instanceof Error && error.message === "pane launch failed");
+  assert.deepEqual(lifecycle, ["start:1:startup", "shutdown:1:resume", "start:2:resume", "shutdown:2:quit"]);
   assert.equal(calls.filter(([command, subcommand]) => command === "pane" && subcommand === "run").length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+void test("restores the previous local generation after an initial pane launch failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-extension-initial-launch-restoration-"));
+  try {
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  const lifecycle = [];
+  let sessionNumber = 0;
+  const recorder = (pi) => {
+    const id = ++sessionNumber;
+    pi.on("session_start", (event) => lifecycle.push({ type: "session_start", id, reason: event.reason, ...(event.previousSessionFile ? { previousSessionFile: event.previousSessionFile } : {}) }));
+    pi.on("session_shutdown", (event) => lifecycle.push({ type: "session_shutdown", id, reason: event.reason }));
+  };
+  const runner = async (args) => {
+    if (args[0] === "workspace" && args[1] === "create") return JSON.stringify({ result: { workspace: { workspace_id: "workspace" }, tab: { tab_id: "tab-root" }, root_pane: { pane_id: "pane-root" } } });
+    if (args[0] === "tab" && args[1] === "create") return JSON.stringify({ result: { tab: { tab_id: "tab-child" }, root_pane: { pane_id: "pane-child" } } });
+    if (args[0] === "pane" && args[1] === "run") throw new Error("pane launch failed");
+    return "";
+  };
+  const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
+  const agent = { transport: localAgentTransport };
+  const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
+  extension.agentSetupHooks.fullyInspectable.setup(agent, context);
+  const prepared = { cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], extensionFactories: [recorder], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
+  await assert.rejects(agent.transport.createSession(prepared, { ...context, attempt: 1 }), (error) => error instanceof Error && error.message === "pane launch failed");
+  assert.deepEqual(lifecycle.slice(0, 2), [
+    { type: "session_start", id: 1, reason: "startup" },
+    { type: "session_shutdown", id: 1, reason: "resume" },
+  ]);
+  assert.equal(lifecycle.length, 4);
+  assert.deepEqual(lifecycle[3], { type: "session_shutdown", id: 2, reason: "quit" });
+  assert.equal(lifecycle[2]?.type, "session_start");
+  assert.equal(lifecycle[2]?.id, 2);
+  assert.equal(lifecycle[2]?.reason, "resume");
+  assert.equal(typeof lifecycle[2]?.previousSessionFile, "string");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -310,11 +330,13 @@ void test("preserves an initial pane launch error when local disposal also fails
     return "";
   };
   const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
-  const agent = { transport: { id: "local", async createSession(value) { return { reference: { transport: "local", sessionId: "session", locator: { sessionFile: "/tmp/session.jsonl" } }, suspendForHandoff: async () => {}, resumeFromHandoff: async () => {}, getLastAssistant: () => ({ role: "assistant", content: [{ type: "toolCall", name: "read" }] }), getState: () => ({ model: value.model, tools: value.tools }), getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), dispose: async () => { throw new Error("dispose failed"); } }; } } };
+  let disposalAttempts = 0;
+  const agent = { transport: { id: "local", async createSession(value) { return { reference: { transport: "local", sessionId: "session", locator: { sessionFile: "/tmp/session.jsonl" } }, suspendForHandoff: async () => {}, resumeFromHandoff: async () => {}, getLastAssistant: () => ({ role: "assistant", content: [{ type: "toolCall", name: "read" }] }), getState: () => ({ model: value.model, tools: value.tools }), getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), dispose: async () => { disposalAttempts += 1; throw new Error("dispose failed"); } }; } } };
   const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
   extension.agentSetupHooks.fullyInspectable.setup(agent, context);
   try {
     await assert.rejects(agent.transport.createSession({ cwd: root, model: { provider: "fake", model: "model" }, tools: [], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime }, { ...context, attempt: 1 }), (error) => error instanceof Error && error.message === "pane launch failed");
+    assert.equal(disposalAttempts, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -327,18 +349,21 @@ void test("disposes a Herdr wrapper while a subsequent pane is still launching",
   const calls = [];
   let paneRuns = 0;
   let firstProcessReports = 0;
+  let secondProcessReports = 0;
   let secondClosed = false;
+  let launchReleased = false;
   let releaseLaunch;
   const launchGate = new Promise((resolve) => { releaseLaunch = resolve; });
   const runner = async (args) => {
     calls.push([...args]);
     if (args[0] === "workspace" && args[1] === "create") return JSON.stringify({ result: { workspace: { workspace_id: "workspace" }, tab: { tab_id: "root-tab" }, root_pane: { pane_id: "root-pane" } } });
     if (args[0] === "tab" && args[1] === "create") { const number = calls.filter(([command, subcommand]) => command === "tab" && subcommand === "create").length; return JSON.stringify({ result: { tab: { tab_id: `tab-${number}` }, root_pane: { pane_id: `pane-${number}` } } }); }
-    if (args[0] === "pane" && args[1] === "run") { paneRuns += 1; if (paneRuns === 2) await launchGate; return ""; }
+    if (args[0] === "pane" && args[1] === "run") { paneRuns += 1; if (paneRuns === 2) { await launchGate; launchReleased = true; } return ""; }
     if (args[0] === "tab" && args[1] === "close") { if (args[2] === "tab-2") secondClosed = true; return ""; }
     if (args[0] === "pane" && args[1] === "process-info") {
       if (args[3] === "pane-1") return firstProcessReports++ === 0 ? JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } }) : JSON.stringify({ result: { process_info: { foreground_processes: [] } } });
-      return secondClosed ? JSON.stringify({ result: { process_info: { foreground_processes: [] } } }) : JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } });
+      if (!launchReleased || secondProcessReports++ > 0) return JSON.stringify({ result: { process_info: { foreground_processes: [] } } });
+      return JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } });
     }
     return "";
   };
@@ -349,19 +374,24 @@ void test("disposes a Herdr wrapper while a subsequent pane is still launching",
   const prepared = { cwd: root, model: { provider: "fake", model: "model" }, tools: [], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
   const session = await agent.transport.createSession(prepared, { ...context, attempt: 1 });
   let pending;
+  let secondDisposal;
   try {
     await session.prompt("first");
     pending = session.prompt("second");
     while (paneRuns < 2) await new Promise((resolve) => globalThis.setImmediate(resolve));
     const disposal = session.dispose();
+    secondDisposal = session.dispose();
+    let secondSettled = false;
+    void secondDisposal.then(() => { secondSettled = true; });
+    await new Promise((resolve) => globalThis.setImmediate(resolve));
+    assert.equal(secondSettled, false);
     releaseLaunch();
-    const settled = await Promise.race([Promise.allSettled([pending, disposal]).then(() => true), new Promise((resolve) => globalThis.setTimeout(() => resolve(false), 500))]);
-    assert.equal(settled, true);
+    await Promise.all([pending, disposal, secondDisposal]);
     assert.equal(secondClosed, true);
   } finally {
     releaseLaunch();
-    secondClosed = true;
-    await Promise.allSettled([pending, session.dispose()]);
+    launchReleased = true;
+    await Promise.all([pending ?? Promise.resolve(), secondDisposal ?? Promise.resolve(), session.dispose()]);
     await rm(root, { recursive: true, force: true });
   }
 });

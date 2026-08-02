@@ -357,6 +357,7 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
         throw error;
       }
       let disposed = false;
+      let disposal: Promise<void> | undefined;
       let active: PaneHandle | undefined = opened;
       return {
         ...session,
@@ -385,16 +386,19 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
         },
         async abort() { await session.abort(); },
         async dispose() {
-          if (disposed) return;
+          if (disposal) { await disposal; return; }
           disposed = true;
-          if (launching) {
-            try { active = await launching; } catch { /* The launch failure is reported by its caller. */ }
-          }
-          if (active) {
-            await active.closeRemote();
-            await active.close();
-          }
-          await session.dispose();
+          disposal = (async () => {
+            if (launching) {
+              try { active = await launching; } catch { /* The launch failure is reported by its caller. */ }
+            }
+            if (active) {
+              await active.closeRemote();
+              await active.close();
+            }
+            await session.dispose();
+          })();
+          await disposal;
         }
       };
     },
