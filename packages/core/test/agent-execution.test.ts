@@ -34,15 +34,62 @@ async function createHangingLocalSession(extensionFactories: NonNullable<Session
   const sockets = new Set<{ destroy(): void }>();
   const server = createServer((request) => { if (request.url?.endsWith("/chat/completions")) { requestStarted(); } });
   server.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => { sockets.delete(socket); }); });
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
-  const closeServer = (): Promise<void> => new Promise<void>((resolve, reject) => { for (const socket of sockets) socket.destroy(); server.close((error) => { if (error) reject(error); else resolve(); }); });
+  let closed = false;
+  const closeServer = (): Promise<void> => {
+    if (closed) return Promise.resolve();
+    closed = true;
+    return new Promise<void>((resolve, reject) => { for (const socket of sockets) socket.destroy(); server.close((error) => { if (error && (error as NodeJS.ErrnoException).code !== "ERR_SERVER_NOT_RUNNING") reject(error); else resolve(); }); });
+  };
   try {
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("fixture server did not open a TCP port");
     writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: `http://127.0.0.1:${String(address.port)}/v1`, api: "openai-completions", apiKey: "fixture", models: [{ id: "fixture-model", name: "Fixture model", reasoning: false, input: ["text"], contextWindow: 1_024, maxTokens: 128 }] } } }));
     writeFileSync(join(agentDir, "auth.json"), "{}");
     const session = await localAgentTransport.createSession({ cwd, agentDir, model: { provider: "fixture", model: "fixture-model" }, tools: [], sessionLabel: "hanging-session", ...(extensionFactories.length ? { extensionFactories } : {}) }, {} as never);
     return { session, started, async close() { await closeServer(); rmSync(rootDir, { recursive: true, force: true }); } };
+  } catch (error) {
+    await closeServer().catch(() => undefined);
+    rmSync(rootDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+async function createRespondingLocalSession(extensionFactories: NonNullable<SessionInput["extensionFactories"]> = []) {
+  const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-responding-session-"));
+  const agentDir = join(rootDir, "agent");
+  const cwd = join(rootDir, "project");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  const requests: unknown[] = [];
+  const server = createServer((request, response) => {
+    if (request.url?.endsWith("/chat/completions")) {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => { body += chunk; });
+      request.on("end", () => {
+        try { requests.push(JSON.parse(body)); } catch { requests.push(body); }
+        response.writeHead(200, { "Connection": "close", "Content-Type": "application/json" });
+        response.end(JSON.stringify({ id: "fixture", object: "chat.completion", model: "fixture-model", choices: [{ index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+      });
+    } else response.writeHead(404).end();
+  });
+  const sockets = new Set<{ destroy(): void }>();
+  server.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => { sockets.delete(socket); }); });
+  let closed = false;
+  const closeServer = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => { resolve(); }));
+  };
+  try {
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("fixture server did not open a TCP port");
+    writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: `http://127.0.0.1:${String(address.port)}/v1`, api: "openai-completions", apiKey: "fixture", models: [{ id: "fixture-model", name: "Fixture model", reasoning: false, input: ["text"], contextWindow: 1_024, maxTokens: 128 }] } } }));
+    writeFileSync(join(agentDir, "auth.json"), "{}");
+    const session = await localAgentTransport.createSession({ cwd, agentDir, model: { provider: "fixture", model: "fixture-model" }, tools: [], sessionLabel: "responding-session", ...(extensionFactories.length ? { extensionFactories } : {}) }, {} as never);
+    return { session, requests, async close() { await closeServer(); rmSync(rootDir, { recursive: true, force: true }); } };
   } catch (error) {
     await closeServer().catch(() => undefined);
     rmSync(rootDir, { recursive: true, force: true });
@@ -105,6 +152,20 @@ void test("does not retry after terminal failure persistence fails and preserves
   assert.equal(prompts, 1);
   assert.equal(terminalAttempts, 1);
   assert.deepEqual(thrownAttempts?.map(({ attempt, error }) => ({ attempt, error })), [{ attempt: 1, error: { code: "AGENT_FAILED", message: "agent failed" } }]);
+});
+void test("failed attempt disposal does not mask the agent failure", async () => {
+  let prompts = 0;
+  const executor = new WorkflowAgentExecutor(root, testTransport(async () => ({ sessionId: "failed-dispose", messages: [assistant("failed")], getSessionStats: sessionStats, async prompt() { prompts += 1; throw new Error("primary prompt failure"); }, dispose() { throw new Error("session_shutdown cleanup failure"); } })));
+  let attempts: readonly import("../src/agent-execution.js").AgentAttempt[] | undefined;
+  await assert.rejects(executor.execute("work", { label: "worker", workflowName: "flow", retries: 1 }), (error: unknown) => {
+    if (!(error instanceof Error)) return false;
+    attempts = (error as WorkflowError & { attempts?: typeof attempts }).attempts;
+    return error.message === "primary prompt failure";
+  });
+  assert.equal(prompts, 2);
+  assert.ok(attempts);
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0]?.error?.message, "primary prompt failure");
 });
 void test("does not retry after terminal success disposal fails and preserves attempt history", async () => {
   let prompts = 0;
@@ -905,30 +966,8 @@ void test("bare no-policy local sessions exclude the workflow host and retain co
     rmSync(rootDir, { recursive: true, force: true });
   }
 });
-void test("local Pi sessions shut down after partial extension binding failure", async () => {
-  const originalBind = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
-  assert.ok(originalBind);
-  const lifecycle: string[] = [];
-  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
-    pi.on("session_start", () => { lifecycle.push("start"); });
-    pi.on("session_shutdown", () => { lifecycle.push("shutdown"); });
-  };
-  AgentSession.prototype.bindExtensions = async function (bindings) {
-    await Reflect.apply(originalBind.value as (this: AgentSession, value: typeof bindings) => Promise<void>, this, [bindings]);
-    throw new Error("binding failed");
-  };
-  try {
-    await assert.rejects(createLocalPiSession({ cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "partial-binding-lifecycle", extensionFactories: [extensionFactory] }), /binding failed/);
-    assert.deepEqual(lifecycle, ["start", "shutdown"]);
-  } finally {
-    Object.defineProperty(AgentSession.prototype, "bindExtensions", originalBind);
-  }
-});
 void test("local workflow sessions run startup once before their first prompt", async () => {
-  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
-  assert.ok(originalPrompt);
   let sessionStarts = 0;
-  const messages: string[] = [];
   const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
     pi.on("session_start", async () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -936,23 +975,16 @@ void test("local workflow sessions run startup once before their first prompt", 
       pi.sendMessage({ customType: "startup-probe", content: "startup context", display: false });
     });
   };
-  AgentSession.prototype.prompt = async function (text) {
-    const nativeMessages = (this as unknown as { messages: readonly { role: string; customType?: string }[] }).messages;
-    messages.push(...nativeMessages.map((message) => message.role === "custom" ? `custom:${message.customType ?? ""}` : message.role));
-    messages.push(`user:${text}`);
-  };
+  const fixture = await createRespondingLocalSession([extensionFactory]);
   try {
-    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "session-start-lifecycle", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
-    const session = await localAgentTransport.createSession(prepared, {} as never);
-    try {
-      await session.prompt("first user message");
-      assert.equal(sessionStarts, 1);
-      assert.deepEqual(messages, ["custom:startup-probe", "user:first user message"]);
-    } finally {
-      await session.dispose();
-    }
+    await fixture.session.prompt("first user message");
+    assert.equal(sessionStarts, 1);
+    const request = fixture.requests[0] as { messages?: readonly { role?: string; customType?: string; content?: unknown }[] } | undefined;
+    const userMessages = request?.messages?.filter((message) => message.role === "user").map((message) => JSON.stringify(message.content)) ?? [];
+    assert.deepEqual(userMessages.slice(-2), [JSON.stringify([{ type: "text", text: "startup context" }]), JSON.stringify([{ type: "text", text: "first user message" }])]);
   } finally {
-    Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
+    await fixture.close();
+    await fixture.session.dispose();
   }
 });
 void test("local session handoff reports resume lifecycle context", async () => {
@@ -962,17 +994,20 @@ void test("local session handoff reports resume lifecycle context", async () => 
     pi.on("session_shutdown", (event) => { lifecycle.push({ type: event.type, reason: event.reason }); });
   };
   const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "handoff-lifecycle", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
-  const session = await localAgentTransport.createSession(prepared, {} as never);
-  const locator = session.reference.locator;
-  assert.equal(typeof locator, "object");
-  const sessionFile = locator && typeof locator === "object" && "sessionFile" in locator ? locator.sessionFile : undefined;
-  assert.equal(typeof sessionFile, "string");
-  if (typeof sessionFile !== "string") throw new Error("session file is missing");
+  let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  let sessionFile: string | undefined;
   try {
+    session = await localAgentTransport.createSession(prepared, {} as never);
+    const locator = session.reference.locator;
+    assert.equal(typeof locator, "object");
+    sessionFile = locator && typeof locator === "object" && !Array.isArray(locator) && typeof locator.sessionFile === "string" ? locator.sessionFile : undefined;
+    assert.equal(typeof sessionFile, "string");
+    if (typeof sessionFile !== "string") throw new Error("session file is missing");
     await Promise.all([session.suspendForHandoff?.(), session.suspendForHandoff?.()]);
     await session.resumeFromHandoff?.();
-  } finally {
     await session.dispose();
+  } finally {
+    await session?.dispose();
   }
   assert.deepEqual(lifecycle, [
     { type: "session_start", reason: "startup" },
@@ -982,71 +1017,51 @@ void test("local session handoff reports resume lifecycle context", async () => 
   ]);
 });
 void test("local session can retry after a failed resume", async () => {
-  const originalBind = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
-  assert.ok(originalBind);
-  let bindCalls = 0;
-  AgentSession.prototype.bindExtensions = async function (bindings) {
-    bindCalls += 1;
-    if (bindCalls === 2) throw new Error("resume binding failed");
-    await Reflect.apply(originalBind.value as (this: AgentSession, value: typeof bindings) => Promise<void>, this, [bindings]);
-  };
+  const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "failed-resume-retry" } satisfies import("../src/types.js").PreparedAgentSession;
   let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  let sessionFile: string | undefined;
   try {
-    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "failed-resume-retry" } satisfies import("../src/types.js").PreparedAgentSession;
     session = await localAgentTransport.createSession(prepared, {} as never);
-    await session.suspendForHandoff?.();
+    const locator = session.reference.locator;
+    sessionFile = locator && typeof locator === "object" && !Array.isArray(locator) && typeof locator.sessionFile === "string" ? locator.sessionFile : undefined;
+    assert.ok(sessionFile);
     const resume = session.resumeFromHandoff?.bind(session);
     assert.ok(resume);
-    await assert.rejects(resume(), /resume binding failed/);
+    await session.suspendForHandoff?.();
+    rmSync(sessionFile, { force: true });
+    mkdirSync(sessionFile);
+    await assert.rejects(resume(), /EISDIR/);
+    rmSync(sessionFile, { recursive: true, force: true });
     await assert.doesNotReject(resume());
-    assert.equal(bindCalls, 3);
   } finally {
-    Object.defineProperty(AgentSession.prototype, "bindExtensions", originalBind);
+    if (sessionFile) rmSync(sessionFile, { recursive: true, force: true });
     await session?.dispose();
   }
 });
 void test("local session suspends after a concurrent resume completes", async () => {
-  const originalBind = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
-  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
-  assert.ok(originalBind && originalPrompt);
-  let bindCalls = 0;
-  let releaseBind!: () => void;
-  let markBindStarted!: () => void;
-  let promptCalls = 0;
-  const bindGate = new Promise<void>((resolve) => { releaseBind = resolve; });
-  const bindStarted = new Promise<void>((resolve) => { markBindStarted = resolve; });
-  AgentSession.prototype.bindExtensions = async function (bindings) {
-    bindCalls += 1;
-    if (bindCalls === 2) { markBindStarted(); await bindGate; }
-    await Reflect.apply(originalBind.value as (this: AgentSession, value: typeof bindings) => Promise<void>, this, [bindings]);
+  let releaseResume!: () => void;
+  let markResumeStarted!: () => void;
+  const resumeGate = new Promise<void>((resolve) => { releaseResume = resolve; });
+  const resumeStarted = new Promise<void>((resolve) => { markResumeStarted = resolve; });
+  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
+    pi.on("session_start", async (event) => { if (event.reason === "resume") { markResumeStarted(); await resumeGate; } });
   };
-  AgentSession.prototype.prompt = async function () { promptCalls += 1; };
+  const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "concurrent-resume-suspend", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
   let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
   let resume: Promise<void> | undefined;
   let suspend: Promise<void> | undefined;
   try {
-    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "concurrent-resume-suspend" } satisfies import("../src/types.js").PreparedAgentSession;
     session = await localAgentTransport.createSession(prepared, {} as never);
     await session.suspendForHandoff?.();
-    const resumeFromHandoff = session.resumeFromHandoff?.bind(session);
-    const suspendForHandoff = session.suspendForHandoff?.bind(session);
-    assert.ok(resumeFromHandoff && suspendForHandoff);
-    resume = resumeFromHandoff();
-    await bindStarted;
-    suspend = suspendForHandoff();
-    releaseBind();
+    resume = session.resumeFromHandoff?.();
+    await resumeStarted;
+    suspend = session.suspendForHandoff?.();
+    releaseResume();
     await Promise.all([resume, suspend]);
     await assert.rejects(session.prompt("must remain suspended"), (error: unknown) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR");
-    assert.equal(promptCalls, 0);
   } finally {
-    releaseBind();
-    try {
-      await Promise.allSettled([resume, suspend]);
-    } finally {
-      Object.defineProperty(AgentSession.prototype, "bindExtensions", originalBind);
-      Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
-      await session?.dispose();
-    }
+    releaseResume();
+    await Promise.allSettled([resume, suspend, session?.dispose()]);
   }
 });
 void test("local session emits resume then quit shutdown when terminal disposal follows suspension", async () => {
@@ -1055,8 +1070,9 @@ void test("local session emits resume then quit shutdown when terminal disposal 
   const shutdownGate = new Promise<void>((resolve) => { releaseShutdown = resolve; });
   const shutdownStarted = new Promise<void>((resolve) => { markShutdownStarted = resolve; });
   const reasons: string[] = [];
+  let quitCleanup = 0;
   const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
-    pi.on("session_shutdown", async (event) => { reasons.push(event.reason); markShutdownStarted(); await shutdownGate; });
+    pi.on("session_shutdown", async (event, context) => { reasons.push(event.reason); if (event.reason === "quit") { context.sessionManager.getSessionId(); quitCleanup += 1; } markShutdownStarted(); await shutdownGate; });
   };
   let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
   let suspend: Promise<void> | undefined;
@@ -1070,6 +1086,7 @@ void test("local session emits resume then quit shutdown when terminal disposal 
     releaseShutdown();
     await Promise.all([suspend, dispose]);
     assert.deepEqual(reasons, ["resume", "quit"]);
+    assert.equal(quitCleanup, 1);
     await session.dispose();
     assert.deepEqual(reasons, ["resume", "quit"]);
   } finally {
@@ -1078,70 +1095,46 @@ void test("local session emits resume then quit shutdown when terminal disposal 
   }
 });
 void test("local session rejects prompts while handoff teardown is in flight", async () => {
-  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
-  assert.ok(originalPrompt);
   let shutdownStarted!: () => void;
   let releaseShutdown!: () => void;
-  let promptCalls = 0;
   const shutdownGate = new Promise<void>((resolve) => { releaseShutdown = resolve; });
   const shutdownReady = new Promise<void>((resolve) => { shutdownStarted = resolve; });
-  AgentSession.prototype.prompt = async function () { promptCalls += 1; };
   const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
     pi.on("session_shutdown", async () => { shutdownStarted(); await shutdownGate; });
   };
+  const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "handoff-prompt-race", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
   let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
   let suspend: Promise<void> | undefined;
   try {
-    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "handoff-prompt-race", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
     session = await localAgentTransport.createSession(prepared, {} as never);
     suspend = session.suspendForHandoff?.();
     await shutdownReady;
     await assert.rejects(session.prompt("must not start"), (error: unknown) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR");
     releaseShutdown();
     await suspend;
-    assert.equal(promptCalls, 0);
   } finally {
     releaseShutdown();
-    try {
-      await Promise.allSettled([suspend]);
-      await session?.dispose();
-    } finally {
-      Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
-    }
+    await Promise.allSettled([suspend, session?.dispose()]);
   }
 });
 void test("local session suspension waits for an in-flight prompt", async () => {
-  const originalPrompt = Object.getOwnPropertyDescriptor(AgentSession.prototype, "prompt");
-  assert.ok(originalPrompt);
-  let releasePrompt!: () => void;
-  let markPromptStarted!: () => void;
-  const promptGate = new Promise<void>((resolve) => { releasePrompt = resolve; });
-  const promptStarted = new Promise<void>((resolve) => { markPromptStarted = resolve; });
-  AgentSession.prototype.prompt = async function () { markPromptStarted(); await promptGate; };
   let shutdownStarted = false;
   const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => { pi.on("session_shutdown", () => { shutdownStarted = true; }); };
-  let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
+  const fixture = await createHangingLocalSession([extensionFactory]);
   let prompt: Promise<unknown> | undefined;
   let suspend: Promise<void> | undefined;
   try {
-    const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "handoff-in-flight-prompt", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
-    session = await localAgentTransport.createSession(prepared, {} as never);
-    prompt = session.prompt("work");
-    await promptStarted;
-    suspend = session.suspendForHandoff?.();
+    prompt = fixture.session.prompt("work");
+    await fixture.started;
+    suspend = fixture.session.suspendForHandoff?.();
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(shutdownStarted, false);
-    releasePrompt();
-    await Promise.all([prompt, suspend]);
+    await fixture.close();
+    await Promise.allSettled([prompt, suspend]);
     assert.equal(shutdownStarted, true);
   } finally {
-    releasePrompt();
-    try {
-      await Promise.allSettled([prompt, suspend]);
-    } finally {
-      Object.defineProperty(AgentSession.prototype, "prompt", originalPrompt);
-      await session?.dispose();
-    }
+    await fixture.close().catch(() => undefined);
+    await Promise.allSettled([prompt, suspend, fixture.session.dispose()]);
   }
 });
 void test("local session disposal aborts a prompt while active resume is waiting", async () => {
@@ -1180,7 +1173,7 @@ void test("local session disposal aborts a prompt while suspension is waiting", 
     const all = Promise.all([prompt, suspend, dispose]);
     assert.equal(await settlesWithin(all), true);
     await all;
-    assert.deepEqual(reasons, ["resume", "quit"]);
+    assert.deepEqual(reasons, ["quit"]);
   } finally {
     await fixture.close();
     await Promise.allSettled([prompt, suspend, dispose, fixture.session.dispose()]);

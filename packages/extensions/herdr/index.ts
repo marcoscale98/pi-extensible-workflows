@@ -343,10 +343,19 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
         }
       };
       const inFlight = new Set<Promise<PaneHandle>>();
-      const beginLaunch = (prompt: string | undefined): Promise<PaneHandle> => {
-        const next = suspendAndLaunch(prompt);
+      let disposed = false;
+      const isDisposed = (): boolean => disposed;
+      let sharedLaunch: Promise<PaneHandle> | undefined;
+      const beginLaunch = (prompt: string | undefined, retry = false): Promise<PaneHandle> => {
+        if (isDisposed()) return Promise.reject(new Error("Herdr workflow session is disposed"));
+        if (sharedLaunch) return sharedLaunch;
+        const next = (async () => {
+          try { return await suspendAndLaunch(prompt); }
+          catch (error) { if (!retry || isDisposed()) throw error; return suspendAndLaunch(prompt); }
+        })();
+        sharedLaunch = next;
         inFlight.add(next);
-        void next.then(() => { inFlight.delete(next); }, () => { inFlight.delete(next); });
+        void next.then(() => { inFlight.delete(next); if (sharedLaunch === next) sharedLaunch = undefined; }, () => { inFlight.delete(next); if (sharedLaunch === next) sharedLaunch = undefined; });
         return next;
       };
       let opened;
@@ -356,7 +365,6 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
         await session.dispose().catch(() => undefined);
         throw error;
       }
-      let disposed = false;
       let disposal: Promise<void> | undefined;
       let active: PaneHandle | undefined = opened;
       return {
@@ -368,15 +376,25 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
           let current = active;
           if (!current) {
             const pending = inFlight.values().next().value;
-            if (pending) { try { current = await pending; } catch { /* in-flight launch failed; start fresh */ } }
-            if (!current) current = await beginLaunch(text);
+            current = pending ? await pending : await beginLaunch(text, true);
           }
           active = current;
+          let monitorFailed = false;
+          let monitorError: unknown;
+          let resumeFailed = false;
+          let resumeError: unknown;
           try {
             await current.monitor;
+          } catch (error) {
+            monitorFailed = true;
+            monitorError = error;
           } finally {
-            try { await session.resumeFromHandoff?.(); } finally { if (active === current) active = undefined; }
+            try { await session.resumeFromHandoff?.(); }
+            catch (error) { resumeFailed = true; resumeError = error; }
+            finally { if (active === current) active = undefined; }
           }
+          if (monitorFailed) throw monitorError;
+          if (resumeFailed) throw resumeError;
           let assistant = session.getLastAssistant?.();
           const resultTool = prepared.resultTool;
           const resultSubmitted = resultTool !== undefined && hasNamedToolCall(assistant, resultTool.name);

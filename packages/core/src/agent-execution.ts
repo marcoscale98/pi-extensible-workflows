@@ -311,19 +311,8 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
   const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, settingsManager, ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), resourceLoader, ...(sessionStartEvent ? { sessionStartEvent } : {}), sessionManager: manager });
   const nativeDispose = session.dispose.bind(session);
   let disposal: Promise<void> | undefined;
-  let shutdownReason: LocalSessionShutdownReason | undefined;
-  let terminalShutdownEmitted = false;
   const shutdown = (reason: LocalSessionShutdownReason): Promise<void> => {
-    if (disposal) {
-      if (reason === "quit" && shutdownReason === "resume" && !terminalShutdownEmitted) {
-        terminalShutdownEmitted = true;
-        return disposal.catch(() => undefined).then(async () => {
-          if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
-        });
-      }
-      return disposal;
-    }
-    shutdownReason = reason;
+    if (disposal) return disposal;
     disposal = (async () => {
       try {
         if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
@@ -378,6 +367,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   };
   let nativeHandle = await createLocalPiSessionHandle(input);
   let native = nativeHandle.session;
+  let nativeShutdownReason: LocalSessionShutdownReason | undefined;
   let disposal: Promise<void> | undefined;
   let aborting: Promise<void> | undefined;
   let lifecycle: Promise<void> | undefined;
@@ -408,6 +398,10 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     void next.then(() => { if (lifecycle === next) lifecycle = undefined; }, () => { if (lifecycle === next) lifecycle = undefined; });
     return next;
   };
+  const shutdownNative = (reason: LocalSessionShutdownReason): Promise<void> => {
+    nativeShutdownReason = reason;
+    return nativeHandle.shutdown(reason);
+  };
   bindNative(native);
   const startAbort = () => {
     if (state !== "active" && state !== "suspending" && !(state === "resuming" && resumingActive)) return Promise.resolve();
@@ -420,10 +414,11 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     state = "suspending";
     suspendOperation = enqueue(async () => {
       await Promise.allSettled(prompts);
+      if (state !== "suspending") return;
       unbindNative();
-      try { await nativeHandle.shutdown("resume"); }
-      catch (error) { if (state === "suspending") state = "suspended"; throw error; }
-      if (state === "suspending") state = "suspended";
+      try { await shutdownNative("resume"); }
+      catch (error) { if (!isClosing()) state = "suspended"; throw error; }
+      if (!isClosing()) state = "suspended";
     });
     await suspendOperation;
   };
@@ -442,13 +437,14 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
         await Promise.allSettled(prompts);
         if (!wasSuspended) {
           unbindNative();
-          await nativeHandle.shutdown("resume");
+          await shutdownNative("resume");
         }
         if (isClosing()) return;
         const nextHandle = await createLocalPiSessionHandle({ ...input, sessionPath: sessionFile }, { type: "session_start", reason: "resume", previousSessionFile: sessionFile });
-        if (isClosing()) { await nextHandle.shutdown("quit"); return; }
         nativeHandle = nextHandle;
-        native = nativeHandle.session;
+        native = nextHandle.session;
+        nativeShutdownReason = undefined;
+        if (isClosing()) { await shutdownNative("quit"); return; }
         bindNative(native);
         state = "active";
       } catch (error) {
@@ -469,7 +465,16 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
         try { await abort; } catch { /* Abort failure must not prevent the prompt from settling. */ }
         await Promise.allSettled(prompts);
         unbindNative();
-        await nativeHandle.shutdown("quit");
+        if (nativeShutdownReason === "resume") {
+          const sessionFile = native.sessionFile;
+          if (sessionFile) {
+            const nextHandle = await createLocalPiSessionHandle({ ...input, sessionPath: sessionFile }, { type: "session_start", reason: "resume", previousSessionFile: sessionFile });
+            nativeHandle = nextHandle;
+            native = nextHandle.session;
+            nativeShutdownReason = undefined;
+          }
+        }
+        if (nativeShutdownReason === undefined) await shutdownNative("quit");
       } finally {
         state = "disposed";
       }
@@ -941,11 +946,9 @@ export class WorkflowAgentExecutor {
           if (!budgetError && typed.code !== "BUDGET_EXHAUSTED") { try { options.budget?.afterTurn(attemptAccounting, true); } catch (budgetFailure) { budgetError ??= budgetFailure instanceof WorkflowError ? budgetFailure : new WorkflowError("BUDGET_EXHAUSTED", budgetFailure instanceof Error ? budgetFailure.message : String(budgetFailure)); } }
           const failedAttempt = attemptRecord(setup?.transport.id ?? this.transport.id, attempt, session, setupSummary, attemptAccounting, undefined, { code: typed.code, message: typed.message });
           attempts.push(failedAttempt);
-          try {
-            try { await options.onAttempt?.(failedAttempt); } finally { await session.dispose(); }
-          } catch (persistenceError) {
-            throw errorWithAttempts(persistenceError, attempts);
-          }
+          try { await options.onAttempt?.(failedAttempt); }
+          catch (persistenceError) { throw errorWithAttempts(persistenceError, attempts); }
+          finally { await session.dispose().catch(() => undefined); }
         }
         if (options.worktreeOwner && typed.code !== "WORKTREE_FAILED") await this.root.runStore?.snapshotWorktree(options.worktreeOwner).catch(() => undefined);
         const terminal = terminalProviderError(typed);
