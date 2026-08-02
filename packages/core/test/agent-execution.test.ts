@@ -35,12 +35,19 @@ async function createHangingLocalSession(extensionFactories: NonNullable<Session
   const server = createServer((request) => { if (request.url?.endsWith("/chat/completions")) { requestStarted(); } });
   server.on("connection", (socket) => { sockets.add(socket); socket.on("close", () => { sockets.delete(socket); }); });
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
-  const address = server.address();
-  if (!address || typeof address === "string") throw new Error("fixture server did not open a TCP port");
-  writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: `http://127.0.0.1:${String(address.port)}/v1`, api: "openai-completions", apiKey: "fixture", models: [{ id: "fixture-model", name: "Fixture model", reasoning: false, input: ["text"], contextWindow: 1_024, maxTokens: 128 }] } } }));
-  writeFileSync(join(agentDir, "auth.json"), "{}");
-  const session = await localAgentTransport.createSession({ cwd, agentDir, model: { provider: "fixture", model: "fixture-model" }, tools: [], sessionLabel: "hanging-session", ...(extensionFactories.length ? { extensionFactories } : {}) }, {} as never);
-  return { session, started, async close() { for (const socket of sockets) socket.destroy(); await new Promise<void>((resolve, reject) => { server.close((error) => { if (error) reject(error); else resolve(); }); }); rmSync(rootDir, { recursive: true, force: true }); } };
+  const closeServer = (): Promise<void> => new Promise<void>((resolve, reject) => { for (const socket of sockets) socket.destroy(); server.close((error) => { if (error) reject(error); else resolve(); }); });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("fixture server did not open a TCP port");
+    writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: `http://127.0.0.1:${String(address.port)}/v1`, api: "openai-completions", apiKey: "fixture", models: [{ id: "fixture-model", name: "Fixture model", reasoning: false, input: ["text"], contextWindow: 1_024, maxTokens: 128 }] } } }));
+    writeFileSync(join(agentDir, "auth.json"), "{}");
+    const session = await localAgentTransport.createSession({ cwd, agentDir, model: { provider: "fixture", model: "fixture-model" }, tools: [], sessionLabel: "hanging-session", ...(extensionFactories.length ? { extensionFactories } : {}) }, {} as never);
+    return { session, started, async close() { await closeServer(); rmSync(rootDir, { recursive: true, force: true }); } };
+  } catch (error) {
+    await closeServer().catch(() => undefined);
+    rmSync(rootDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 async function settlesWithin(promise: Promise<unknown>, timeoutMs = 2_000): Promise<boolean> { return await new Promise((resolve) => { const timer = setTimeout(() => { resolve(false); }, timeoutMs); promise.then(() => { clearTimeout(timer); resolve(true); }, () => { clearTimeout(timer); resolve(true); }); }); }
 void test("uses a transport-neutral session and persists its final reference shape", async () => {
@@ -1042,7 +1049,7 @@ void test("local session suspends after a concurrent resume completes", async ()
     }
   }
 });
-void test("local session emits one shutdown when suspension overlaps disposal", async () => {
+void test("local session emits resume then quit shutdown when terminal disposal follows suspension", async () => {
   let releaseShutdown!: () => void;
   let markShutdownStarted!: () => void;
   const shutdownGate = new Promise<void>((resolve) => { releaseShutdown = resolve; });
@@ -1062,9 +1069,9 @@ void test("local session emits one shutdown when suspension overlaps disposal", 
     dispose = session.dispose();
     releaseShutdown();
     await Promise.all([suspend, dispose]);
-    assert.deepEqual(reasons, ["resume"]);
+    assert.deepEqual(reasons, ["resume", "quit"]);
     await session.dispose();
-    assert.deepEqual(reasons, ["resume"]);
+    assert.deepEqual(reasons, ["resume", "quit"]);
   } finally {
     releaseShutdown();
     await Promise.allSettled([suspend, dispose, session?.dispose()]);
@@ -1152,7 +1159,7 @@ void test("local session disposal aborts a prompt while active resume is waiting
     const all = Promise.all([prompt, resume, dispose]);
     assert.equal(await settlesWithin(all), true);
     await all;
-    assert.deepEqual(reasons, ["resume"]);
+    assert.deepEqual(reasons, ["resume", "quit"]);
   } finally {
     await fixture.close();
     await Promise.allSettled([prompt, resume, dispose, fixture.session.dispose()]);
@@ -1173,7 +1180,7 @@ void test("local session disposal aborts a prompt while suspension is waiting", 
     const all = Promise.all([prompt, suspend, dispose]);
     assert.equal(await settlesWithin(all), true);
     await all;
-    assert.deepEqual(reasons, ["resume"]);
+    assert.deepEqual(reasons, ["resume", "quit"]);
   } finally {
     await fixture.close();
     await Promise.allSettled([prompt, suspend, dispose, fixture.session.dispose()]);

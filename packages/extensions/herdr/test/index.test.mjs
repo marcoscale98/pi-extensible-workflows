@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import net from "node:net";
@@ -321,6 +322,9 @@ void test("restores the previous local generation after an initial pane launch f
 void test("preserves an initial pane launch error when local disposal also fails", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-disposal-error-precedence-"));
   const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(cwd, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
   writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
   const runner = async (args) => {
@@ -330,22 +334,128 @@ void test("preserves an initial pane launch error when local disposal also fails
     return "";
   };
   const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
-  let disposalAttempts = 0;
-  const agent = { transport: { id: "local", async createSession(value) { return { reference: { transport: "local", sessionId: "session", locator: { sessionFile: "/tmp/session.jsonl" } }, suspendForHandoff: async () => {}, resumeFromHandoff: async () => {}, getLastAssistant: () => ({ role: "assistant", content: [{ type: "toolCall", name: "read" }] }), getState: () => ({ model: value.model, tools: value.tools }), getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), dispose: async () => { disposalAttempts += 1; throw new Error("dispose failed"); } }; } } };
+  const shutdownReasons = [];
+  const extensionFactory = (pi) => { pi.on("session_shutdown", async (event) => { shutdownReasons.push(event.reason); if (event.reason === "quit") throw new Error("cleanup failed"); }); };
+  const agent = { transport: localAgentTransport };
   const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
   extension.agentSetupHooks.fullyInspectable.setup(agent, context);
   try {
-    await assert.rejects(agent.transport.createSession({ cwd: root, model: { provider: "fake", model: "model" }, tools: [], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime }, { ...context, attempt: 1 }), (error) => error instanceof Error && error.message === "pane launch failed");
-    assert.equal(disposalAttempts, 1);
+    await assert.rejects(agent.transport.createSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], extensionFactories: [extensionFactory], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime }, { ...context, attempt: 1 }), (error) => error instanceof Error && error.message === "pane launch failed");
+    // The extension-induced quit failure must not mask the pane launch error
+    assert.ok(shutdownReasons.includes("quit"), "session_shutdown:quit must have been emitted during disposal");
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+void test("clears the active pane after a failed handoff resume so the next prompt can launch", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-failed-resume-pane-"));
+  const agentDir = join(root, "agent");
+  mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  let paneRuns = 0;
+  let firstProcessReports = 0;
+  let secondProcessReports = 0;
+  let tabCount = 0;
+  const runner = async (args) => {
+    if (args[0] === "workspace" && args[1] === "create") return JSON.stringify({ result: { workspace: { workspace_id: "ws" }, tab: { tab_id: "tab-root" }, root_pane: { pane_id: "pane-root" } } });
+    if (args[0] === "tab" && args[1] === "create") { tabCount += 1; return JSON.stringify({ result: { tab: { tab_id: `tab-${tabCount}` }, root_pane: { pane_id: `pane-${tabCount}` } } }); }
+    if (args[0] === "pane" && args[1] === "run") { paneRuns += 1; return ""; }
+    if (args[0] === "pane" && args[1] === "process-info") {
+      if (args[3] === "pane-1") return firstProcessReports++ === 0
+        ? JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } })
+        : JSON.stringify({ result: { process_info: { foreground_processes: [] } } });
+      return secondProcessReports++ === 0
+        ? JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } })
+        : JSON.stringify({ result: { process_info: { foreground_processes: [] } } });
+    }
+    return "";
+  };
+  const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
+  let resumeCallCount = 0;
+  const agent = { transport: { id: "local", async createSession(value) { return { reference: { transport: "local", sessionId: "session", locator: { sessionFile: "/tmp/session.jsonl" } }, suspendForHandoff: async () => {}, resumeFromHandoff: async () => { resumeCallCount += 1; if (resumeCallCount === 1) throw new Error("resume failed"); }, getLastAssistant: () => ({ role: "assistant", content: [{ type: "text", text: "done" }] }), getState: () => ({ model: value.model, tools: value.tools }), getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), abort: async () => {}, dispose: async () => {} }; } } };
+  const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
+  extension.agentSetupHooks.fullyInspectable.setup(agent, context);
+  const prepared = { cwd: root, model: { provider: "fake", model: "model" }, tools: [], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
+  const session = await agent.transport.createSession(prepared, { ...context, attempt: 1 });
+  try {
+    // First prompt: pane-1 closes but resumeFromHandoff throws; active must still be cleared
+    await assert.rejects(session.prompt("first"), (error) => error instanceof Error && error.message === "resume failed");
+    assert.equal(paneRuns, 1, "initial pane only");
+    // Second prompt: must launch a new pane (pane-2) since active was cleared despite failed resume
+    await session.prompt("second");
+    assert.equal(paneRuns, 2, "a new pane should open for the second prompt");
+  } finally {
+    await Promise.allSettled([session.dispose()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+void test("concurrent prompts join an in-flight pane launch rather than opening a second", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-concurrent-prompt-"));
+  const agentDir = join(root, "agent");
+  mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  let paneRuns = 0;
+  let firstProcessReports = 0;
+  let secondProcessReports = 0;
+  let tabCount = 0;
+  let releaseLaunch;
+  const launchGate = new Promise((resolve) => { releaseLaunch = resolve; });
+  const runner = async (args) => {
+    if (args[0] === "workspace" && args[1] === "create") return JSON.stringify({ result: { workspace: { workspace_id: "ws" }, tab: { tab_id: "tab-root" }, root_pane: { pane_id: "pane-root" } } });
+    if (args[0] === "tab" && args[1] === "create") { tabCount += 1; return JSON.stringify({ result: { tab: { tab_id: `tab-${tabCount}` }, root_pane: { pane_id: `pane-${tabCount}` } } }); }
+    if (args[0] === "pane" && args[1] === "run") { paneRuns += 1; if (paneRuns >= 2) { await launchGate; } return ""; }
+    if (args[0] === "pane" && args[1] === "process-info") {
+      if (args[3] === "pane-1") return firstProcessReports++ === 0
+        ? JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } })
+        : JSON.stringify({ result: { process_info: { foreground_processes: [] } } });
+      return secondProcessReports++ === 0
+        ? JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } })
+        : JSON.stringify({ result: { process_info: { foreground_processes: [] } } });
+    }
+    return "";
+  };
+  const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
+  const agent = { transport: { id: "local", async createSession(value) { return { reference: { transport: "local", sessionId: "session", locator: { sessionFile: "/tmp/session.jsonl" } }, suspendForHandoff: async () => {}, resumeFromHandoff: async () => {}, getLastAssistant: () => ({ role: "assistant", content: [{ type: "text", text: "done" }] }), getState: () => ({ model: value.model, tools: value.tools }), getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), abort: async () => {}, dispose: async () => {} }; } } };
+  const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
+  extension.agentSetupHooks.fullyInspectable.setup(agent, context);
+  const prepared = { cwd: root, model: { provider: "fake", model: "model" }, tools: [], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
+  const session = await agent.transport.createSession(prepared, { ...context, attempt: 1 });
+  let second, third;
+  try {
+    await session.prompt("first");
+    second = session.prompt("second");
+    third = session.prompt("third");
+    while (paneRuns < 2) await new Promise((resolve) => globalThis.setImmediate(resolve));
+    // Drain additional turns to detect any spurious third launch
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => globalThis.setImmediate(resolve));
+    assert.equal(paneRuns, 2, "only one new pane should be opened for concurrent prompts");
+    releaseLaunch();
+    await Promise.all([second, third]);
+  } finally {
+    releaseLaunch?.();
+    await Promise.allSettled([second ?? Promise.resolve(), third ?? Promise.resolve(), session.dispose()]);
     await rm(root, { recursive: true, force: true });
   }
 });
 void test("disposes a Herdr wrapper while a subsequent pane is still launching", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-launch-disposal-race-"));
   const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(cwd, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
   writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  // HTTP fixture: responds immediately so the local session's continuation prompt completes
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url?.endsWith("/chat/completions")) { req.on("data", () => {}); req.on("end", () => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ id: "t", object: "chat.completion", model: "fixture-model", choices: [{ index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })); }); }
+    else { res.writeHead(404).end(); }
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
+  const address = server.address();
+  writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: `http://127.0.0.1:${address.port}/v1`, api: "openai-completions", apiKey: "fixture", models: [{ id: "fixture-model", name: "Fixture model", reasoning: false, input: ["text"], contextWindow: 1024, maxTokens: 128 }] } } }));
+  writeFileSync(join(agentDir, "auth.json"), "{}");
+  const shutdownReasons = [];
+  const extensionFactory = (pi) => { pi.on("session_shutdown", (event) => { shutdownReasons.push(event.reason); }); };
   const calls = [];
   let paneRuns = 0;
   let firstProcessReports = 0;
@@ -368,10 +478,10 @@ void test("disposes a Herdr wrapper while a subsequent pane is still launching",
     return "";
   };
   const extension = createHerdrExtension({ agentDir, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "parent" }, runner });
-  const agent = { transport: { id: "local", async createSession(value) { return { reference: { transport: "local", sessionId: "session", locator: { sessionFile: "/tmp/session.jsonl" } }, suspendForHandoff: async () => {}, resumeFromHandoff: async () => {}, getLastAssistant: () => ({ role: "assistant", content: [{ type: "toolCall", name: "read" }] }), getState: () => ({ model: value.model, tools: value.tools }), getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), prompt: async () => ({ assistant: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] } }), abort: async () => {}, dispose: async () => {} }; } } };
+  const agent = { transport: localAgentTransport };
   const context = { identity: { structuralPath: ["review"], parentBreadcrumb: "flow", callSite: "agent", occurrence: 1 }, run: { runId: "run", workflow: { name: "flow" } }, signal: new AbortController().signal };
   extension.agentSetupHooks.fullyInspectable.setup(agent, context);
-  const prepared = { cwd: root, model: { provider: "fake", model: "model" }, tools: [], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
+  const prepared = { cwd, agentDir, model: { provider: "fixture", model: "fixture-model" }, tools: [], extensionFactories: [extensionFactory], initialPrompt: "initial", sessionLabel: "flow:review", piRuntime };
   const session = await agent.transport.createSession(prepared, { ...context, attempt: 1 });
   let pending;
   let secondDisposal;
@@ -386,13 +496,14 @@ void test("disposes a Herdr wrapper while a subsequent pane is still launching",
     await new Promise((resolve) => globalThis.setImmediate(resolve));
     assert.equal(secondSettled, false);
     releaseLaunch();
-    await Promise.all([pending, disposal, secondDisposal]);
+    await Promise.allSettled([pending, disposal, secondDisposal]);
     assert.equal(secondClosed, true);
+    assert.ok(shutdownReasons.includes("quit"), "local session_shutdown:quit must be emitted on terminal disposal");
   } finally {
-    releaseLaunch();
+    releaseLaunch?.();
     launchReleased = true;
-    await Promise.all([pending ?? Promise.resolve(), secondDisposal ?? Promise.resolve(), session.dispose()]);
-    await rm(root, { recursive: true, force: true });
+    try { await Promise.allSettled([pending ?? Promise.resolve(), secondDisposal ?? Promise.resolve(), session.dispose()]); }
+    finally { await new Promise((resolve) => server.close(() => resolve())); await rm(root, { recursive: true, force: true }); }
   }
 });
 void test("routes fully inspectable agents into one labeled workflow workspace", async () => {

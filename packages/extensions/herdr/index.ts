@@ -342,11 +342,11 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
           throw error;
         }
       };
-      let launching: Promise<PaneHandle> | undefined;
+      const inFlight = new Set<Promise<PaneHandle>>();
       const beginLaunch = (prompt: string | undefined): Promise<PaneHandle> => {
         const next = suspendAndLaunch(prompt);
-        launching = next;
-        void next.then(() => { if (launching === next) launching = undefined; }, () => { if (launching === next) launching = undefined; });
+        inFlight.add(next);
+        void next.then(() => { inFlight.delete(next); }, () => { inFlight.delete(next); });
         return next;
       };
       let opened;
@@ -366,13 +366,16 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
         async prompt(text) {
           if (disposed) throw new Error("Herdr workflow session is disposed");
           let current = active;
-          if (!current) current = await beginLaunch(text);
+          if (!current) {
+            const pending = inFlight.values().next().value;
+            if (pending) { try { current = await pending; } catch { /* in-flight launch failed; start fresh */ } }
+            if (!current) current = await beginLaunch(text);
+          }
           active = current;
           try {
             await current.monitor;
           } finally {
-            await session.resumeFromHandoff?.();
-            if (active === current) active = undefined;
+            try { await session.resumeFromHandoff?.(); } finally { if (active === current) active = undefined; }
           }
           let assistant = session.getLastAssistant?.();
           const resultTool = prepared.resultTool;
@@ -389,8 +392,10 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
           if (disposal) { await disposal; return; }
           disposed = true;
           disposal = (async () => {
-            if (launching) {
-              try { active = await launching; } catch { /* The launch failure is reported by its caller. */ }
+            const pendingLaunches = [...inFlight];
+            if (pendingLaunches.length > 0) {
+              const results = await Promise.allSettled(pendingLaunches);
+              if (!active) { for (const result of results) { if (result.status === "fulfilled") { active = result.value; break; } } }
             }
             if (active) {
               await active.closeRemote();

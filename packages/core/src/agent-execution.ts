@@ -311,8 +311,19 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
   const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, settingsManager, ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), resourceLoader, ...(sessionStartEvent ? { sessionStartEvent } : {}), sessionManager: manager });
   const nativeDispose = session.dispose.bind(session);
   let disposal: Promise<void> | undefined;
+  let shutdownReason: LocalSessionShutdownReason | undefined;
+  let terminalShutdownEmitted = false;
   const shutdown = (reason: LocalSessionShutdownReason): Promise<void> => {
-    if (disposal) return disposal;
+    if (disposal) {
+      if (reason === "quit" && shutdownReason === "resume" && !terminalShutdownEmitted) {
+        terminalShutdownEmitted = true;
+        return disposal.catch(() => undefined).then(async () => {
+          if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
+        });
+      }
+      return disposal;
+    }
+    shutdownReason = reason;
     disposal = (async () => {
       try {
         if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
