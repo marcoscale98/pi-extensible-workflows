@@ -348,6 +348,7 @@ function herdrTransport(agent: AgentSetup, context: Readonly<AgentSetupContext>,
       let sharedLaunch: Promise<PaneHandle> | undefined;
       const beginLaunch = (prompt: string | undefined, retry = false): Promise<PaneHandle> => {
         if (isDisposed()) return Promise.reject(new Error("Herdr workflow session is disposed"));
+        // Joined callers share the first launch; the executor normally serializes prompts, so later text is not sent separately.
         if (sharedLaunch) return sharedLaunch;
         const next = (async () => {
           try { return await suspendAndLaunch(prompt); }

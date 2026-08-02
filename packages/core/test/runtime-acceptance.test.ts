@@ -642,7 +642,7 @@ void test("production child discovery does not replace the frozen parent workflo
   let start: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
   workflowExtension({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow", "workflow_catalog"], on(name: string, handler: unknown) { if (name === "session_start") start = handler as typeof start; } } as never, home, async () => {});
   registerWorkflowExtension({
-    version: "1.0.0", headline: "Registry probe", description: "Registry probe acceptance",
+    version: "1.0.0", headline: "Registry probe",
     functions: { probe: { description: "Probe the parent registry", input: { type: "object", additionalProperties: false }, output: { type: "string" }, run: () => "probe" } },
   });
   assert.ok(start);

@@ -941,6 +941,26 @@ void test("direct local Pi sessions shut down extensions when disposed", async (
   await Promise.all([session.dispose(), session.dispose()]);
   assert.deepEqual(lifecycle, ["start:startup", "shutdown:quit"]);
 });
+
+void test("local Pi sessions shut down after partial extension binding failure", async () => {
+  const originalBind = Object.getOwnPropertyDescriptor(AgentSession.prototype, "bindExtensions");
+  assert.ok(originalBind);
+  const lifecycle: string[] = [];
+  const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
+    pi.on("session_start", () => { lifecycle.push("start"); });
+    pi.on("session_shutdown", () => { lifecycle.push("shutdown"); });
+  };
+  AgentSession.prototype.bindExtensions = async function (bindings) {
+    await Reflect.apply(originalBind.value as (this: AgentSession, value: typeof bindings) => Promise<void>, this, [bindings]);
+    throw new Error("binding failed");
+  };
+  try {
+    await assert.rejects(createLocalPiSession({ cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "partial-binding-lifecycle", extensionFactories: [extensionFactory] }), /binding failed/);
+    assert.deepEqual(lifecycle, ["start", "shutdown"]);
+  } finally {
+    Object.defineProperty(AgentSession.prototype, "bindExtensions", originalBind);
+  }
+});
 void test("bare no-policy local sessions exclude the workflow host and retain configured extensions", async () => {
   const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-no-policy-extensions-"));
   const agentDir = join(rootDir, "agent");
@@ -988,10 +1008,10 @@ void test("local workflow sessions run startup once before their first prompt", 
   }
 });
 void test("local session handoff reports resume lifecycle context", async () => {
-  const lifecycle: Array<{ type: string; reason: string; previousSessionFile?: string }> = [];
+  const lifecycle: Array<{ type: string; reason: string; previousSessionFile?: string; targetSessionFile?: string }> = [];
   const extensionFactory: NonNullable<SessionInput["extensionFactories"]>[number] = (pi) => {
     pi.on("session_start", (event) => { lifecycle.push({ type: event.type, reason: event.reason, ...(event.previousSessionFile ? { previousSessionFile: event.previousSessionFile } : {}) }); });
-    pi.on("session_shutdown", (event) => { lifecycle.push({ type: event.type, reason: event.reason }); });
+    pi.on("session_shutdown", (event) => { lifecycle.push({ type: event.type, reason: event.reason, ...(event.targetSessionFile ? { targetSessionFile: event.targetSessionFile } : {}) }); });
   };
   const prepared = { cwd: process.cwd(), model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "medium" }, tools: [], sessionLabel: "handoff-lifecycle", extensionFactories: [extensionFactory] } satisfies import("../src/types.js").PreparedAgentSession;
   let session: Awaited<ReturnType<typeof localAgentTransport.createSession>> | undefined;
@@ -1011,7 +1031,7 @@ void test("local session handoff reports resume lifecycle context", async () => 
   }
   assert.deepEqual(lifecycle, [
     { type: "session_start", reason: "startup" },
-    { type: "session_shutdown", reason: "resume" },
+    { type: "session_shutdown", reason: "resume", targetSessionFile: sessionFile },
     { type: "session_start", reason: "resume", previousSessionFile: sessionFile },
     { type: "session_shutdown", reason: "quit" },
   ]);
@@ -1172,7 +1192,9 @@ void test("local session disposal aborts a prompt while suspension is waiting", 
     dispose = fixture.session.dispose();
     const all = Promise.all([prompt, suspend, dispose]);
     assert.equal(await settlesWithin(all), true);
-    await all;
+    await Promise.allSettled([prompt, dispose]);
+    assert.ok(suspend);
+    await assert.rejects(suspend, (error: unknown) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR" && error.message === "Local workflow session is closing");
     assert.deepEqual(reasons, ["quit"]);
   } finally {
     await fixture.close();

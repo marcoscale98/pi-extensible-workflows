@@ -11,11 +11,21 @@ import extension, { breadcrumbLabel, createHerdrExtension, isFullyInspectableMod
 import { createLiveSessionHandoff, loadingRegistry, localAgentTransport, resetWorkflowRegistry } from "pi-extensible-workflows";
 
 const piRuntime = { executable: process.execPath, entrypoint: "/originating/pi-coding-agent/dist/cli.js" };
+function writeFixtureStream(res, id = "fixture") {
+  const chunk = (choices) => `data: ${JSON.stringify({ id, object: "chat.completion.chunk", model: "fixture-model", choices })}`;
+  res.writeHead(200, { "Connection": "close", "Content-Type": "text/event-stream" });
+  res.end([
+    chunk([{ index: 0, delta: { role: "assistant", content: "done" }, finish_reason: null }]),
+    chunk([{ index: 0, delta: {}, finish_reason: "stop" }]),
+    "data: [DONE]",
+    "",
+  ].join("\n\n"));
+}
 async function createFixtureModel(agentDir) {
   const server = createServer((req, res) => {
     if (req.method === "POST" && req.url?.endsWith("/chat/completions")) {
       req.on("data", () => {});
-      req.on("end", () => { res.writeHead(200, { "Connection": "close", "Content-Type": "application/json" }); res.end(JSON.stringify({ id: "fixture", object: "chat.completion", model: "fixture-model", choices: [{ index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })); });
+      req.on("end", () => { writeFixtureStream(res); });
     } else res.writeHead(404).end();
   });
   try {
@@ -366,7 +376,7 @@ void test("preserves an initial pane launch error when local disposal also fails
     await rm(root, { recursive: true, force: true });
   }
 });
-void test("clears the active pane after a failed pane monitor so the next prompt can launch", async () => {
+void test("clears the active pane after a failed pane monitor so the next prompt can launch", { timeout: 30_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-failed-resume-pane-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
@@ -627,7 +637,7 @@ void test("disposes a Herdr wrapper while a subsequent pane is still launching",
   try {
     // HTTP fixture: responds immediately so the local session's continuation prompt completes
   server = createServer((req, res) => {
-    if (req.method === "POST" && req.url?.endsWith("/chat/completions")) { req.on("data", () => {}); req.on("end", () => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ id: "t", object: "chat.completion", model: "fixture-model", choices: [{ index: 0, message: { role: "assistant", content: "done" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })); }); }
+    if (req.method === "POST" && req.url?.endsWith("/chat/completions")) { req.on("data", () => {}); req.on("end", () => { writeFixtureStream(res, "t"); }); }
     else { res.writeHead(404).end(); }
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });

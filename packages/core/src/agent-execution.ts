@@ -247,7 +247,7 @@ async function preparePiPrompt(native: PiSession, text: string): Promise<PiPromp
   } finally { unsubscribe?.(); }
 }
 
-interface LocalPiSessionHandle { readonly session: PiSession; shutdown(reason: LocalSessionShutdownReason): Promise<void> }
+interface LocalPiSessionHandle { readonly session: PiSession; shutdown(reason: LocalSessionShutdownReason, targetSessionFile?: string): Promise<void> }
 export async function createLocalPiSession(input: SessionInput): Promise<PiSession> { return (await createLocalPiSessionHandle(input)).session; }
 async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent?: SessionStartEvent): Promise<LocalPiSessionHandle> {
   const agentDir = input.agentDir ?? getAgentDir();
@@ -311,11 +311,11 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
   const { session } = await createAgentSession({ ...(input.options ?? {}), cwd: input.cwd, agentDir, modelRuntime, model, settingsManager, ...(input.model.thinking ? { thinkingLevel: input.model.thinking } : {}), tools, ...(customTools.length ? { customTools } : {}), ...(input.extensionFactories?.length ? { extensionFactories: input.extensionFactories } : {}), resourceLoader, ...(sessionStartEvent ? { sessionStartEvent } : {}), sessionManager: manager });
   const nativeDispose = session.dispose.bind(session);
   let disposal: Promise<void> | undefined;
-  const shutdown = (reason: LocalSessionShutdownReason): Promise<void> => {
+  const shutdown = (reason: LocalSessionShutdownReason, targetSessionFile?: string): Promise<void> => {
     if (disposal) return disposal;
     disposal = (async () => {
       try {
-        if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason });
+        if (session.extensionRunner.hasHandlers("session_shutdown")) await session.extensionRunner.emit({ type: "session_shutdown", reason, ...(targetSessionFile === undefined ? {} : { targetSessionFile }) });
       } finally {
         nativeDispose();
       }
@@ -398,9 +398,9 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     void next.then(() => { if (lifecycle === next) lifecycle = undefined; }, () => { if (lifecycle === next) lifecycle = undefined; });
     return next;
   };
-  const shutdownNative = (reason: LocalSessionShutdownReason): Promise<void> => {
+  const shutdownNative = (reason: LocalSessionShutdownReason, targetSessionFile?: string): Promise<void> => {
     nativeShutdownReason = reason;
-    return nativeHandle.shutdown(reason);
+    return nativeHandle.shutdown(reason, targetSessionFile);
   };
   bindNative(native);
   const startAbort = () => {
@@ -408,15 +408,20 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     return aborting ??= Promise.resolve().then(() => native.abort?.()).then(() => undefined).finally(() => { aborting = undefined; });
   };
   const suspend = async (): Promise<void> => {
-    if (state === "suspended" || state === "disposing" || state === "disposed" || !native.sessionFile) return;
+    if (state === "disposing" || state === "disposed") throw new WorkflowError("INTERNAL_ERROR", "Local workflow session is closing");
+    if (state === "suspended" || !native.sessionFile) return;
     if (state === "suspending") { await suspendOperation; return; }
     if (state === "resuming") { await resumeOperation; return suspend(); }
+    const sessionFile = native.sessionFile;
     state = "suspending";
     suspendOperation = enqueue(async () => {
       await Promise.allSettled(prompts);
-      if (state !== "suspending") return;
+      if (state !== "suspending") {
+        if (isClosing()) throw new WorkflowError("INTERNAL_ERROR", "Local workflow session is closing");
+        return;
+      }
       unbindNative();
-      try { await shutdownNative("resume"); }
+      try { await shutdownNative("resume", sessionFile); }
       catch (error) { if (!isClosing()) state = "suspended"; throw error; }
       if (!isClosing()) state = "suspended";
     });
@@ -437,7 +442,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
         await Promise.allSettled(prompts);
         if (!wasSuspended) {
           unbindNative();
-          await shutdownNative("resume");
+          await shutdownNative("resume", sessionFile);
         }
         if (isClosing()) return;
         const nextHandle = await createLocalPiSessionHandle({ ...input, sessionPath: sessionFile }, { type: "session_start", reason: "resume", previousSessionFile: sessionFile });
