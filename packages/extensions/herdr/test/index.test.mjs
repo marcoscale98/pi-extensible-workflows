@@ -437,7 +437,7 @@ void test("concurrent prompts join an in-flight pane launch rather than opening 
     await rm(root, { recursive: true, force: true });
   }
 });
-void test("disposes a Herdr wrapper while a subsequent pane is still launching", async () => {
+void test("disposes a Herdr wrapper while a subsequent pane is still launching", { timeout: 30_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-launch-disposal-race-"));
   const agentDir = join(root, "agent");
   const cwd = join(root, "project");
