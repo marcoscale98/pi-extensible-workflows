@@ -1,6 +1,16 @@
 # Changelog
 ## Unreleased
 
+### New capabilities
+
+- Added the `@piewf/subagents` extension with concurrent background `subagents_*` controls, durable IDs and results, steering, stopping, retries, named worktrees, progress/accounting, and session-shutdown cleanup.
+- Added the optional `singleAgent` workflow-catalog function for one inline `context.agent` call with the same request normalization; a process-global name collision leaves the standalone tools available.
+
+### Packaging and migration
+
+- Added first-class npm discovery, package release checks, publish ordering, shared-version validation, and documentation for `@piewf/subagents`.
+- Documented migration from `@tintinweb/pi-subagents`, including the unsupported cross-session native-session restoration path.
+
 ## [5.2.0] - 2026-08-06
 
 ### Reliability

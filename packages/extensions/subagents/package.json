@@ -1,0 +1,43 @@
+{
+  "name": "@piewf/subagents",
+  "version": "5.2.0",
+  "type": "module",
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "test": "npm run build && node --test --test-timeout=30000 --test-force-exit test/index.test.mjs",
+    "prepack": "npm run build",
+    "lint": "eslint ."
+  },
+  "pi": {
+    "extensions": ["./dist/index.js"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-extensible-workflows": "*",
+    "typebox": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vekexasia/pi-extensible-workflows.git",
+    "directory": "packages/extensions/subagents"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./index.js": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.82.1",
+    "@earendil-works/pi-coding-agent": "0.82.1",
+    "@types/node": "24.12.4",
+    "typebox": "1.1.38",
+    "typescript": "5.9.3"
+  }
+}
