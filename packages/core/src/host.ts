@@ -15,7 +15,7 @@ import { asWorkflowError, createLaunchSnapshot, errorCode, errorText, fail, json
 import { loadAgentDefinitions, preflight, resolveAgentResourcePolicy, resolveWorkflowSettings, validateCheckpoint, validateModelAliasAvailability, validateWorkflowLaunchWithRegistry, workflowProjectSettingsPath, workflowSettingsPath } from "./validation.js";
 import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIfIdle, retainWorkflowRegistry, type WorkflowRegistryApi } from "./registry.js";
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
-import { LAUNCH_SNAPSHOT_IDENTITY_VERSION, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowFailureDiagnostics, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
+import { LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowFailureDiagnostics, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import {
   SETTLED_AGENT_STATES,
   catalogResultValue,
@@ -256,6 +256,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     const select = uiCapabilities?.select;
     if (!select) return undefined;
     const hostModels = contextHostCapabilities(host).modelRegistry;
+    const reportBlocked = (active: boolean, label?: string): void => { try { piHostCapabilities(pi).events?.emit(WORKFLOW_BLOCKED_EVENT, { active, ...(label === undefined ? {} : { label }) }); } catch { /* Workflow state is advisory and must not alter recovery. */ } };
     const choose = (title: string, options: string[]) => select.call(ui, title, options);
     const chooseModel = async (failure: AgentProviderFailure): Promise<string | undefined> => {
       const custom = uiCapabilities.custom;
@@ -280,16 +281,21 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       return await custom.call(ui, (tui, _theme, _keybindings, done) => new ModelSelectorComponent(tui, current, settings as SettingsManager, runtime as ModelRuntime, [], (model) => { done(`${model.provider}/${model.id}`); }, () => { done(undefined); })) as string | undefined;
     };
     return (failure: AgentProviderFailure): Promise<AgentProviderRecovery> => enqueueProviderRecovery(async () => {
-      for (;;) {
-        const action = await choose(`Subagent "${failure.label}" failed\nCurrent provider/model: ${failure.provider}/${failure.model}\nProvider error: ${failure.error}\nChoose what to do`, ["Retry", "Change model", "Abort workflow"]);
-        if (action === "Retry") return "retry";
-        if (action === "Change model") {
-          const selected = await chooseModel(failure);
-          if (selected) return { model: selected };
-          continue;
+      reportBlocked(true, `Subagent "${failure.label}" failed`);
+      try {
+        for (;;) {
+          const action = await choose(`Subagent "${failure.label}" failed\nCurrent provider/model: ${failure.provider}/${failure.model}\nProvider error: ${failure.error}\nChoose what to do`, ["Retry", "Change model", "Abort workflow"]);
+          if (action === "Retry") return "retry";
+          if (action === "Change model") {
+            const selected = await chooseModel(failure);
+            if (selected) return { model: selected };
+            continue;
+          }
+          abort();
+          return "abort";
         }
-        abort();
-        return "abort";
+      } finally {
+        reportBlocked(false);
       }
     });
   };

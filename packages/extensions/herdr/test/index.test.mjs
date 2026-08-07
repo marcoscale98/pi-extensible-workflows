@@ -8,7 +8,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import extension, { breadcrumbLabel, createHerdrExtension, isFullyInspectableMode } from "../dist/index.js";
-import { createLiveSessionHandoff, loadingRegistry, localAgentTransport, resetWorkflowRegistry } from "pi-extensible-workflows";
+import { WORKFLOW_BLOCKED_EVENT, createLiveSessionHandoff, loadingRegistry, localAgentTransport, resetWorkflowRegistry } from "pi-extensible-workflows";
 
 const piRuntime = { executable: process.execPath, entrypoint: "/originating/pi-coding-agent/dist/cli.js" };
 function writeFixtureStream(res, id = "fixture") {
@@ -286,16 +286,22 @@ void test("opens a terminal live session without inventing a continuation", asyn
 void test("reports terminal turns as idle", async () => {
   const handlers = new Map();
   const calls = [];
+  const emitted = [];
   let releaseAgent;
   let releaseStarted = false;
   const releaseFinished = new Promise((resolve) => { releaseAgent = resolve; });
   extension({
     on(name, handler) { const previous = handlers.get(name); handlers.set(name, previous ? async (...args) => { await previous(...args); await handler(...args); } : handler); },
-    events: { on(name, handler) { handlers.set(name, handler); } },
+    events: { on(name, handler) { handlers.set(name, handler); }, emit(name, data) { emitted.push({ name, data }); } },
   }, {
     env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "pane", PI_EXTENSIBLE_WORKFLOWS_HERDR_OWNER: "1" },
     runner: async (args) => { calls.push([...args]); if (args[1] === "release-agent") { releaseStarted = true; await releaseFinished; } return ""; },
   });
+  const blocked = handlers.get(WORKFLOW_BLOCKED_EVENT);
+  assert.ok(blocked);
+  blocked({ active: true, label: "Provider recovery" });
+  blocked({ active: false });
+  assert.deepEqual(emitted, [{ name: "herdr:blocked", data: { active: true, label: "Provider recovery" } }, { name: "herdr:blocked", data: { active: false } }]);
   const context = { hasUI: true, isIdle: () => false, sessionManager: { getSessionId: () => "session", getSessionFile: () => "/tmp/session.jsonl" } };
   await handlers.get("session_start")({ reason: "workflow-agent" }, context);
   await handlers.get("turn_end")({ message: { content: [{ type: "text", text: "done" }] } }, context);

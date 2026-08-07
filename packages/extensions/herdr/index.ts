@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createExtensionRuntime, ExtensionRunner, ModelRegistry, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentEndEvent, AgentStartEvent, ExtensionAPI, ExtensionContext, InlineExtension, SessionShutdownEvent, SessionStartEvent, TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import {
+  WORKFLOW_BLOCKED_EVENT,
   WORKFLOW_RUN_COMPLETED_EVENT,
   WORKFLOW_RUN_STATE_CHANGED_EVENT,
   createHerdrAgentReporter,
@@ -470,7 +471,9 @@ function isHerdrBlockedEvent(value: unknown): value is HerdrBlockedEvent {
 
 function registerLifecycleHooks(pi: ExtensionAPI | null | undefined, runner: HerdrCommandRunner, env: NodeJS.ProcessEnv): void {
   const pane = env.HERDR_PANE_ID;
-  if (env.PI_EXTENSIBLE_WORKFLOWS_HERDR_OWNER !== "1" || !pane || !hasExtensionHooks(pi)) return;
+  if (!pane || !hasExtensionHooks(pi)) return;
+  pi.events.on(WORKFLOW_BLOCKED_EVENT, (data) => { if (isHerdrBlockedEvent(data)) pi.events.emit("herdr:blocked", data); });
+  if (env.PI_EXTENSIBLE_WORKFLOWS_HERDR_OWNER !== "1") return;
   const reporter = createHerdrAgentReporter(pane, "pi", runner);
   let sessionRef: SessionReference = {};
   let rootSession = false;
