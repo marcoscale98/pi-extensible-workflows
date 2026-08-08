@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
 import { structuralPath as operationPath, type PersistedRun, type RunStore } from "./persistence.js";
 import { ERROR_CODES, WorkflowError, type JsonValue, type WorkflowErrorCode, type WorkflowFailureAgent, type WorkflowFailureDiagnostics, type WorkflowMetadata, type WorkflowSiblingAgent } from "./types.js";
 import { errorCode, errorText, isWorkflowAuthored, object } from "./utils.js";
@@ -50,14 +51,52 @@ export const DELIVERY_LIMIT_BYTES = 4 * 1024;
 export const WORKFLOW_LOG_ENTRY = "workflow-log";
 export interface WorkflowLogEntry { workflowName: string; message: string }
 
-export function completionDelivery(name: string, value: JsonValue, resultPath: string, worktrees: readonly { branch: string; path: string }[]): string {
-  const locations = worktrees.length ? ` Changes: ${worktrees.map(({ branch, path }) => `${branch} (${path})`).join(", ")}.` : "";
-  const message = `Workflow ${name} completed: ${JSON.stringify(value)}${locations}`;
-  if (Buffer.byteLength(message) <= DELIVERY_LIMIT_BYTES) return message;
-  const suffix = `... Full result: ${resultPath}${locations}`;
-  const suffixBytes = Buffer.byteLength(suffix);
-  if (suffixBytes >= DELIVERY_LIMIT_BYTES) return utf8Prefix(suffix, DELIVERY_LIMIT_BYTES);
-  return utf8Prefix(message, DELIVERY_LIMIT_BYTES - suffixBytes) + suffix;
+export interface CompletionContextUsage { tokens: number | null; contextWindow: number }
+export interface CompletionDeliveryModel { contextWindow?: number; maxTokens?: number }
+export interface CompletionDeliveryContext {
+  getContextUsage?: () => CompletionContextUsage | undefined;
+  getModel?: () => CompletionDeliveryModel | undefined;
+  model?: CompletionDeliveryModel;
+}
+export interface CompletionDeliveryOptions {
+  mode: "foreground" | "background";
+  name: string;
+  runId: string;
+  value: JsonValue;
+  resultPath: string;
+  resultBytes: number;
+  worktrees: readonly { branch: string; path: string }[];
+  context?: CompletionDeliveryContext;
+}
+export interface CompletionDeliveryResult { content: string; inlined: boolean }
+
+function positiveFinite(value: number | undefined): value is number { return value !== undefined && Number.isFinite(value) && value > 0; }
+function deliveryEnvelope(mode: CompletionDeliveryOptions["mode"], content: string, runId: string): string {
+  const timestamp = Date.now();
+  if (mode === "foreground") return JSON.stringify({ role: "toolResult", toolCallId: runId, toolName: "workflow", content: [{ type: "text", text: content }, { type: "text", text: `Workflow run ID: ${runId}` }], isError: false, timestamp });
+  return JSON.stringify({ role: "custom", customType: "workflow", content, display: true, timestamp });
+}
+function fitsMainContext(options: CompletionDeliveryOptions, content: string): boolean {
+  let usage: CompletionContextUsage | undefined;
+  let model: CompletionDeliveryModel | undefined;
+  try {
+    usage = options.context?.getContextUsage?.();
+    model = options.context?.getModel?.() ?? options.context?.model;
+  } catch { return false; }
+  if (!usage || usage.tokens === null || !Number.isFinite(usage.tokens) || usage.tokens < 0 || !positiveFinite(model?.maxTokens)) return false;
+  const contextWindow = positiveFinite(model.contextWindow) ? Math.min(model.contextWindow, usage.contextWindow) : usage.contextWindow;
+  if (!positiveFinite(contextWindow)) return false;
+  const deliveryTokens = Math.ceil(Buffer.byteLength(deliveryEnvelope(options.mode, content, options.runId), "utf8") / 4);
+  return usage.tokens + deliveryTokens + model.maxTokens <= contextWindow;
+}
+
+export function completionDelivery(options: CompletionDeliveryOptions): CompletionDeliveryResult {
+  const descriptor = JSON.stringify({ state: "completed", runId: options.runId, resultPath: options.resultPath, resultBytes: options.resultBytes, inlined: false });
+  if (!Number.isSafeInteger(options.resultBytes) || options.resultBytes < 0 || options.resultBytes > DEFAULT_MAX_BYTES) return { content: descriptor, inlined: false };
+  const serialized = JSON.stringify(options.value);
+  const locations = options.worktrees.length ? ` Changes: ${options.worktrees.map(({ branch, path }) => `${branch} (${path})`).join(", ")}.` : "";
+  const inlineContent = options.mode === "foreground" ? serialized : `Workflow ${options.name} completed: ${serialized}${locations}`;
+  return fitsMainContext(options, inlineContent) ? { content: inlineContent, inlined: true } : { content: descriptor, inlined: false };
 }
 
 export function utf8Prefix(value: string, maxBytes: number): string {

@@ -148,7 +148,7 @@ void test("production role policy rejects overrides before persistence and prese
   workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["read", "agent", "workflow"] }), home, async () => {}, testTransport(createSession));
   const workflow = tools.find(({ name }) => name === "workflow");
   assert.ok(workflow);
-  const context = { cwd, hasUI: false, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } };
+  const context = { cwd, hasUI: false, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
   for (const [field, value] of [["model", "openai/gpt"], ["thinking", "low"], ["tools", ["read"]] ] as const) {
     await assert.rejects(workflow.execute("id", { name: `static-${field}`, script: `return agent("inspect", { role: "reviewer", ${field}: ${JSON.stringify(value)} });`, foreground: true }, new AbortController().signal, undefined, context), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   }

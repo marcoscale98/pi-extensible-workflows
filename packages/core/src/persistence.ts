@@ -774,6 +774,10 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
   await atomicWriteFile(path, `${JSON.stringify(value)}\n`);
 }
 
+async function atomicPrettyJson(path: string, value: unknown): Promise<void> {
+  await atomicWriteFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 async function json(path: string): Promise<unknown> { return JSON.parse(await readFile(path, "utf8")); }
 function systemPromptStoragePath(directory: string): string { return join(directory, SYSTEM_PROMPT_STORAGE); }
 function systemPromptRecordsPath(directory: string): string { return join(systemPromptStoragePath(directory), SYSTEM_PROMPT_RECORDS); }
@@ -1499,8 +1503,12 @@ export class RunStore {
 
   async saveResult(value: JsonValue): Promise<string> {
     const path = join(this.directory, "result.json");
-    await atomicJson(path, value);
+    await atomicPrettyJson(path, value);
     return path;
+  }
+
+  async resultBytes(): Promise<number> {
+    return (await stat(join(this.directory, "result.json"))).size;
   }
 
   async delete(confirmed: boolean): Promise<void> {

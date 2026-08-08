@@ -240,7 +240,7 @@ void test("workflow launches from a script file and snapshots its exact source",
   const workflow = tools.find(({ name }) => name === "workflow");
   assert.ok(workflow);
   await assert.rejects(workflow.execute("missing", { name: "missing-file", scriptPath: "missing.js", foreground: true }, new AbortController().signal, undefined, { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SYNTAX" && error.message.includes("Cannot read workflow script file missing.js"));
-  const result = decodeTestToolResult(await workflow.execute("file", { name: "file-launch", scriptPath: "workflow.js", args: { value: "from-file" }, foreground: true }, new AbortController().signal, undefined, { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } }));
+  const result = decodeTestToolResult(await workflow.execute("file", { name: "file-launch", scriptPath: "workflow.js", args: { value: "from-file" }, foreground: true }, new AbortController().signal, undefined, { cwd: home, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } }));
   assert.equal(result.content[0]?.text, '"from-file"');
   writeFileSync(scriptPath, "return 'changed';\n");
   const store = new RunStore(home, "session", decodeTestRunDetails(result.details).runId, home);
@@ -474,7 +474,7 @@ void test("probes optional Pi host capabilities while preserving model registry 
   workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow"], on() {} }), home);
   const tool = tools.find(({ name }) => name === "workflow");
   assert.ok(tool);
-  const result = await tool.execute("id", { name: "capabilities", script: "return true;", foreground: true }, new AbortController().signal, undefined, { cwd: home, hasUI: false, model: { provider: "openai", id: "gpt" }, modelRegistry: { getAvailable: () => [{ provider: "openai", id: "gpt" }] }, sessionManager: { getSessionId: () => "session" } });
+  const result = await tool.execute("id", { name: "capabilities", script: "return true;", foreground: true }, new AbortController().signal, undefined, { cwd: home, hasUI: false, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), modelRegistry: { getAvailable: () => [{ provider: "openai", id: "gpt" }] }, sessionManager: { getSessionId: () => "session" } });
   assert.equal(result.content[0]?.text, "true");
   assert.match(result.content[1]?.text ?? "", /^Workflow run ID: [0-9a-f-]+$/);
 });

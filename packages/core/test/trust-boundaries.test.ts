@@ -86,7 +86,7 @@ void test("accepted shell stays host-trusted while oversized RPC results are nev
   workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow"] }), home, undefined, undefined, home);
   const workflow = tools.find(({ name }) => name === "workflow");
   assert.ok(workflow);
-  const context = { cwd, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } };
+  const context = { cwd, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
   const trustedScript = `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "host-trusted");process.stdout.write("trusted");process.stderr.write("diagnostic");process.exit(7)`;
   const trustedCommand = `${process.execPath} -e ${JSON.stringify(trustedScript)}`;
   const trusted = await workflow.execute("id", { name: "trusted-shell", script: `return await shell(${JSON.stringify(trustedCommand)});`, foreground: true }, new AbortController().signal, undefined, context);

@@ -915,7 +915,7 @@ void test("shared worktree scopes persist one owner across production agents and
   const workflow = tools.find(({ name }) => name === "workflow");
   assert.ok(workflow);
   const script = `const values = await withWorktree("shared", async () => parallel("top", { retry: () => agent("retry", { retries: 1 }), direct: () => agent("direct"), inherited: () => inherited({}), scoped: () => scoped({}), composed: () => composed({}) })); return { values, outside: await agent("outside") };`;
-  const started = await workflow.execute("id", { name: "shared-worktree", script }, new AbortController().signal, undefined, { cwd, hasUI: false, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } });
+  const started = await workflow.execute("id", { name: "shared-worktree", script }, new AbortController().signal, undefined, { cwd, hasUI: false, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } });
   const runId = started.details.runId;
   const store = new RunStore(cwd, "session", runId, home);
   await waitForRunState(store, "completed");
@@ -1095,7 +1095,7 @@ void test("recovery inherits persisted launch mode for resume and retry", { time
   let start: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
   let shutdown: (() => Promise<void>) | undefined;
   workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on(name: string, handler: unknown) { if (name === "session_start") start = handler as typeof start; if (name === "session_shutdown") shutdown = handler as typeof shutdown; }, sendMessage(message: { content: string }) { messages.push(message.content); }, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow", "workflow_resume", "workflow_retry"] }), home);
-  const context = { cwd, hasUI: false, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => sessionId } };
+  const context = { cwd, hasUI: false, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => sessionId } };
   assert.ok(start && shutdown);
   await start({}, context);
   const resume = tools.find(({ name }) => name === "workflow_resume");
@@ -1148,7 +1148,7 @@ void test("session_start foreground recovery returns before completion and deliv
   let start: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
   let shutdown: (() => Promise<void>) | undefined;
   const messages: string[] = [];
-  const context = { cwd, hasUI: true, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => sessionId }, ui: { select: async (prompt: string, options: string[]) => { if (prompt.startsWith("1 interrupted")) return options[0]; showCheckpoint(); await checkpointGate; return "Approve"; }, notify() {} } };
+  const context = { cwd, hasUI: true, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => sessionId }, ui: { select: async (prompt: string, options: string[]) => { if (prompt.startsWith("1 interrupted")) return options[0]; showCheckpoint(); await checkpointGate; return "Approve"; }, notify() {} } };
   workflowExtension(testExtensionApi({ registerTool() {}, registerCommand() {}, on(name: string, handler: unknown) { if (name === "session_start") start = handler as typeof start; if (name === "session_shutdown") shutdown = handler as typeof shutdown; }, sendMessage(message: { content: string }) { messages.push(message.content); }, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow"] }), home);
   assert.ok(start && shutdown);
   let startupReturned = false;

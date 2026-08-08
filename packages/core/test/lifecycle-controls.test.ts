@@ -667,7 +667,7 @@ void test("moves an attached foreground workflow to background without restartin
   const workflow = tools.find(({ name }) => name === "workflow");
   const command = commands[0]?.handler;
   assert.ok(workflow && command);
-  const context = { cwd: home, hasUI: true, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" }, ui: { notify() {}, select: async (_prompt: string, options: string[]) => options.find((option) => option.includes("background-command")) } };
+  const context = { cwd: home, hasUI: true, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" }, ui: { notify() {}, select: async (_prompt: string, options: string[]) => options.find((option) => option.includes("background-command")) } };
   const controller = new AbortController();
   const execution = workflow.execute("foreground-call", { name: "background-command", script: `await log("before detach"); return await agent("first", {label:"first"});`, foreground: true }, controller.signal, () => {}, context);
   await waitForIssue105(() => starts.includes("first"));
@@ -709,7 +709,7 @@ void test("detaching a checkpointed foreground workflow switches future prompts 
   const respond = tools.find(({ name }) => name === "workflow_respond");
   const command = commands[0]?.handler;
   assert.ok(workflow && respond && command);
-  const context = { cwd: home, hasUI: true, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" }, ui: { notify() {}, select: async () => { selectStarted = true; await selectGate; return undefined; } } };
+  const context = { cwd: home, hasUI: true, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" }, ui: { notify() {}, select: async () => { selectStarted = true; await selectGate; return undefined; } } };
   const execution = workflow.execute("checkpoint-call", { name: "background-checkpoint", script: `return await checkpoint({name:"ship", prompt:"Approve ship", context:null});`, foreground: true }, new AbortController().signal, undefined, context);
   await waitForIssue105(() => selectStarted);
   const runId = (await listRunIds(home, "session", home))[0];

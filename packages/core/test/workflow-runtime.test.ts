@@ -533,7 +533,7 @@ void test("production shell executes in the workflow cwd with merged environment
   const workflow = tools.find(({ name }) => name === "workflow");
   assert.ok(workflow);
   const cwd = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-shell-cwd-"));
-  const result = await workflow.execute("id", { name: "shell", script: "return await shell(\"node -e \\\"process.stdout.write(process.env.SHELL_TEST);process.stderr.write('err');process.exit(3)\\\"\", { env: { SHELL_TEST: \"yes\" } });", foreground: true }, new AbortController().signal, undefined, { cwd, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } });
+  const result = await workflow.execute("id", { name: "shell", script: "return await shell(\"node -e \\\"process.stdout.write(process.env.SHELL_TEST);process.stderr.write('err');process.exit(3)\\\"\", { env: { SHELL_TEST: \"yes\" } });", foreground: true }, new AbortController().signal, undefined, { cwd, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } });
   assert.deepEqual(JSON.parse(result.content[0]?.text ?? "null"), { exitCode: 3, stdout: "yes", stderr: "err" });
 });
 void test("production shell does not journal results that exceed the complete RPC boundary", async () => {

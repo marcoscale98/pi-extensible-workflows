@@ -43,6 +43,7 @@ import {
   isWorkflowFailureDiagnostics,
   serializeWorkflowFailureDiagnostics,
   utf8Prefix,
+  type CompletionDeliveryContext,
   type WorkflowLogEntry,
 } from "./host-delivery.js";
 
@@ -105,6 +106,13 @@ function mainAgentError(error: unknown): WorkflowError {
   Object.assign(presented, typed);
   return presented;
 }
+function completionControlContent(result: unknown): string {
+  const record = object(result) ? result : undefined;
+  const completion = record && object(record.completion) ? record.completion : undefined;
+  if (completion && typeof completion.content === "string") return completion.content;
+  const serialized = JSON.stringify(result);
+  return typeof serialized === "string" ? serialized : String(result);
+}
 export function formatWorkflowPreview(args: { script?: unknown; scriptPath?: unknown; name?: unknown; description?: unknown }): string {
   const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "workflow";
   if (typeof args.script !== "string" || !args.script.trim()) return `workflow ${name}`;
@@ -162,6 +170,21 @@ function projectTrusted(ctx: unknown): boolean {
   return typeof check === "function" ? Boolean(Reflect.apply(check, ctx, [])) : true;
 }
 function asFn(value: unknown): ((...args: never[]) => unknown) | undefined { return typeof value === "function" ? value as (...args: never[]) => unknown : undefined; }
+function completionContext(ctx: unknown): CompletionDeliveryContext {
+  const host = object(ctx) ? ctx : undefined;
+  if (!host) return {};
+  const getContextUsage = asFn(host.getContextUsage);
+  const getModel = () => {
+    const model = object(ctx) && object(ctx.model) ? ctx.model : undefined;
+    const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
+    const maxTokens = typeof model?.maxTokens === "number" ? model.maxTokens : undefined;
+    return contextWindow === undefined && maxTokens === undefined ? undefined : { ...(contextWindow === undefined ? {} : { contextWindow }), ...(maxTokens === undefined ? {} : { maxTokens }) };
+  };
+  return {
+    ...(getContextUsage ? { getContextUsage: () => Reflect.apply(getContextUsage, ctx, []) as ReturnType<NonNullable<CompletionDeliveryContext["getContextUsage"]>> } : {}),
+    getModel,
+  };
+}
 type PiHostCapabilities = { registerEntryRenderer?: ExtensionAPI["registerEntryRenderer"]; events?: WorkflowEventSink };
 function isWorkflowEventSink(value: unknown): value is WorkflowEventSink { return object(value) && typeof value.emit === "function"; }
 function piHostCapabilities(pi: unknown): PiHostCapabilities {
@@ -192,9 +215,9 @@ function modelInventory(root: ModelSpec | undefined, registry: ModelRegistryCapa
   if (rootName) { knownModels.add(rootName); availableModels.add(rootName); }
   return { knownModels, availableModels };
 }
-function resumeHostContext(ctx: unknown): { model: { provider: string; id: string } | undefined; modelRegistry: ModelRegistryCapability | undefined } {
+function resumeHostContext(ctx: unknown): { model: { provider: string; id: string } | undefined; modelRegistry: ModelRegistryCapability | undefined; deliveryContext: CompletionDeliveryContext } {
   const model = object(ctx) && object(ctx.model) && typeof ctx.model.provider === "string" && typeof ctx.model.id === "string" ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
-  return { model, modelRegistry: contextHostCapabilities(ctx).modelRegistry };
+  return { model, modelRegistry: contextHostCapabilities(ctx).modelRegistry, deliveryContext: completionContext(ctx) };
 }
 async function resolveLaunchAliases(registry: WorkflowRegistryApi, staticAliases: Readonly<Record<string, string>>, context: Readonly<WorkflowModelAliasResolverContext>, availableModels: ReadonlySet<string>, knownModels: ReadonlySet<string>, settingsPath: string): Promise<{ aliases: Readonly<Record<string, string>>; dynamicNames: readonly string[] }> {
   const dynamic = typeof registry.resolveModelAliases === "function" ? await registry.resolveModelAliases(context, new Set(Object.keys(staticAliases))) : {};
@@ -380,7 +403,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     pendingFailureDiagnostics.delete(event.toolCallId);
     return { content: [{ type: "text" as const, text: serializeWorkflowFailureDiagnostics(pending.diagnostic) }], details: { ...pending.diagnostic, run: pending.run }, isError: true };
   });
-  const deliverTerminal = (store: RunStore, content: string, failure = false): Promise<void> => {
+  const deliverTerminal = (store: RunStore, content: string | (() => string | Promise<string>), failure = false): Promise<void> => {
     const previous = terminalDeliveryQueues.get(store) ?? Promise.resolve();
     const delivery = previous.then(async () => {
       let claimed: boolean | undefined;
@@ -398,7 +421,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         await store.updateState((current) => !FAILURE_DELIVERY_STATES.has(current.state) && current.delivery?.state === "delivered" ? { ...current, delivery: { ...current.delivery, state: "pending" } } : current);
         return;
       }
-      deliver(pi, content);
+      deliver(pi, typeof content === "function" ? await content() : content);
     });
     terminalDeliveryQueues.set(store, delivery.catch(() => undefined));
     return delivery;
@@ -735,7 +758,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         if (params.proposalId) {
           const result = await recovery.answerBudgetDecision(params.runId, params.proposalId, params.approved, false, ctx, signal);
           if (!result) { const denied = { state: "budget_exhausted" as const, approved: false, reason: "proposal_not_pending" }; return { content: [{ type: "text" as const, text: JSON.stringify(denied) }], details: denied }; }
-          return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: { ...result, reason: params.approved ? "approved" : "rejected" } };
+          return { content: [{ type: "text" as const, text: completionControlContent(result) }], details: { ...result, reason: params.approved ? "approved" : "rejected" } };
         }
         if (!params.name) throw new WorkflowError("INVALID_METADATA", "workflow_respond requires name or proposalId");
         const accepted = await answerCheckpoint(params.runId, params.name, params.approved);
@@ -925,7 +948,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     description: "Retry a failed workflow run by replaying its completed structural operations",
     parameters: WORKFLOW_RETRY_PARAMETERS,
     async execute(_id, params, signal, _onUpdate, ctx) {
-      try { const result = await recovery.retryWorkflowRun(params.runId, ctx, signal, params.foreground, params.expectedState); return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result }; }
+      try { const result = await recovery.retryWorkflowRun(params.runId, ctx, signal, params.foreground, params.expectedState); return { content: [{ type: "text" as const, text: completionControlContent(result) }], details: result }; }
       catch (error) { throw mainAgentError(error); }
     },
     renderCall(args, theme) { return styledTextBlock(workflowControlCall("workflow_retry", args, theme)); },
@@ -937,7 +960,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     description: "Resume an exhausted workflow with unchanged or patched aggregate budgets",
     parameters: Type.Object({ runId: Type.String(), expectedState: Type.Optional(Type.String({ description: "Persisted source state observed before recovery" })), budget: Type.Optional(Type.Unknown()), foreground: Type.Optional(Type.Boolean({ description: "Override the source launch mode for this recovery" })) }, { additionalProperties: false }),
     async execute(_id, params, signal, _onUpdate, ctx) {
-      try { const result = await recovery.resumeWorkflowRun(params.runId, params.budget, ctx, signal, params.foreground, true, params.expectedState); return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result }; }
+      try { const result = await recovery.resumeWorkflowRun(params.runId, params.budget, ctx, signal, params.foreground, true, params.expectedState); return { content: [{ type: "text" as const, text: completionControlContent(result) }], details: result }; }
       catch (error) { throw mainAgentError(error); }
     },
     renderCall(args, theme) { return styledTextBlock(workflowControlCall("workflow_resume", args, theme)); },
@@ -1005,7 +1028,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         if (choice && choice !== "Skip") {
           const toResume = choice === "Resume all" ? interrupted : interrupted.filter((_, i) => labels[i] === choice);
           await Promise.all(toResume.map(async (run) => {
-            try { await recovery.coldResumeRun(run, true, ctx.ui, projectTrusted(ctx), ctx, undefined, false); ctx.ui.notify(`Resumed workflow ${run.metadata.name}.`, "info"); }
+            try { await recovery.coldResumeRun(run, true, ctx.ui, projectTrusted(ctx), resumeHostContext(ctx), undefined, false); ctx.ui.notify(`Resumed workflow ${run.metadata.name}.`, "info"); }
             catch (err) { ctx.ui.notify(`Cannot resume ${run.metadata.name}: ${err instanceof Error ? err.message : String(err)}`, "warning"); }
           }));
         }
@@ -1132,9 +1155,10 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         await scheduler.flush();
         if (budgetRuntime.hardExhausted) throw new WorkflowError("BUDGET_EXHAUSTED", "Budgeted work was attempted after hard exhaustion");
         const resultPath = await store.saveResult(value);
+        const resultBytes = await store.resultBytes();
         await lifecycle.terminal("completed", "completed");
         await eventPublisher.runCompleted(store, checked.metadata, resultPath);
-        return { value, resultPath };
+        return { value, resultPath, resultBytes };
       }).catch(async (error: unknown) => {
         await scheduler.flush();
         const typed = error instanceof WorkflowError ? error : new WorkflowError("INTERNAL_ERROR", String(error));
@@ -1153,7 +1177,9 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         const diagnostic = failureDiagnosticsFrom(error);
         return diagnostic ? formatWorkflowFailureDelivery(diagnostic) : formatWorkflowFailureDeliveryFallback(checked.metadata.name, runId, store.directory, error);
       };
-      const queueForegroundDelivery = async (content: string, failure = false): Promise<void> => {
+      type Completion = { value: JsonValue; resultPath: string; resultBytes: number };
+      const completionContent = (mode: "foreground" | "background", result: Completion): (() => Promise<string>) => async () => completionDelivery({ mode, name: checked.metadata.name, runId, value: result.value, resultPath: result.resultPath, resultBytes: result.resultBytes, worktrees: await store.changedWorktrees(), context: completionContext(ctx) }).content;
+      const queueForegroundDelivery = async (content: string | (() => string | Promise<string>), failure = false): Promise<void> => {
         const delivery = foregroundDeliveries.get(toolCallId);
         if (!delivery) return;
         if (delivery.detached) {
@@ -1174,15 +1200,15 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         });
       };
       if (backgroundLaunch) {
-        void completion.then(async ({ value, resultPath }) => {
-          await deliverTerminal(store, completionDelivery(checked.metadata.name, value, resultPath, await store.changedWorktrees()));
+        void completion.then(async (result) => {
+          await deliverTerminal(store, completionContent("background", result));
         }, async (error: unknown) => {
           await deliverTerminal(store, deliverFailureContent(error), true);
         });
         return { content: [{ type: "text" as const, text: JSON.stringify({ runId, state: "running" }) }], details: { runId, preview: `Started workflow ${runId}.` } };
       }
-      void completion.then(async ({ value, resultPath }) => {
-        await queueForegroundDelivery(completionDelivery(checked.metadata.name, value, resultPath, await store.changedWorktrees()));
+      void completion.then(async (result) => {
+        await queueForegroundDelivery(completionContent("background", result));
       }, async (error: unknown) => {
         await queueForegroundDelivery(deliverFailureContent(error), true);
       });
@@ -1196,9 +1222,10 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         const { run, ...detached } = outcome.result;
         return { content: [{ type: "text" as const, text: JSON.stringify(detached) }], details: { ...detached, run, preview: `Moved workflow ${runId} to background.` } };
       }
-      const { value } = outcome.result;
+      const { value, resultPath, resultBytes } = outcome.result;
+      const delivery = completionDelivery({ mode: "foreground", name: checked.metadata.name, runId, value, resultPath, resultBytes, worktrees: await store.changedWorktrees(), context: completionContext(ctx) });
       const run = (await store.load()).run;
-      return { content: [{ type: "text" as const, text: JSON.stringify(value) }, { type: "text" as const, text: `Workflow run ID: ${runId}` }], details: { runId, value, run } };
+      return { content: [{ type: "text" as const, text: delivery.content }, ...(delivery.inlined ? [{ type: "text" as const, text: `Workflow run ID: ${runId}` }] : [])], details: { runId, value, run } };
       } catch (error) {
         throw mainAgentError(error);
       }

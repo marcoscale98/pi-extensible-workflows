@@ -19,7 +19,7 @@ void test("registered extension functions can run as script globals with args", 
   registerWorkflowExtension(reuseExtension);
   const execute = tools.find(({ name }) => name === "workflow")?.execute;
   assert.ok(execute);
-  const result = await execute("id", { name: "hello-run", script: "return await hello(args);", args: { name: "Andrea" }, foreground: true }, new AbortController().signal, undefined, { cwd: mkdtempSync(join(tmpdir(), "pi-extensible-workflows-reuse-")), model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } });
+  const result = await execute("id", { name: "hello-run", script: "return await hello(args);", args: { name: "Andrea" }, foreground: true }, new AbortController().signal, undefined, { cwd: mkdtempSync(join(tmpdir(), "pi-extensible-workflows-reuse-")), model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } });
   assert.equal(result.content[0]?.text, '"Andrea"');
 });
 void test("registered function schemas remain enforced inside scripts", async () => {
@@ -28,7 +28,7 @@ void test("registered function schemas remain enforced inside scripts", async ()
   registerWorkflowExtension({ version: "1.0.0", headline: "Schema tests", functions: { needsValue: { description: "Needs a value", input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false }, output: { type: "string" }, run: (input) => typeof input.value === "string" ? input.value : "" }, badResult: { description: "Bad result", input: { type: "object", additionalProperties: false }, output: { type: "string" }, run: () => 42 } } });
   const execute = tools.find(({ name }) => name === "workflow")?.execute;
   assert.ok(execute);
-  const context = { cwd: mkdtempSync(join(tmpdir(), "pi-extensible-workflows-function-schema-")), model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } };
+  const context = { cwd: mkdtempSync(join(tmpdir(), "pi-extensible-workflows-function-schema-")), model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
   await assert.rejects(execute("id", { name: "missing-value", script: "return await needsValue(args);", args: {}, foreground: true }, new AbortController().signal, undefined, context), (error: unknown) => error instanceof WorkflowError && error.code === "RESULT_INVALID");
   await assert.rejects(execute("id", { name: " ", script: "return await needsValue(args);", args: { value: "ok" }, foreground: true }, new AbortController().signal, undefined, context), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   const named = await execute("id", { name: "needs-value", script: "return await needsValue(args);", args: { value: "ok" }, foreground: true }, new AbortController().signal, undefined, context) as { content: Array<{ text: string }>; details: { run: { workflowName: string } } };
@@ -218,7 +218,7 @@ void test("inline workflow args cross the production tool boundary and omitted a
   workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow"], on() {} }), home);
   const execute = tools.find(({ name }) => name === "workflow")?.execute;
   assert.ok(execute);
-  const context = { cwd: mkdtempSync(join(tmpdir(), "pi-extensible-workflows-inline-")), model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } };
+  const context = { cwd: mkdtempSync(join(tmpdir(), "pi-extensible-workflows-inline-")), model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
   const withArgs = await execute("id", { name: "with-args", script: "return args.answer;", args: { answer: 42 }, foreground: true }, new AbortController().signal, undefined, context);
   assert.equal(withArgs.content[0]?.text, "42");
   const omitted = await execute("id", { name: "without-args", script: "return args;", foreground: true }, new AbortController().signal, undefined, context);

@@ -144,7 +144,7 @@ void test("production checkpoints resolve in foreground navigator and background
   const workflow = tools.find(({ name }) => name === "workflow");
   const respond = tools.find(({ name }) => name === "workflow_respond");
   assert.ok(workflow && respond);
-  const base = { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } };
+  const base = { cwd: home, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
   const script = `export const meta={name:'gate',description:'gate'}; return checkpoint({name:'ship',prompt:'Ship?',context:{sha:'abc'}});`;
   let selections = 0;
   const foreground = await workflow.execute("id", { name: "gate", script, foreground: true }, new AbortController().signal, undefined, { ...base, mode: "rpc", hasUI: true, ui: { select: async () => ++selections === 1 ? undefined : "Approve" } }) as { content: Array<{ text: string }> };
@@ -235,35 +235,30 @@ void test("a checkpoint answer persisted before resolver registration cannot han
   }
 });
 
-void test("background delivery is minimal and capped while foreground stays inline", async () => {
+void test("background delivery uses the 50 KiB result ceiling without partial content", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-delivery-"));
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; details?: { runId: string } }> }> = [];
   const messages: Array<{ message: { content: string }; options: { deliverAs: string; triggerTurn: boolean } }> = [];
   let markDelivered!: () => void;
   const delivered = new Promise<void>((resolve) => { markDelivered = resolve; });
-  let toolResultHandler: ((event: { toolName: string; toolCallId: string; isError: boolean }) => Promise<unknown>) | undefined;
   const pi = {
-    registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on(name: string, handler: unknown) { if (name === "tool_result") toolResultHandler = handler as typeof toolResultHandler; },
+    registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on() {},
     getThinkingLevel: () => "medium" as const, getActiveTools: () => ["workflow"],
     sendMessage(message: { content: string }, options: { deliverAs: string; triggerTurn: boolean }) { messages.push({ message, options }); markDelivered(); }
   };
   workflowExtension(testExtensionApi(pi), home);
   const execute = tools.find(({ name }) => name === "workflow")?.execute;
   assert.ok(execute);
-  const ctx = { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } };
-  const background = await execute("id", { name: "large", script: `return "😀".repeat(5000);` }, new AbortController().signal, undefined, ctx);
+  const ctx = { cwd: home, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
+  const background = await execute("id", { name: "large", script: `return "😀".repeat(13000);` }, new AbortController().signal, undefined, ctx);
   assert.match(background.content[0]?.text ?? "", /"state":"running"/);
   await delivered;
   assert.equal(messages.length, 1);
-  assert.ok(Buffer.byteLength(messages[0]?.message.content ?? "") <= 4096);
-  assert.doesNotMatch(messages[0]?.message.content ?? "", /�/);
-  assert.match(messages[0]?.message.content ?? "", /^Workflow large completed:/);
-  assert.match(messages[0]?.message.content ?? "", /Full result: .*result\.json/);
+  const descriptor = JSON.parse(messages[0]?.message.content ?? "null") as { state: string; runId: string; resultPath: string; resultBytes: number; inlined: boolean };
+  assert.deepEqual({ state: descriptor.state, inlined: descriptor.inlined }, { state: "completed", inlined: false });
+  assert.ok(descriptor.runId && descriptor.resultPath.endsWith("result.json") && descriptor.resultBytes > 50 * 1024);
+  assert.doesNotMatch(messages[0]?.message.content ?? "", /😀/);
   assert.deepEqual(messages[0]?.options, { deliverAs: "followUp", triggerTurn: true });
-  const foreground = await execute("id", { name: "inline", script: `return {ok:true};`, foreground: true }, new AbortController().signal, undefined, ctx);
-  assert.equal(foreground.content[0]?.text, `{"ok":true}`);
-  await toolResultHandler?.({ toolName: "workflow", toolCallId: "id", isError: false });
-  assert.equal(messages.length, 1);
 });
 
 void test("promotes detached foreground completion and failure to follow-up delivery", async () => {
@@ -283,7 +278,7 @@ void test("promotes detached foreground completion and failure to follow-up deli
   workflowExtension(testExtensionApi(pi), home);
   const execute = tools.find(({ name }) => name === "workflow")?.execute;
   assert.ok(execute);
-  const ctx = { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } };
+  const ctx = { cwd: home, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
   const success = await execute("detached-success", { name: "detached-success", script: `return {ok:true};`, foreground: true }, new AbortController().signal, undefined, ctx);
   await waitForMessages(1);
   assert.match(messages[0]?.message.content ?? "", /^Workflow detached-success completed:/);

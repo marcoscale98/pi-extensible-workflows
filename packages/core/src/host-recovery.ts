@@ -7,9 +7,9 @@ import { aliasDrift, createLaunchSnapshot, errorCode, errorText, jsonValue, obje
 import { LAUNCH_SNAPSHOT_IDENTITY_VERSION, WorkflowError, type BudgetApprovalRequest, type JsonValue, type LaunchSnapshot, type ModelSpec, type RunState, type WorkflowMetadata, type WorkflowRetryProvenance, type WorkflowWorktreeReference } from "./types.js";
 import { RunLifecycle, WorkflowEventPublisher, withWorkflowFunctions, workflowRunContext, type WorkflowRunRecord, type WorkflowToolUpdate } from "./host-runtime.js";
 import { runWorkflow } from "./execution.js";
-import { createWorkflowFailureDiagnostics, formatWorkflowFailureDelivery, formatWorkflowFailureDeliveryFallback, failureDiagnosticsFrom, completionDelivery, incompleteRetryPaths, markWorkflowFailureDiagnostics, workflowFailedAt } from "./host-delivery.js";
+import { createWorkflowFailureDiagnostics, formatWorkflowFailureDelivery, formatWorkflowFailureDeliveryFallback, failureDiagnosticsFrom, completionDelivery, incompleteRetryPaths, markWorkflowFailureDiagnostics, workflowFailedAt, type CompletionDeliveryContext, type CompletionDeliveryResult } from "./host-delivery.js";
 
-export type WorkflowRecoveryContext = { model: { provider: string; id: string } | undefined; modelRegistry: { getAll?: () => readonly import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>[]; getAvailable?: () => readonly import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>[]; find?: (provider: string, model: string) => import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api> | undefined; refresh?: () => Promise<void>; getError?: () => string | undefined } | undefined; signal?: AbortSignal; resolvedAliases?: Readonly<Record<string, string>>; blockedAliases?: ReadonlySet<string>; blockedAliasTargets?: Readonly<Record<string, string>> };
+export type WorkflowRecoveryContext = { model: { provider: string; id: string } | undefined; modelRegistry: { getAll?: () => readonly import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>[]; getAvailable?: () => readonly import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>[]; find?: (provider: string, model: string) => import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api> | undefined; refresh?: () => Promise<void>; getError?: () => string | undefined } | undefined; deliveryContext: CompletionDeliveryContext; signal?: AbortSignal; resolvedAliases?: Readonly<Record<string, string>>; blockedAliases?: ReadonlySet<string>; blockedAliasTargets?: Readonly<Record<string, string>> };
 export type WorkflowRecoveryDependencies = {
   pi: Pick<ExtensionAPI, "getThinkingLevel">;
   home: string | undefined;
@@ -34,7 +34,7 @@ export type WorkflowRecoveryDependencies = {
   createProviderErrorRecovery: (host: unknown, fallbackModels: ReadonlySet<string>, abort: () => void) => ((failure: AgentProviderFailure) => Promise<AgentProviderRecovery>) | undefined;
   cleanupTerminalRun: (runId: string) => Promise<void>;
   deliver: (content: string) => void;
-  deliverTerminal: (store: RunStore, content: string, failure?: boolean) => Promise<void>;
+  deliverTerminal: (store: RunStore, content: string | (() => string | Promise<string>), failure?: boolean) => Promise<void>;
   workflowToolUpdate: (run: PersistedRun) => WorkflowToolUpdate;
   registry: import("./registry.js").WorkflowRegistryApi;
   modelSpec: (value: string, fallback: ModelSpec) => ModelSpec;
@@ -61,7 +61,7 @@ export function persistedFailure(run: PersistedRun, error: WorkflowError): Persi
 
 export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
   const { pi, home, runs, scheduler, eventPublisher, persistRunState, projectTrusted, resumeHostContext, ensureSessionLease, createAgentExecutor, activeSnapshotTools, frozenResourcePolicy, resolveLaunchPrologue, workflowAgentHandler, shellForRun, resolveWorktree, checkpointBridge, phaseBridge, logBridge, lifecycleFor, createProviderErrorRecovery, cleanupTerminalRun, deliver, deliverTerminal, workflowToolUpdate, registry, modelSpec } = deps;
-  type BudgetDecisionResult = { state: "running" | "completed" | "budget_exhausted"; approved: boolean; value?: JsonValue; run?: PersistedRun };
+  type BudgetDecisionResult = { state: "running" | "completed" | "budget_exhausted"; approved: boolean; value?: JsonValue; run?: PersistedRun; completion?: CompletionDeliveryResult };
   const budgetDecisionDelivery = (metadata: WorkflowMetadata, request: BudgetApprovalRequest) => `Workflow ${metadata.name} budget adjustment ${request.proposalId} for run ${request.runId} requires approval. Consumed usage: ${JSON.stringify(request.consumed)}. Previous limits: ${JSON.stringify(request.previous)}. Proposed limits: ${JSON.stringify(request.proposed)}. Respond with workflow_respond using proposalId ${request.proposalId}.`;
   const appendBudgetDecisionEvent = async (run: WorkflowRunRecord, request: BudgetApprovalRequest, type: "adjustment_requested" | "adjustment_approved" | "adjustment_rejected") => {
     run.budget.recordEvent({ type, budgetVersion: request.budgetVersion, dimensions: [], usage: structuredClone(request.consumed), limits: structuredClone(request.proposed), at: Date.now(), proposalId: request.proposalId, previous: structuredClone(request.previous), proposed: structuredClone(request.proposed) });
@@ -94,8 +94,8 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
     const ui = host && object(host.ui) ? host.ui as { select?: (prompt: string, options: string[]) => Promise<string | undefined> } : {};
     return { hasUI: host?.hasUI === true, ui };
   };
-  type ColdResumeResult = { value: JsonValue; resultPath: string };
-  const coldResumeRun = async (run: WorkflowRunRecord, hasUI: boolean, ui: { select?: (prompt: string, options: string[]) => Promise<string | undefined> }, trustedProject: boolean, context?: { model: { provider: string; id: string } | undefined; modelRegistry: WorkflowRecoveryContext["modelRegistry"]; signal?: AbortSignal | undefined; resolvedAliases?: Readonly<Record<string, string>>; blockedAliases?: ReadonlySet<string>; blockedAliasTargets?: Readonly<Record<string, string>> }, modeOverride?: boolean, waitForCompletion = true): Promise<ColdResumeResult | undefined> => {
+  type ColdResumeResult = { value: JsonValue; resultPath: string; resultBytes: number; completion: CompletionDeliveryResult };
+  const coldResumeRun = async (run: WorkflowRunRecord, hasUI: boolean, ui: { select?: (prompt: string, options: string[]) => Promise<string | undefined> }, trustedProject: boolean, context?: { model: { provider: string; id: string } | undefined; modelRegistry: WorkflowRecoveryContext["modelRegistry"]; deliveryContext: CompletionDeliveryContext; signal?: AbortSignal | undefined; resolvedAliases?: Readonly<Record<string, string>>; blockedAliases?: ReadonlySet<string>; blockedAliasTargets?: Readonly<Record<string, string>> }, modeOverride?: boolean, waitForCompletion = true): Promise<ColdResumeResult | undefined> => {
     const loaded = await run.store.load();
     const foreground = modeOverride ?? (loaded.run.delivery?.mode === "foreground" || (loaded.run.delivery?.mode === "background" && loaded.run.delivery.toolCallId !== undefined) || (loaded.run.delivery === undefined && loaded.snapshot.launchMode === "foreground"));
     if (loaded.run.activeShells !== undefined || loaded.run.activeShellStartedAt !== undefined || loaded.run.activeShellsByPhase !== undefined) {
@@ -137,9 +137,10 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
       await scheduler.flush();
       if (run.budget.hardExhausted) throw new WorkflowError("BUDGET_EXHAUSTED", "Budgeted work was attempted after hard exhaustion");
       const resultPath = await run.store.saveResult(value);
+      const resultBytes = await run.store.resultBytes();
       await run.lifecycle.terminal("completed", "completed");
       await eventPublisher.runCompleted(run.store, run.metadata, resultPath);
-      return { value, resultPath };
+      return { value, resultPath, resultBytes };
     }).catch(async (error: unknown) => {
       await scheduler.flush();
       const typed = error instanceof WorkflowError ? error : new WorkflowError(errorCode(error) ?? "INTERNAL_ERROR", errorText(error));
@@ -154,8 +155,8 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
     }).finally(() => cleanupTerminalRun(run.store.runId));
     run.completion = completion;
     if (!foreground || !waitForCompletion) {
-      void completion.then(async ({ value, resultPath }) => {
-        await deliverTerminal(run.store, completionDelivery(run.metadata.name, value, resultPath, await run.store.changedWorktrees()));
+      void completion.then(async (result) => {
+        await deliverTerminal(run.store, async () => completionDelivery({ mode: "background", name: run.metadata.name, runId: run.store.runId, value: result.value, resultPath: result.resultPath, resultBytes: result.resultBytes, worktrees: await run.store.changedWorktrees(), ...(context === undefined ? {} : { context: context.deliveryContext }) }).content);
       }, async (error: unknown) => {
         const diagnostic = failureDiagnosticsFrom(error);
         await deliverTerminal(run.store, diagnostic ? formatWorkflowFailureDelivery(diagnostic) : formatWorkflowFailureDeliveryFallback(run.metadata.name, run.store.runId, run.store.directory, error), true);
@@ -165,7 +166,8 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
     try {
       const result = await completion;
       await run.store.updateState((current) => current.delivery?.mode === "foreground" && (current.delivery.state === "attached" || current.delivery.state === "pending") ? { ...current, delivery: { ...current.delivery, state: "delivered" } } : current);
-      return result;
+      const completionResult = completionDelivery({ mode: "foreground", name: run.metadata.name, runId: run.store.runId, value: result.value, resultPath: result.resultPath, resultBytes: result.resultBytes, worktrees: await run.store.changedWorktrees(), ...(context === undefined ? {} : { context: context.deliveryContext }) });
+      return { ...result, completion: completionResult };
     } catch (error) {
       await run.store.updateState((current) => current.delivery?.mode === "foreground" && (current.delivery.state === "attached" || current.delivery.state === "pending") ? { ...current, delivery: { ...current.delivery, state: "delivered" } } : current);
       throw error;
@@ -182,7 +184,7 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
     await persistRunState(run.store, run.metadata, (current) => { const next = { ...current, ...runtime.snapshot(), budgetVersion: nextVersion }; if (nextBudget) next.budget = nextBudget; else delete next.budget; return next; });
     const { hasUI, ui } = recoveryUi(context);
     const completed = await coldResumeRun(run, hasUI, ui, projectTrusted(context), { ...resumeHostContext(context), ...(signal ? { signal } : {}) }, request.foreground, waitForCompletion);
-    if (completed) return { state: "completed", approved: true, value: completed.value, run: (await run.store.load()).run };
+    if (completed) return { state: "completed", approved: true, value: completed.value, run: (await run.store.load()).run, completion: completed.completion };
     return { state: "running", approved: true };
   };
   const resumeWorkflowRun = async (runId: string, rawPatch?: unknown, context?: unknown, signal?: AbortSignal, modeOverride?: boolean, waitForCompletion = true, expectedState?: string): Promise<Record<string, JsonValue>> => {
@@ -231,12 +233,12 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
     if (completed) {
       const persistedRun = structuredClone((await run.store.load()).run);
       if (!jsonValue(persistedRun)) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted run is not JSON-compatible");
-      return { state: "completed", runId, value: completed.value, run: persistedRun };
+      return { state: "completed", runId, value: completed.value, run: persistedRun, completion: { content: completed.completion.content, inlined: completed.completion.inlined } };
     }
     return { state: "running" };
   };
   const retryReservations = new Set<string>();
-  const retryWorkflowRun = async (runId: string, context: unknown, signal?: AbortSignal, modeOverride?: boolean, expectedState?: string): Promise<{ runId: string; parentRunId: string; state: "running" | "completed"; value?: JsonValue; run?: PersistedRun }> => {
+  const retryWorkflowRun = async (runId: string, context: unknown, signal?: AbortSignal, modeOverride?: boolean, expectedState?: string): Promise<{ runId: string; parentRunId: string; state: "running" | "completed"; value?: JsonValue; run?: PersistedRun; completion?: CompletionDeliveryResult }> => {
     if (typeof runId !== "string" || !runId.trim()) throw new WorkflowError("RESUME_INCOMPATIBLE", "workflow_retry requires an explicit run ID");
     const host = object(context) ? context : {};
     const cwd = typeof host.cwd === "string" ? host.cwd : undefined;
@@ -302,7 +304,7 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
       scheduler.addRun(childRunId, loaded.snapshot.settings.concurrency, () => { childBudget.checkAgentLaunch(); });
       await eventPublisher.runStarted(childStore, loaded.snapshot.metadata);
       const { hasUI, ui } = recoveryUi(context);
-      const completed = await coldResumeRun(childRun, hasUI, ui, trustedProject, { model: hostModel, modelRegistry, resolvedAliases: currentAliases, blockedAliases, blockedAliasTargets, ...(signal ? { signal } : {}) }, modeOverride);
+      const completed = await coldResumeRun(childRun, hasUI, ui, trustedProject, { model: hostModel, modelRegistry, deliveryContext: resumeHostContext(context).deliveryContext, resolvedAliases: currentAliases, blockedAliases, blockedAliasTargets, ...(signal ? { signal } : {}) }, modeOverride);
       const completion = runs.get(childRunId)?.completion;
       if (completion) {
         childStarted = true;
@@ -311,7 +313,7 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
         childStarted = true;
         retryReservations.delete(lineageRootRunId);
       }
-      if (completed) return { runId: childRunId, parentRunId: loaded.run.id, state: "completed", value: completed.value, run: (await childStore.load()).run };
+      if (completed) return { runId: childRunId, parentRunId: loaded.run.id, state: "completed", value: completed.value, run: (await childStore.load()).run, completion: completed.completion };
       return { runId: childRunId, parentRunId: loaded.run.id, state: "running" };
     } finally {
       if (!childStarted) retryReservations.delete(lineageRootRunId);

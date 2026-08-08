@@ -150,7 +150,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
               const result = await recovery.resumeWorkflowRun(run.store.runId, patch, ctx, undefined, undefined, false);
               ctx.ui.notify(result.state === "completed" ? `Workflow ${run.store.runId} completed.` : result.state === "running" ? `Resumed workflow ${run.store.runId}.` : `Budget adjustment for ${run.store.runId} is awaiting approval.`, result.state === "awaiting_approval" ? "warning" : "info");
             } else {
-              if (run.lifecycle.state === "interrupted") await recovery.coldResumeRun(run, ctx.hasUI, ctx.ui, projectTrusted(ctx), ctx, undefined, false);
+              if (run.lifecycle.state === "interrupted") await recovery.coldResumeRun(run, ctx.hasUI, ctx.ui, projectTrusted(ctx), resumeHostContext(ctx), undefined, false);
               else {
                 if (run.lifecycle.state === "paused") await recovery.refreshPausedRunAliases(run, { ...resumeHostContext(ctx), projectTrusted: projectTrusted(ctx) });
                 await run.lifecycle.resume();
