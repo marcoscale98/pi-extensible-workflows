@@ -383,11 +383,12 @@ export function themeWorkflowProgressStyles(theme: Theme): WorkflowProgressStyle
   };
 }
 export type WorkflowProgressRefreshState = { runId: string; inputRun: PersistedRun; run: PersistedRun; lastRefreshAt: number; runtimeStartedAt: number; runtimeBaseMs: number; refresh?: Promise<void> };
-export type WorkflowProgressRenderState = { workflowSpinner?: ReturnType<typeof setInterval>; workflowProgress?: WorkflowProgressRefreshState; workflowProgressComponent?: ReturnType<typeof workflowProgressBlock> };
-export function workflowProgressBlock(run: PersistedRun, theme: Theme, progress?: WorkflowProgressRefreshState, refresh?: () => Promise<PersistedRun | undefined>, invalidate?: () => void, prefix?: string) {
+export type WorkflowProgressRenderState = { workflowSpinner?: ReturnType<typeof setInterval>; workflowProgress?: WorkflowProgressRefreshState; workflowProgressComponent?: ReturnType<typeof workflowProgressBlock>; workflowProgressFrozenAt?: number };
+function isTerminalWorkflowState(state: PersistedRun["state"]): boolean { return state === "completed" || state === "failed" || state === "stopped"; }
+export function workflowProgressBlock(run: PersistedRun, theme: Theme, progress?: WorkflowProgressRefreshState, refresh?: () => Promise<PersistedRun | undefined>, invalidate?: () => void, prefix?: string, freezeAt?: number) {
   const styles = themeWorkflowProgressStyles(theme);
   let expanded = false;
-  let frozenAt = Date.now();
+  let frozenAt = freezeAt ?? Date.now();
   let previousState = run.state;
   const currentRun = () => {
     const displayed = progress?.run ?? run;
@@ -398,9 +399,10 @@ export function workflowProgressBlock(run: PersistedRun, theme: Theme, progress?
   return {
     render(width: number) {
       const displayed = currentRun();
+      const terminal = isTerminalWorkflowState(displayed.state);
       let now = Date.now();
-      if (displayed.state !== "running") {
-        if (previousState === "running") frozenAt = now;
+      if (freezeAt !== undefined || terminal) {
+        if (previousState !== displayed.state && !isTerminalWorkflowState(previousState)) frozenAt = now;
         now = frozenAt;
       } else {
         frozenAt = now;

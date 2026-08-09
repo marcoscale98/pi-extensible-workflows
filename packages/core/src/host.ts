@@ -1258,17 +1258,21 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         clearInterval(state.workflowSpinner);
         delete state.workflowSpinner;
       }
+      if (isPartial && runDetails?.run?.state === "running") delete state.workflowProgressFrozenAt;
       if (isWorkflowFailureDiagnostics(details)) {
         delete state.workflowProgress;
         delete state.workflowProgressComponent;
         const failureRun = object(details) && isPersistedRun(details.run) ? details.run : undefined;
         if (!failureRun) return textBlock(formatWorkflowFailureDiagnostics(details));
-        const failure = workflowProgressBlock(failureRun, theme, undefined, undefined, undefined, formatWorkflowFailureDiagnostics(details));
+        state.workflowProgressFrozenAt ??= Date.now();
+        const failure = workflowProgressBlock(failureRun, theme, undefined, undefined, undefined, formatWorkflowFailureDiagnostics(details), state.workflowProgressFrozenAt);
         failure.setExpanded(expanded);
         return failure;
       }
       if (runDetails?.run) {
         const incoming = runDetails.run;
+        if (HARD_TERMINAL_RUN_STATES.has(incoming.state)) state.workflowProgressFrozenAt ??= Date.now();
+        else if (incoming.state === "running") delete state.workflowProgressFrozenAt;
         let progress = state.workflowProgress;
         if (!isPartial || !progress || progress.runId !== incoming.id) {
           progress = undefined;
@@ -1294,7 +1298,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
             const store = active?.store ?? new RunStore(incoming.cwd, incoming.sessionId, incoming.id, home);
             const loaded = await store.load();
             return withLiveActivities(loaded.run);
-          }, () => { if (state.workflowProgress === currentProgress) requestRender(); });
+          }, () => { if (state.workflowProgress === currentProgress) requestRender(); }, undefined, state.workflowProgressFrozenAt);
         }
         state.workflowProgressComponent.setExpanded(expanded);
         return state.workflowProgressComponent;

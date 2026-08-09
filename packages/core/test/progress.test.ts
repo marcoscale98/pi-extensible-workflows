@@ -121,11 +121,15 @@ void test("terminal inline progress freezes stale child animation and stall dura
     const child = makeAgent({ activity: { kind: "text", text: "responding" }, lastEventAt: now - WORKFLOW_AGENT_STALL_THRESHOLD_MS });
     const terminal = makeRun({ cwd: home, state: "failed", agents: [child] });
     const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
-    const component = tool.renderResult({ content: [], details: { run: terminal } }, { expanded: false, isPartial: false }, theme, { state: {}, cwd: home, invalidate: () => {} });
+    const context = { state: {}, cwd: home, invalidate: () => {} };
+    const result = { content: [], details: { run: terminal } };
+    const component = tool.renderResult(result, { expanded: false, isPartial: false }, theme, context);
     const initial = component.render(200).join("\n");
     assert.match(initial, /stalled\? 10m/);
     now += 60 * 60 * 1000;
     assert.equal(component.render(200).join("\n"), initial);
+    const rerendered = tool.renderResult(result, { expanded: false, isPartial: false }, theme, context);
+    assert.equal(rerendered.render(200).join("\n"), initial);
   } finally {
     Date.now = previousNow;
   }

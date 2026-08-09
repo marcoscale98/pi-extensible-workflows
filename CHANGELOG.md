@@ -6,6 +6,10 @@
 - Added the `@piewf/subagents` extension with concurrent background `subagents_*` controls, durable IDs and results, steering, stopping, retries, named worktrees, progress/accounting, and session-shutdown cleanup.
 - Added the optional `singleAgent` workflow-catalog function for one inline `context.agent` call with the same request normalization; a process-global name collision leaves the standalone tools available.
 
+### Fixes
+
+- Stopped inline workflow and navigator refresh polling after terminal runs and froze terminal snapshots ([#196](https://github.com/vekexasia/pi-extensible-workflows/issues/196)).
+
 ### Packaging and migration
 
 - Added first-class npm discovery, package release checks, publish ordering, shared-version validation, and documentation for `@piewf/subagents`.

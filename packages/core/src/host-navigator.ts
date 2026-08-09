@@ -6,7 +6,7 @@ import { type WorkflowRegistryApi } from "./registry.js";
 import { deepFreeze, object, resolveModelReference, validateModelAliases } from "./utils.js";
 import { saveModelAliases, resolveWorkflowSettings, workflowProjectSettingsPath, workflowSettingsPath } from "./validation.js";
 import { openWorkflowArtifact, workflowPromptArtifact, workflowResultArtifact, workflowScriptArtifact, type WorkflowArtifact } from "./workflow-artifacts.js";
-import { agentBreadcrumb, formatCheckpointReview, formatNavigatorRun, formatWorkflowPhaseDashboard, navigatorAttentionSort, navigatorRunLabels, themeWorkflowProgressStyles } from "./host-view.js";
+import { agentBreadcrumb, formatCheckpointReview, formatNavigatorRun, formatWorkflowPhaseDashboard, navigatorAttentionSort, navigatorRunLabels, SETTLED_AGENT_STATES, themeWorkflowProgressStyles } from "./host-view.js";
 import { buildWorkflowPhaseModel, buildWorkflowPhaseTree, navigateWorkflowPhaseTree, preserveWorkflowPhaseTreeSelection, workflowPhaseTreeInitialExpanded } from "./host-phases.js";
 import { type WorkflowRecoveryContext, type createWorkflowRecovery } from "./host-recovery.js";
 import { failureDiagnosticsFrom, formatWorkflowFailureDelivery, formatWorkflowFailureDeliveryFallback } from "./host-delivery.js";
@@ -447,13 +447,13 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                   const keyLabel = (binding: string, fallback: string) => workflowKeyLabel(keybindings, binding, fallback, keyLabels);
                   const progressNow = () => {
                     const now = Date.now();
-                    if (view.run.state !== "running") {
-                      if (previousRunState === "running") frozenAt = now;
+                    if (hardTerminalRunStates.has(view.run.state)) {
+                      if (!hardTerminalRunStates.has(previousRunState)) frozenAt = now;
                       previousRunState = view.run.state;
                       return frozenAt;
                     }
                     frozenAt = now;
-                    previousRunState = "running";
+                    previousRunState = view.run.state;
                     return now;
                   };
                   const selectedAgentRecord = (): AgentRecord | undefined => {
@@ -498,7 +498,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                     const previousExpanded = expandedNodeIds;
                     const selectedAction = actionMode ? actionOptions()[actionIndex] : undefined;
                     view = next;
-                    if (hardTerminalRunStates.has(next.run.state)) stopTimer();
+                    if (hardTerminalRunStates.has(next.run.state) && next.run.agents.every((agent) => SETTLED_AGENT_STATES.has(agent.state))) stopTimer();
                     tree = buildWorkflowPhaseTree(view.phaseModel);
                     selectedNodeId = preserveWorkflowPhaseTreeSelection(tree, { nodeId: previousNodeId }).nodeId;
                     expandedNodeIds = new Set([...previousExpanded].filter((id) => tree.byId.has(id)));
@@ -534,7 +534,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                     void updateDashboard().catch(() => undefined).finally(() => { refreshing = false; });
                   }, 1000);
                   timer.unref();
-                  if (hardTerminalRunStates.has(view.run.state)) stopTimer();
+                  if (hardTerminalRunStates.has(view.run.state) && view.run.agents.every((agent) => SETTLED_AGENT_STATES.has(agent.state))) stopTimer();
                   return {
                     render(width: number) {
                       renderedWidth = width;
