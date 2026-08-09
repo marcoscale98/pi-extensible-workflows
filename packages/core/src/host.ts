@@ -253,8 +253,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     const data = entry.data;
     return textBlock(data ? `Workflow ${data.workflowName}: ${data.message}` : "");
   });
-  let backgroundWidgetEnabled: boolean;
-  try { backgroundWidgetEnabled = loadSettings(workflowSettingsPath(extensionAgentDir)).backgroundWidget ?? true; } catch { backgroundWidgetEnabled = false; }
+  let backgroundWidgetEnabled = true;
+  try { backgroundWidgetEnabled = loadSettings(workflowSettingsPath(extensionAgentDir)).backgroundWidget ?? true; } catch { /* Keep the optional UI enabled; the launch path reports settings errors. */ }
   backgroundWidget(pi, backgroundWidgetEnabled);
   const logBridge = (store: RunStore, lifecycle: RunLifecycle, workflowName: string) => async (message: string) => {
     const timestamp = Date.now();

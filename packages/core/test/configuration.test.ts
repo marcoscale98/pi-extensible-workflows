@@ -207,6 +207,30 @@ void test("strict settings use defaults and reject unknown or unsafe values", ()
   writeFileSync(path, JSON.stringify({ surprise: true }));
   assert.throws(() => loadSettings(path), /Unknown workflow setting/);
 });
+
+void test("workflow extension wires the background widget from global settings", () => {
+  const install = (settings: string | undefined) => {
+    const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-widget-host-"));
+    const agentDir = join(root, "agent");
+    if (settings !== undefined) {
+      mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
+      writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), settings);
+    }
+    const renderers: string[] = [];
+    const shortcuts: string[] = [];
+    workflowExtension(testExtensionApi({
+      registerEntryRenderer(type) { renderers.push(type); },
+      registerShortcut(shortcut) { shortcuts.push(shortcut); },
+      events: { on: () => () => {}, emit: () => {} },
+    }), root, undefined, undefined, agentDir);
+    return { renderers, shortcuts };
+  };
+
+  assert.deepEqual(install(undefined), { renderers: ["workflow-log", "piewf-run-receipt"], shortcuts: ["alt+o"] });
+  assert.deepEqual(install(JSON.stringify({ backgroundWidget: false })), { renderers: ["workflow-log"], shortcuts: [] });
+  assert.deepEqual(install("{"), { renderers: ["workflow-log", "piewf-run-receipt"], shortcuts: ["alt+o"] });
+});
+
 void test("replaces trusted agent resource exclusions and ignores untrusted project selectors", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-resources-"));
   const home = join(root, "home");

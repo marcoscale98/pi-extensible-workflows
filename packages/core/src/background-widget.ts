@@ -49,14 +49,6 @@ const ENTRY_TYPE = "piewf-run-receipt";
 const REPAINT_MS = 125;
 
 /**
- * Rows the whole frame may occupy, border included.
- *
- * Pi's ten-line widget cap applies to string arrays, not to a rendered
- * component, so this is a choice about how much screen a status line deserves
- * rather than a limit imposed from outside. What does not fit is folded away by
- * rank, so live work survives and finished work is dropped first.
- */
-/**
  * Rows the widget will occupy, border included.
  *
  * Ten is a deliberate ceiling rather than a technical one: the widget sits
@@ -66,21 +58,6 @@ const REPAINT_MS = 125;
  */
 const MAX_ROWS = 10;
 
-/**
- * Key matching belongs to Pi, not here.
- *
- * A terminal has several ways to spell an arrow — the bare `\x1b[B`, the kitty
- * protocol's parameterised form with press/release/repeat, xterm's
- * modifyOtherKeys — and which one arrives depends on the terminal and on what
- * Pi negotiated with it. `matchesKey` already knows them all, including the
- * per-terminal quirks; a hand-rolled comparison would be a worse copy that
- * silently matches nothing the day a terminal changes its mind.
- */
-
-/**
- * How long an agent may go without an event before the widget says so. Taken
- * from the core so the widget and the runtime agree on what "stuck" means.
- */
 /**
  * How long an agent may go without an event before the widget says so.
  *

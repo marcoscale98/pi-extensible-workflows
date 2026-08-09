@@ -55,7 +55,11 @@ type TestExtensionApiOptions = {
   appendEntry?: (type: string, data: TestWorkflowLogEntry) => void;
   sendMessage?: (message: TestWorkflowMessage, options: TestWorkflowMessageOptions) => void;
   registerEntryRenderer?(type: string, renderer: unknown): void;
-  events?: Pick<ExtensionAPI["events"], "emit">;
+  registerShortcut?: ExtensionAPI["registerShortcut"];
+  events?: {
+    emit?: ExtensionAPI["events"]["emit"];
+    on?: ExtensionAPI["events"]["on"];
+  };
 };
 function isTestWorkflowLogEntry(value: unknown): value is TestWorkflowLogEntry {
   return typeof value === "object" && value !== null && "workflowName" in value && typeof value.workflowName === "string" && "message" in value && typeof value.message === "string";
@@ -79,7 +83,7 @@ export function testExtensionApi(options: TestExtensionApiOptions = {}): Workflo
     },
   };
   const registerEntryRenderer: ExtensionAPI["registerEntryRenderer"] = (type, renderer) => { options.registerEntryRenderer?.(type, renderer); };
-  return { ...api, ...(options.registerEntryRenderer ? { registerEntryRenderer } : {}), ...(options.events ? { events: options.events } : {}) };
+  return { ...api, ...(options.registerEntryRenderer ? { registerEntryRenderer } : {}), ...(options.registerShortcut ? { registerShortcut: options.registerShortcut } : {}), ...(options.events ? { events: options.events } : {}) };
 }
 const testModelRegistry = new ModelRegistry(await ModelRuntime.create({ modelsPath: null }));
 const testExtensionRunner = new ExtensionRunner([], createExtensionRuntime(), "/repo", SessionManager.inMemory("/repo", { id: "test-session" }), testModelRegistry);
