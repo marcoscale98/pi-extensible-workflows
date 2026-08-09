@@ -1104,10 +1104,18 @@ void test("recovery inherits persisted launch mode for resume and retry", { time
   const resumed = await resume.execute("resume", { runId: "foreground-resume" });
   assert.equal(resumed.details.state, "completed");
   assert.equal(resumed.details.value, "foreground-resume");
+  const resumedContent = JSON.parse((resumed as unknown as { content: Array<{ text: string }> }).content[0]?.text ?? "null") as { state: string; runId: string; value: { runId: string; resultPath: string; resultBytes: number; inlined: boolean } };
+  assert.equal(resumedContent.state, "completed");
+  assert.equal(resumedContent.runId, "foreground-resume");
+  assert.equal(resumedContent.value.runId, "foreground-resume");
+  assert.match(resumedContent.value.resultPath, /result\.json$/);
+  assert.equal(resumedContent.value.inlined, false);
   assert.equal((await foregroundResume.load()).run.state, "completed");
   const overridden = await resume.execute("resume-overridden", { runId: "overridden-resume", foreground: true }, undefined, undefined, context);
   assert.equal(overridden.details.state, "completed");
   assert.equal(overridden.details.value, "overridden-resume");
+  const overriddenContent = JSON.parse((overridden as unknown as { content: Array<{ text: string }> }).content[0]?.text ?? "null") as { state: string; runId: string; value: string };
+  assert.deepEqual(overriddenContent, { state: "completed", runId: "overridden-resume", value: "overridden-resume" });
   assert.equal((await overriddenResume.load()).snapshot.launchMode, "foreground");
   const legacy = await resume.execute("resume-legacy", { runId: "legacy-resume" }, undefined, undefined, context);
   assert.equal(legacy.details.state, "running");
@@ -1126,6 +1134,8 @@ void test("recovery inherits persisted launch mode for resume and retry", { time
   const retried = await retry.execute("retry", { runId: "foreground-retry" }, undefined, undefined, context);
   assert.equal(retried.details.state, "completed");
   assert.equal(retried.details.value, "foreground-retry");
+  const retryContent = JSON.parse((retried as unknown as { content: Array<{ text: string }> }).content[0]?.text ?? "null") as { state: string; runId: string; parentRunId: string; value: string };
+  assert.deepEqual(retryContent, { state: "completed", runId: retried.details.runId, parentRunId: "foreground-retry", value: "foreground-retry" });
   const childRunId = retried.details.runId as string;
   assert.ok(childRunId);
   const foregroundChild = await new RunStore(cwd, sessionId, childRunId, home).load();

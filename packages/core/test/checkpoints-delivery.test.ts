@@ -235,14 +235,15 @@ void test("a checkpoint answer persisted before resolver registration cannot han
   }
 });
 
-void test("background delivery uses the 50 KiB result ceiling without partial content", async () => {
+void test("foreground and background completion delivery share bounded results", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-delivery-"));
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; details?: { runId: string } }> }> = [];
   const messages: Array<{ message: { content: string }; options: { deliverAs: string; triggerTurn: boolean } }> = [];
   let markDelivered!: () => void;
   const delivered = new Promise<void>((resolve) => { markDelivered = resolve; });
+  let toolResultHandler: ((event: { toolName: string; toolCallId: string; isError: boolean }) => Promise<unknown>) | undefined;
   const pi = {
-    registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on() {},
+    registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on(name: string, handler: unknown) { if (name === "tool_result") toolResultHandler = handler as typeof toolResultHandler; },
     getThinkingLevel: () => "medium" as const, getActiveTools: () => ["workflow"],
     sendMessage(message: { content: string }, options: { deliverAs: string; triggerTurn: boolean }) { messages.push({ message, options }); markDelivered(); }
   };
@@ -259,6 +260,18 @@ void test("background delivery uses the 50 KiB result ceiling without partial co
   assert.ok(descriptor.runId && descriptor.resultPath.endsWith("result.json") && descriptor.resultBytes > 50 * 1024);
   assert.doesNotMatch(messages[0]?.message.content ?? "", /😀/);
   assert.deepEqual(messages[0]?.options, { deliverAs: "followUp", triggerTurn: true });
+
+  const foreground = await execute("foreground", { name: "inline", script: "return {ok:true};", foreground: true }, new AbortController().signal, undefined, ctx);
+  assert.equal(foreground.content[0]?.text, "{\"ok\":true}");
+  await toolResultHandler?.({ toolName: "workflow", toolCallId: "foreground", isError: false });
+
+  const constrained = await execute("foreground-descriptor", { name: "constrained", script: `return "x".repeat(5000);`, foreground: true }, new AbortController().signal, undefined, { ...ctx, model: { ...ctx.model, contextWindow: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000 }) });
+  const constrainedDescriptor = JSON.parse(constrained.content[0]?.text ?? "null") as { state: string; runId: string; resultPath: string; resultBytes: number; inlined: boolean };
+  assert.equal(constrainedDescriptor.state, "completed");
+  assert.equal(constrainedDescriptor.inlined, false);
+  assert.ok(constrainedDescriptor.resultBytes > 5_000 && constrainedDescriptor.resultBytes <= 50 * 1024);
+  assert.doesNotMatch(constrained.content[0]?.text ?? "", /x{100}/);
+  await toolResultHandler?.({ toolName: "workflow", toolCallId: "foreground-descriptor", isError: false });
 });
 
 void test("promotes detached foreground completion and failure to follow-up delivery", async () => {

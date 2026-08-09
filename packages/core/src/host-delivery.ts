@@ -68,9 +68,15 @@ export interface CompletionDeliveryOptions {
   worktrees: readonly { branch: string; path: string }[];
   context?: CompletionDeliveryContext;
 }
+export interface CompletionDeliveryStoreOptions extends Omit<CompletionDeliveryOptions, "worktrees"> {
+  store: Pick<RunStore, "changedWorktrees">;
+}
 export interface CompletionDeliveryResult { content: string; inlined: boolean }
 
 function positiveFinite(value: number | undefined): value is number { return value !== undefined && Number.isFinite(value) && value > 0; }
+function completionDescriptor(options: Pick<CompletionDeliveryOptions, "runId" | "resultPath" | "resultBytes">): string {
+  return JSON.stringify({ state: "completed", runId: options.runId, resultPath: options.resultPath, resultBytes: options.resultBytes, inlined: false });
+}
 function deliveryEnvelope(mode: CompletionDeliveryOptions["mode"], content: string, runId: string): string {
   const timestamp = Date.now();
   if (mode === "foreground") return JSON.stringify({ role: "toolResult", toolCallId: runId, toolName: "workflow", content: [{ type: "text", text: content }, { type: "text", text: `Workflow run ID: ${runId}` }], isError: false, timestamp });
@@ -91,12 +97,24 @@ function fitsMainContext(options: CompletionDeliveryOptions, content: string): b
 }
 
 export function completionDelivery(options: CompletionDeliveryOptions): CompletionDeliveryResult {
-  const descriptor = JSON.stringify({ state: "completed", runId: options.runId, resultPath: options.resultPath, resultBytes: options.resultBytes, inlined: false });
+  const descriptor = completionDescriptor(options);
   if (!Number.isSafeInteger(options.resultBytes) || options.resultBytes < 0 || options.resultBytes > DEFAULT_MAX_BYTES) return { content: descriptor, inlined: false };
   const serialized = JSON.stringify(options.value);
+  if (typeof serialized !== "string") return { content: descriptor, inlined: false };
   const locations = options.worktrees.length ? ` Changes: ${options.worktrees.map(({ branch, path }) => `${branch} (${path})`).join(", ")}.` : "";
   const inlineContent = options.mode === "foreground" ? serialized : `Workflow ${options.name} completed: ${serialized}${locations}`;
+  if (Buffer.byteLength(inlineContent, "utf8") > DEFAULT_MAX_BYTES) return { content: descriptor, inlined: false };
   return fitsMainContext(options, inlineContent) ? { content: inlineContent, inlined: true } : { content: descriptor, inlined: false };
+}
+
+export async function completionDeliveryFromStore(options: CompletionDeliveryStoreOptions): Promise<CompletionDeliveryResult> {
+  const { store, ...deliveryOptions } = options;
+  try {
+    return completionDelivery({ ...deliveryOptions, worktrees: await store.changedWorktrees() });
+  } catch {
+    // Worktree metadata must not block successful result delivery.
+    return { content: completionDescriptor(deliveryOptions), inlined: false };
+  }
 }
 
 export function utf8Prefix(value: string, maxBytes: number): string {

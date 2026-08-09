@@ -33,7 +33,7 @@ import {
   DELIVERY_LIMIT_BYTES,
   markWorkflowFailureDiagnostics,
   WORKFLOW_LOG_ENTRY,
-  completionDelivery,
+  completionDeliveryFromStore,
   createWorkflowFailureDiagnostics,
   failureDiagnosticsFrom,
   formatWorkflowFailure,
@@ -106,12 +106,21 @@ function mainAgentError(error: unknown): WorkflowError {
   Object.assign(presented, typed);
   return presented;
 }
-function completionControlContent(result: unknown): string {
-  const record = object(result) ? result : undefined;
+function completionControlContent(result: unknown, controlRunId?: string): string {
+  const record = object(result) ? { ...result } : undefined;
+  if (record && controlRunId !== undefined && record.runId === undefined) record.runId = controlRunId;
   const completion = record && object(record.completion) ? record.completion : undefined;
-  if (completion && typeof completion.content === "string") return completion.content;
-  const serialized = JSON.stringify(result);
-  return typeof serialized === "string" ? serialized : String(result);
+  if (!record || !completion || typeof completion.content !== "string") {
+    const serialized = JSON.stringify(record ?? result);
+    return typeof serialized === "string" ? serialized : String(result);
+  }
+  let value: unknown;
+  try { value = JSON.parse(completion.content) as unknown; }
+  catch { value = completion.content; }
+  delete record.value;
+  delete record.completion;
+  delete record.run;
+  return JSON.stringify({ ...record, value });
 }
 export function formatWorkflowPreview(args: { script?: unknown; scriptPath?: unknown; name?: unknown; description?: unknown }): string {
   const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "workflow";
@@ -758,7 +767,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         if (params.proposalId) {
           const result = await recovery.answerBudgetDecision(params.runId, params.proposalId, params.approved, false, ctx, signal);
           if (!result) { const denied = { state: "budget_exhausted" as const, approved: false, reason: "proposal_not_pending" }; return { content: [{ type: "text" as const, text: JSON.stringify(denied) }], details: denied }; }
-          return { content: [{ type: "text" as const, text: completionControlContent(result) }], details: { ...result, reason: params.approved ? "approved" : "rejected" } };
+          return { content: [{ type: "text" as const, text: completionControlContent(result, params.runId) }], details: { ...result, reason: params.approved ? "approved" : "rejected" } };
         }
         if (!params.name) throw new WorkflowError("INVALID_METADATA", "workflow_respond requires name or proposalId");
         const accepted = await answerCheckpoint(params.runId, params.name, params.approved);
@@ -1178,7 +1187,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         return diagnostic ? formatWorkflowFailureDelivery(diagnostic) : formatWorkflowFailureDeliveryFallback(checked.metadata.name, runId, store.directory, error);
       };
       type Completion = { value: JsonValue; resultPath: string; resultBytes: number };
-      const completionContent = (mode: "foreground" | "background", result: Completion): (() => Promise<string>) => async () => completionDelivery({ mode, name: checked.metadata.name, runId, value: result.value, resultPath: result.resultPath, resultBytes: result.resultBytes, worktrees: await store.changedWorktrees(), context: completionContext(ctx) }).content;
+      const completionContent = (mode: "foreground" | "background", result: Completion): (() => Promise<string>) => async () => (await completionDeliveryFromStore({ mode, name: checked.metadata.name, runId, value: result.value, resultPath: result.resultPath, resultBytes: result.resultBytes, store, context: completionContext(ctx) })).content;
       const queueForegroundDelivery = async (content: string | (() => string | Promise<string>), failure = false): Promise<void> => {
         const delivery = foregroundDeliveries.get(toolCallId);
         if (!delivery) return;
@@ -1223,7 +1232,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         return { content: [{ type: "text" as const, text: JSON.stringify(detached) }], details: { ...detached, run, preview: `Moved workflow ${runId} to background.` } };
       }
       const { value, resultPath, resultBytes } = outcome.result;
-      const delivery = completionDelivery({ mode: "foreground", name: checked.metadata.name, runId, value, resultPath, resultBytes, worktrees: await store.changedWorktrees(), context: completionContext(ctx) });
+      const delivery = await completionDeliveryFromStore({ mode: "foreground", name: checked.metadata.name, runId, value, resultPath, resultBytes, store, context: completionContext(ctx) });
       const run = (await store.load()).run;
       return { content: [{ type: "text" as const, text: delivery.content }, ...(delivery.inlined ? [{ type: "text" as const, text: `Workflow run ID: ${runId}` }] : [])], details: { runId, value, run } };
       } catch (error) {

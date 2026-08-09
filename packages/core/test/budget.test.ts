@@ -278,6 +278,14 @@ void test("workflow_resume persists exact proposals and approval or rejection co
   assert.equal(approvedDetails.approved, true);
   assert.equal(approvedDetails.reason, "approved");
   assert.equal(approvedDetails.value, true);
+  const approvedContent = JSON.parse((approved as { content: Array<{ text: string }> }).content[0]?.text ?? "null") as { state: string; approved: boolean; runId: string; value: { state: string; runId: string; resultPath: string; resultBytes: number; inlined: boolean } };
+  assert.equal(approvedContent.state, "completed");
+  assert.equal(approvedContent.approved, true);
+  assert.equal(approvedContent.runId, runId);
+  assert.equal(approvedContent.value.state, "completed");
+  assert.equal(approvedContent.value.runId, runId);
+  assert.match(approvedContent.value.resultPath, /result\.json$/);
+  assert.equal(approvedContent.value.inlined, false);
   for (let attempt = 0; attempt < 1000 && (await store.load()).run.state !== "completed"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
   const loaded = await store.load();
   assert.equal(loaded.run.state, "completed");

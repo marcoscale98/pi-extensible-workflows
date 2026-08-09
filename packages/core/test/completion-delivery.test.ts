@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
-import { completionDelivery } from "../src/host-delivery.js";
+import { completionDelivery, completionDeliveryFromStore } from "../src/host-delivery.js";
 import { createLaunchSnapshot, DEFAULT_SETTINGS, RunStore } from "../src/index.js";
 
 const context = (tokens: number | null, contextWindow = 100_000) => ({
@@ -38,6 +38,20 @@ void test("completion fit reads active context and model values", () => {
   tokens = 0;
   contextWindow = 500;
   assert.equal(completionDelivery(options).inlined, false);
+});
+
+void test("completion delivery bounds the complete background message", () => {
+  const value = { answer: "x".repeat(DEFAULT_MAX_BYTES) };
+  const result = completionDelivery({ mode: "background", name: "review", runId: "run-1", value, resultPath: "/tmp/run-1/result.json", resultBytes: DEFAULT_MAX_BYTES, worktrees: [], context: context(0) });
+  assert.equal(result.inlined, false);
+  assert.deepEqual(JSON.parse(result.content), { state: "completed", runId: "run-1", resultPath: "/tmp/run-1/result.json", resultBytes: DEFAULT_MAX_BYTES, inlined: false });
+  assert.doesNotMatch(result.content, /x{100}/);
+});
+
+void test("completion delivery falls back when worktree inspection fails", async () => {
+  const result = await completionDeliveryFromStore({ mode: "background", name: "review", runId: "run-1", value: { answer: true }, resultPath: "/tmp/run-1/result.json", resultBytes: 32, context: context(0), store: { changedWorktrees: async () => { throw new Error("worktree unavailable"); } } });
+  assert.deepEqual(JSON.parse(result.content), { state: "completed", runId: "run-1", resultPath: "/tmp/run-1/result.json", resultBytes: 32, inlined: false });
+  assert.equal(result.inlined, false);
 });
 
 void test("RunStore persists pretty UTF-8 result bytes", async () => {
