@@ -38,8 +38,9 @@
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "lint": "eslint .",
-    "test": "npm run test:layout && npm run build && npm run test:run && npm run test:herdr",
+    "test": "npm run test:layout && npm run build && npm run test:widget && npm run test:run && npm run test:herdr",
     "test:layout": "node --test --test-timeout=10000 --test-force-exit test/workspace-layout.test.mjs",
+    "test:widget": "node --test --test-timeout=30000 --test-force-exit test/background-widget.test.mjs",
     "test:run": "files=${TEST_FILES:-$(find dist/test -name '*.test.js' ! -name 'navigator.test.js')}; printf '%s\\n' $files | xargs -n1 -P20 sh -c 'tmp=$(mktemp -d); agent=$(mktemp -d); trap '\"'\"'rm -rf \"$tmp\" \"$agent\"'\"'\"' EXIT; TMPDIR=\"$tmp\" PI_CODING_AGENT_DIR=\"$agent\" env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID node --expose-gc --test --test-concurrency=1 --test-timeout=120000 --test-force-exit --test-reporter=dot \"$1\"' sh",
     "test:herdr": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; TMPDIR=\"$tmp\" node --expose-gc --test --test-concurrency=1 --test-timeout=120000 --test-force-exit --test-reporter=dot dist/test/navigator.test.js",
     "acceptance": "npm run build && TEST_FILES='dist/test/runtime-acceptance.test.js' npm run test:run",
@@ -55,11 +56,13 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.82.1",
     "@earendil-works/pi-coding-agent": "0.82.1",
+    "@earendil-works/pi-tui": "0.82.1",
     "@eslint/js": "10.0.1",
     "@types/node": "24.12.4",
     "eslint": "10.0.3",

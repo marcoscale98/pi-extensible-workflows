@@ -85,7 +85,7 @@ export interface WorkflowModelAlias { resolve: (context: Readonly<WorkflowModelA
 export interface WorkflowMetadata { name: string; description?: string }
 export interface HerdrExtensionSettings { enableFullyInspectableMode?: boolean }
 export interface WorkflowExtensionSettings { herdr?: Readonly<HerdrExtensionSettings> }
-export interface WorkflowSettings { concurrency: number; modelAliases?: Readonly<Record<string, string>>; disabledAgentResources?: Readonly<AgentResourceExclusions>; extensions?: Readonly<WorkflowExtensionSettings> }
+export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; modelAliases?: Readonly<Record<string, string>>; disabledAgentResources?: Readonly<AgentResourceExclusions>; extensions?: Readonly<WorkflowExtensionSettings> }
 export interface WorkflowSettingsOverrides { concurrency?: number; modelAliases?: Readonly<Record<string, string>>; disabledAgentResources?: Readonly<AgentResourceExclusions>; extensions?: Readonly<WorkflowExtensionSettings> }
 export interface WorkflowSettingsSources { concurrency: string; modelAliases: string; disabledAgentResources: string }
 export interface WorkflowSettingsResolution { globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; global: Readonly<WorkflowSettings>; project: Readonly<WorkflowSettingsOverrides>; effective: Readonly<WorkflowSettings>; sources: Readonly<WorkflowSettingsSources> }
@@ -233,7 +233,7 @@ export type StaticWorkflowExecution = "parallel" | "sequential";
 export interface StaticWorkflowCall { kind: WorkflowCallKind; start: number; end: number; name: string | null; prompt: string | null; model: string | null; label?: string | null; role: string | null; retries?: number | null; outputSchema?: JsonSchema | null; options?: Readonly<Record<string, JsonValue>> | null; optionKeys?: readonly string[]; execution?: StaticWorkflowExecution; structure?: readonly StaticWorkflowScope[] }
 export interface WorkflowCatalogFunction { name: string; version: string; headline: string; description: string; input: JsonSchema; output: JsonSchema }
 export interface WorkflowCatalogModelAlias { name: string; kind: "static" | "dynamic"; provenance: string; version?: string; headline?: string }
-export interface WorkflowCatalogSettings { concurrency: number; modelAliases: Readonly<Record<string, string>>; disabledAgentResources: AgentResourceExclusions; extensions?: Readonly<WorkflowExtensionSettings>; globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; sources: WorkflowSettingsSources }
+export interface WorkflowCatalogSettings { concurrency: number; backgroundWidget: boolean; modelAliases: Readonly<Record<string, string>>; disabledAgentResources: AgentResourceExclusions; extensions?: Readonly<WorkflowExtensionSettings>; globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; sources: WorkflowSettingsSources }
 export interface WorkflowCatalogContext { cwd: string; projectTrusted: boolean; globalSettingsPath?: string }
 export interface WorkflowCatalog { functions: readonly WorkflowCatalogFunction[]; modelAliases?: Readonly<Record<string, string>>; modelAliasEntries?: readonly WorkflowCatalogModelAlias[]; settings?: WorkflowCatalogSettings }
 export interface WorkflowCatalogIndexFunction { name: string; description: string; input: JsonSchema }

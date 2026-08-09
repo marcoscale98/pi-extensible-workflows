@@ -47,7 +47,7 @@ Missing settings files use defaults. Settings JSON is strict: unknown keys, inva
 
 Effective precedence is:
 
-1. Built-in defaults (`concurrency` defaults to `8`).
+1. Built-in defaults (`concurrency` defaults to `8`; `backgroundWidget` defaults to `true`).
 2. Global settings.
 3. Trusted project settings for `concurrency`, `modelAliases`, and `disabledAgentResources`.
 4. Per-run options where the workflow API defines them.
@@ -59,6 +59,7 @@ Supported settings shape:
 ```json
 {
   "concurrency": 8,
+  "backgroundWidget": true,
   "modelAliases": {
     "reviewer-model": "anthropic/claude-fable-5:high",
     "cheap-model": "reviewer-model:low"
@@ -75,11 +76,15 @@ Supported settings shape:
 }
 ```
 
-The supported top-level settings are exactly `concurrency`, `modelAliases`, `disabledAgentResources`, and `extensions`. The currently supported extension settings are exactly `extensions.herdr.enableFullyInspectableMode` as a boolean. Adding a new settings namespace requires a core validation and type change; do not silently add arbitrary keys.
+The supported top-level settings are exactly `concurrency`, `backgroundWidget`, `modelAliases`, `disabledAgentResources`, and `extensions`. `backgroundWidget` is accepted only in the global settings file and disables the live background workflow widget and durable background receipts when false. The currently supported extension settings are exactly `extensions.herdr.enableFullyInspectableMode` as a boolean. Adding a new settings namespace requires a core validation and type change; do not silently add arbitrary keys.
 
 ### Concurrency
 
 `concurrency` is an integer from `1` through `16`. The default is `8`.
+
+### Background workflow widget
+
+`backgroundWidget` is a global boolean that defaults to `true`. Set it to `false` to disable the live background-run tree and durable background-run transcript receipts. Foreground workflow rendering is unchanged. Headless and non-TUI hosts do not draw the widget or append receipts.
 
 ### Models and aliases
 

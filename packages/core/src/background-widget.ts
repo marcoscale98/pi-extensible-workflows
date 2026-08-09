@@ -18,8 +18,8 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { AgentRecord, AgentState, RunRecord, RunState } from "pi-extensible-workflows";
-import { listRunIds, RunStore } from "pi-extensible-workflows/persistence";
+import type { AgentRecord, AgentState, RunRecord, RunState } from "./types.js";
+import { listRunIds, RunStore } from "./persistence.js";
 import {
   WORKFLOW_AGENT_STALL_THRESHOLD_MS,
   WORKFLOW_AGENT_STATE_CHANGED_EVENT,
@@ -30,8 +30,14 @@ import {
   WORKFLOW_RUN_FAILED_EVENT,
   WORKFLOW_RUN_STARTED_EVENT,
   WORKFLOW_RUN_STATE_CHANGED_EVENT,
-  object,
-} from "pi-extensible-workflows";
+} from "./types.js";
+import { object } from "./utils.js";
+
+export type BackgroundWidgetAPI = Pick<ExtensionAPI, "appendEntry" | "on"> & {
+  events?: { on?: (name: string, handler: (event: unknown) => void) => () => void; emit?: ExtensionAPI["events"]["emit"] };
+  registerEntryRenderer?: ExtensionAPI["registerEntryRenderer"];
+  registerShortcut?: ExtensionAPI["registerShortcut"];
+};
 
 const KEY = "piewf-widget";
 const ENTRY_TYPE = "piewf-run-receipt";
@@ -990,8 +996,14 @@ export function renderReceipt(data: Receipt, expanded: boolean, theme: Theme): s
   return lines;
 }
 
-export default function widget(pi: ExtensionAPI): void {
+export default function widget(pi: BackgroundWidgetAPI, enabled = true): void {
+  if (!enabled || typeof pi.registerEntryRenderer !== "function" || typeof pi.registerShortcut !== "function" || !pi.events || typeof pi.events.on !== "function") return;
+  const eventBus = pi.events;
+  const subscribe = (name: string, handler: (event: unknown) => void): (() => void) => eventBus.on?.(name, handler) ?? (() => {});
+  const registerEntryRenderer = pi.registerEntryRenderer;
+  const registerShortcut = pi.registerShortcut;
   let context: ExtensionContext | undefined;
+  const isTuiContext = (): boolean => context?.hasUI === true && context.mode === "tui";
   let timer: NodeJS.Timeout | undefined;
   /** True while a frame is on screen, so it is only cleared when there is one. */
   let showing = false;
@@ -1107,8 +1119,8 @@ export default function widget(pi: ExtensionAPI): void {
     return undefined;
   };
   const installInput = (): void => {
-    if (!showing || !__navigationForTests.enabled || inputUnsubscribe || !context?.hasUI) return;
-    inputUnsubscribe = context.ui.onTerminalInput(handleInput);
+    if (!showing || !__navigationForTests.enabled || inputUnsubscribe || !isTuiContext()) return;
+    inputUnsubscribe = context?.ui.onTerminalInput(handleInput);
   };
 
 
@@ -1125,7 +1137,7 @@ export default function widget(pi: ExtensionAPI): void {
   };
 
   const receipt = (runId: string): void => {
-    if (receipted.has(runId)) return;
+    if (!isTuiContext() || receipted.has(runId)) return;
     const current = runs.get(runId);
     if (!current) return;
     // Events are signals, not the receipt's data. Read the final atomic state
@@ -1147,7 +1159,7 @@ export default function widget(pi: ExtensionAPI): void {
 
 
   const paint = (): void => {
-    if (!context?.hasUI) {
+    if (!isTuiContext()) {
       hide();
       return;
     }
@@ -1170,7 +1182,7 @@ export default function widget(pi: ExtensionAPI): void {
     // glance down at, not something standing between the conversation and
     // the place you type.
     showing = true;
-    context.ui.setWidget(
+    context?.ui.setWidget(
       KEY,
       (tui: TuiHandle, theme: Theme) => {
         // Held so the input handler can ask who owns the keyboard right now.
@@ -1262,7 +1274,7 @@ export default function widget(pi: ExtensionAPI): void {
   // The transcript entry: appendEntry carries the data, this renders it. It
   // returns a plain component rather than importing pi-tui's Text, because
   // @earendil-works/pi-tui only resolves inside Pi's own module tree.
-  pi.registerEntryRenderer<Receipt>(ENTRY_TYPE, (entry, options, theme) => {
+  registerEntryRenderer<Receipt>(ENTRY_TYPE, (entry, options, theme) => {
     if (!entry.data) return undefined;
     const lines = renderReceipt(entry.data, options.expanded, theme);
     return {
@@ -1283,7 +1295,7 @@ export default function widget(pi: ExtensionAPI): void {
       sessionId?: string;
       error?: { message?: unknown };
     };
-    if (!runId || !runDirectory || !eventSession || eventSession !== sessionId()) return;
+    if (!isTuiContext() || !runId || !runDirectory || !eventSession || eventSession !== sessionId()) return;
     if (receipted.has(runId)) return;
     if (deferReceipt) awaitingDedicatedReceipt.add(runId);
     if (terminal) awaitingDedicatedReceipt.delete(runId);
@@ -1302,20 +1314,20 @@ export default function widget(pi: ExtensionAPI): void {
     WORKFLOW_PHASE_CHANGED_EVENT,
     WORKFLOW_BUDGET_EVENT,
   ]) {
-    unsubscribes.push(pi.events.on(name, onRunEvent));
+    unsubscribes.push(subscribe(name, onRunEvent));
   }
 
-  unsubscribes.push(pi.events.on(WORKFLOW_RUN_STATE_CHANGED_EVENT, (event: unknown) => {
+  unsubscribes.push(subscribe(WORKFLOW_RUN_STATE_CHANGED_EVENT, (event: unknown) => {
     const state = (event as { state?: unknown }).state;
     onRunEvent(event, state === "stopped", state === "completed" || state === "failed");
   }));
   for (const name of [WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_FAILED_EVENT]) {
-    unsubscribes.push(pi.events.on(name, (event: unknown) => {
+    unsubscribes.push(subscribe(name, (event: unknown) => {
       onRunEvent(event, true);
     }));
   }
   unsubscribes.push(
-    pi.events.on(WORKFLOW_CHECKPOINT_STATE_CHANGED_EVENT, (event: unknown) => {
+    subscribe(WORKFLOW_CHECKPOINT_STATE_CHANGED_EVENT, (event: unknown) => {
       const { runId, runDirectory, sessionId: eventSession, name, state } = event as {
         runId?: string;
         runDirectory?: string;
@@ -1323,7 +1335,7 @@ export default function widget(pi: ExtensionAPI): void {
         name?: string;
         state?: string;
       };
-      if (!runId || !runDirectory || !eventSession || eventSession !== sessionId()) return;
+      if (!isTuiContext() || !runId || !runDirectory || !eventSession || eventSession !== sessionId()) return;
       refresh(runId, runDirectory, eventSession);
       const run = runs.get(runId);
       if (!run) return;
@@ -1394,6 +1406,7 @@ export default function widget(pi: ExtensionAPI): void {
     } catch {
       // No history to read; runs from this session on are recorded anyway.
     }
+    if (!isTuiContext()) return;
 
     if (!timer) {
       timer = setInterval(tick, REPAINT_MS);
@@ -1409,7 +1422,7 @@ export default function widget(pi: ExtensionAPI): void {
   // A way in that never competes. `↓` is the comfortable gesture but it is
   // shared with every picker; the shortcut answers whatever else is on screen,
   // and Pi lets it be rebound in `keybindings.json` like any other.
-  if (__navigationForTests.enabled) pi.registerShortcut(FOCUS_SHORTCUT, {
+  if (__navigationForTests.enabled) registerShortcut(FOCUS_SHORTCUT, {
     description: "Scroll the workflow widget",
     handler: () => {
       if (!showing || maxOffset(rowCount, MAX_ROWS - 2) === 0) {

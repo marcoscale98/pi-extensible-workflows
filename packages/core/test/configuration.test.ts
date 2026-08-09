@@ -175,11 +175,11 @@ void test("default settings follow the effective agent directory", () => {
   try {
     mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
     writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ concurrency: 4 }));
-    assert.deepEqual(loadSettings(), { concurrency: 4 });
+    assert.deepEqual(loadSettings(), { concurrency: 4, backgroundWidget: true });
     process.env.PI_CODING_AGENT_DIR = customAgentDir;
     mkdirSync(join(customAgentDir, "pi-extensible-workflows"), { recursive: true });
     writeFileSync(join(customAgentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ concurrency: 6 }));
-    assert.deepEqual(loadSettings(), { concurrency: 6 });
+    assert.deepEqual(loadSettings(), { concurrency: 6, backgroundWidget: true });
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -191,7 +191,11 @@ void test("strict settings use defaults and reject unknown or unsafe values", ()
   assert.equal(loadSettings(join(dir, "missing.json")), DEFAULT_SETTINGS);
   const path = join(dir, "settings.json");
   writeFileSync(path, JSON.stringify({ concurrency: 4 }));
-  assert.deepEqual(loadSettings(path), { concurrency: 4 });
+  assert.deepEqual(loadSettings(path), { concurrency: 4, backgroundWidget: true });
+  writeFileSync(path, JSON.stringify({ backgroundWidget: false }));
+  assert.equal(loadSettings(path).backgroundWidget, false);
+  writeFileSync(path, JSON.stringify({ backgroundWidget: "yes" }));
+  assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS");
   writeFileSync(path, JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
   assert.equal(loadSettings(path).extensions?.herdr?.enableFullyInspectableMode, true);
   writeFileSync(path, JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: "yes" } } }));
@@ -517,11 +521,14 @@ void test("resolves trusted project settings with replacement and inheritance se
   assert.deepEqual(trusted.effective.modelAliases, {});
   assert.deepEqual(trusted.effective.disabledAgentResources, { skills: [], extensions: [] });
   assert.equal(trusted.sources.modelAliases, projectPath);
+  assert.equal(trusted.effective.backgroundWidget, true);
   writeFileSync(projectPath, JSON.stringify({ concurrency: 3 }));
   const partial = resolveWorkflowSettings(cwd, true, globalPath);
   assert.equal(partial.effective.concurrency, 3);
   assert.deepEqual(partial.effective.modelAliases, { reviewer: "openai/gpt" });
   assert.deepEqual(partial.effective.disabledAgentResources, { skills: ["global"], extensions: ["/global.ts"] });
+  writeFileSync(projectPath, JSON.stringify({ backgroundWidget: false }));
+  assert.throws(() => resolveWorkflowSettings(cwd, true, globalPath), /Unknown workflow setting/);
   writeFileSync(projectPath, "{ malformed");
   assert.doesNotThrow(() => resolveWorkflowSettings(cwd, false, globalPath));
   assert.throws(() => resolveWorkflowSettings(cwd, true, globalPath), /Invalid workflow settings JSON/);

@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import widget, { renderReceipt, __navigationForTests } from "../dist/index.js";
-import { RunStore } from "pi-extensible-workflows/persistence";
+import widget, { renderReceipt, __navigationForTests } from "../dist/src/background-widget.js";
+import { RunStore } from "../dist/src/persistence.js";
 import {
   WORKFLOW_AGENT_STATE_CHANGED_EVENT,
   WORKFLOW_CHECKPOINT_STATE_CHANGED_EVENT,
@@ -13,7 +13,7 @@ import {
   WORKFLOW_RUN_FAILED_EVENT,
   WORKFLOW_RUN_STARTED_EVENT,
   WORKFLOW_RUN_STATE_CHANGED_EVENT,
-} from "pi-extensible-workflows";
+} from "../dist/src/types.js";
 
 // Stands in for Pi's theme. `bg` wraps rather than colours so a test can see
 // which row was highlighted without matching escape codes.
@@ -103,7 +103,8 @@ function harness(sessionId = "session-1", options = {}) {
   };
 
   const context = {
-    hasUI: true,
+    hasUI: options.hasUI ?? true,
+    mode: options.mode ?? "tui",
     cwd: options.cwd,
     sessionManager: { getSessionId: () => sessionId, getEntries: () => sessionEntries },
     // The widget registers a factory so it is built at the width the TUI is
@@ -122,7 +123,7 @@ function harness(sessionId = "session-1", options = {}) {
     },
   };
 
-  widget(pi);
+  widget(pi, options.backgroundWidget ?? true);
   return {
     context,
     frames,
@@ -150,6 +151,34 @@ function harness(sessionId = "session-1", options = {}) {
   };
 }
 
+void test("backgroundWidget false disables the live tree and receipts", () => {
+  const host = harness("session-1", { backgroundWidget: false });
+  host.emit(WORKFLOW_RUN_STARTED_EVENT, { runId: "run-1", runDirectory: "/missing", sessionId: "session-1" });
+  assert.deepEqual(host.widgets, []);
+  assert.deepEqual(host.entries, []);
+  assert.equal(host.renderer, undefined);
+  assert.equal(host.shortcuts.size, 0);
+});
+
+void test("headless hosts do not draw or append background receipts", () => {
+  const host = harness("session-1", { hasUI: false });
+  host.start();
+  host.emit(WORKFLOW_RUN_COMPLETED_EVENT, { runId: "run-1", runDirectory: "/missing", sessionId: "session-1" });
+  assert.deepEqual(host.widgets, []);
+  assert.deepEqual(host.entries, []);
+  host.shutdown();
+});
+void test("non-TUI hosts do not draw or append background receipts", () => {
+  const root = mkdtempSync(join(tmpdir(), "widget-rpc-"));
+  const directory = writeRun(join(root, "run-1"), runState({ state: "completed" }));
+  const host = harness("session-1", { mode: "rpc" });
+  host.start();
+  host.emit(WORKFLOW_RUN_COMPLETED_EVENT, { runId: "run-1", runDirectory: directory, sessionId: "session-1" });
+  assert.deepEqual(host.widgets, []);
+  assert.deepEqual(host.entries, []);
+  host.shutdown();
+  rmSync(root, { recursive: true, force: true });
+});
 void test("draws a tree for a live run and clears it once the run is over", () => {
   const root = mkdtempSync(join(tmpdir(), "widget-live-"));
   const directory = writeRun(join(root, "run-1"), runState());
@@ -488,6 +517,7 @@ void test("a second instance starting and stopping leaves the first one working"
     });
     handlers.get("session_start")(undefined, {
       hasUI: true,
+      mode: "tui",
       sessionManager: { getSessionId: () => "session-1", getEntries: () => [] },
       ui: { setWidget: () => {}, onTerminalInput: () => () => {}, getEditorText: () => "" },
     });

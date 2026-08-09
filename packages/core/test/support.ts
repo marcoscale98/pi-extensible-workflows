@@ -60,7 +60,7 @@ type TestExtensionApiOptions = {
 function isTestWorkflowLogEntry(value: unknown): value is TestWorkflowLogEntry {
   return typeof value === "object" && value !== null && "workflowName" in value && typeof value.workflowName === "string" && "message" in value && typeof value.message === "string";
 }
-export function testExtensionApi(options: TestExtensionApiOptions = {}): WorkflowExtensionAPI & { registerEntryRenderer?: ExtensionAPI["registerEntryRenderer"]; events?: Pick<ExtensionAPI["events"], "emit"> } {
+export function testExtensionApi(options: TestExtensionApiOptions = {}): WorkflowExtensionAPI {
   const api: WorkflowExtensionAPI = {
     appendEntry(type, data) {
       if (isTestWorkflowLogEntry(data)) options.appendEntry?.(type, data);

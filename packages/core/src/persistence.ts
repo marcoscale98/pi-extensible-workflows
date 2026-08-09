@@ -202,12 +202,14 @@ function decodeBudget(value: unknown): NonNullable<RunRecord["budget"]> | undefi
 }
 function decodeWorkflowSettings(value: unknown): LaunchSnapshot["settings"] | undefined {
   if (!object(value) || !positiveInteger(value.concurrency)) return undefined;
+  const backgroundWidget = optionalBoolean(value.backgroundWidget);
   const modelAliases = value.modelAliases === undefined ? undefined : decodeStringMap(value.modelAliases);
   const disabledAgentResources = value.disabledAgentResources === undefined ? undefined : decodeAgentResourceExclusions(value.disabledAgentResources);
   const extensions = value.extensions === undefined ? undefined : decodeWorkflowExtensions(value.extensions);
-  if ((value.modelAliases !== undefined && !modelAliases) || (value.disabledAgentResources !== undefined && !disabledAgentResources) || (value.extensions !== undefined && !extensions)) return undefined;
+  if (backgroundWidget === INVALID_PERSISTED_VALUE || (value.modelAliases !== undefined && !modelAliases) || (value.disabledAgentResources !== undefined && !disabledAgentResources) || (value.extensions !== undefined && !extensions)) return undefined;
   return {
     concurrency: value.concurrency,
+    ...(backgroundWidget === undefined ? {} : { backgroundWidget }),
     ...(modelAliases === undefined ? {} : { modelAliases }),
     ...(disabledAgentResources === undefined ? {} : { disabledAgentResources }),
     ...(extensions === undefined ? {} : { extensions }),
