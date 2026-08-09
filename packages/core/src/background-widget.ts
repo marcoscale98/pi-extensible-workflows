@@ -780,9 +780,11 @@ function renderFrame(runs: readonly Run[], now: number, width: number, offset = 
   // rather than sitting under a separate run of dashes. In ten rows a line
   // spent on decoration is a line not spent on the run, and the box still
   // reads as closed at the top.
-  // Nothing is promised while navigation is switched off: a hint for keys
+  // Only advertise navigation when it can reveal hidden rows: a hint for keys
   // that do nothing is worse than no hint.
-  const hint = !__navigationForTests.enabled ? "" : scrolling ? "↑↓ scroll · esc to exit" : `${FOCUS_SHORTCUT} to scroll`;
+  const hint = !__navigationForTests.enabled || maxOffset(total, MAX_ROWS - 2) === 0
+    ? ""
+    : scrolling ? "↑/↓ to scroll · Esc to exit" : "Alt+O to scroll";
   const label = ` ${title} `;
   const tail = hint === "" ? "" : ` ${hint} `;
   const spare = inner + 2 - visibleLength(label) - visibleLength(tail);

@@ -1080,7 +1080,7 @@ void test("the shortcut scrolls the widget through a tree too tall to show", () 
   const scrolled = draw();
   assert.notDeepEqual(scrolled, resting, "the window moved");
   assert.ok(scrolled.length <= 10, "still within budget");
-  assert.match(scrolled[0], /↑↓ scroll · esc/, "the keys are named while scrolling");
+  assert.match(scrolled[0], /↑\/↓ to scroll · Esc to exit/, "the keys are named while scrolling");
 
   // Escape gives the keyboard back, and the arrow with it.
   assert.equal(host.key("\u001b"), true, "escape is taken");
@@ -1089,7 +1089,7 @@ void test("the shortcut scrolls the widget through a tree too tall to show", () 
   host.shutdown();
 });
 
-void test("alt+o does not enter or bank scrolling when the tree fits", () => {
+void test("Alt+O is hidden and does not enter scrolling when the tree fits", () => {
   __navigationForTests.enabled = true;
   const root = mkdtempSync(join(tmpdir(), "widget-fit-scroll-"));
   const host = harness();
@@ -1101,6 +1101,7 @@ void test("alt+o does not enter or bank scrolling when the tree fits", () => {
   host.emit(WORKFLOW_RUN_STARTED_EVENT, { runId: "run-1", runDirectory: directory, sessionId: "session-1" });
   const shortcut = [...host.shortcuts.values()][0];
   const before = host.widgets.at(-1)(host.tui, theme).render(WIDTH);
+  assert.doesNotMatch(plain(before[0]), /alt\+o to scroll/i);
   shortcut.handler();
   assert.equal(host.key("\u001b[1;1:1B"), false);
   assert.deepEqual(host.widgets.at(-1)(host.tui, theme).render(WIDTH), before);
@@ -1167,13 +1168,13 @@ void test("scrolling is visibly a mode: coloured rules, a scrollbar and a way ou
 
   const resting = draw();
   assert.ok(resting[0].startsWith("\u001b[34m╭"), "at rest the rules are the ordinary accent");
-  assert.match(plain(resting[0]), /alt\+o to scroll/, "and the way in is named");
+  assert.match(plain(resting[0]), /Alt\+O to scroll/, "and the way in is named");
   assert.ok(!resting.some((line) => line.includes("█")), "no scrollbar until it means something");
 
   [...host.shortcuts.values()][0].handler();
   const scrolling = draw();
   assert.ok(scrolling[0].startsWith("\u001b[33m╭"), "scrolling recolours the rules");
-  assert.match(plain(scrolling[0]), /esc to exit/, "and names the way out");
+  assert.match(plain(scrolling[0]), /↑\/↓ to scroll · Esc to exit/, "and names the way out");
   assert.ok(scrolling.some((line) => line.includes("█")), "the thumb shows where the window sits");
   assert.ok(scrolling.some((line) => line.includes("░")), "against the track it moves along");
 
