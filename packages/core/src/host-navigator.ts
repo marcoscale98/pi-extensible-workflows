@@ -437,12 +437,25 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                   let selectionNeedsScroll = true;
                   let renderedWidth = 80;
                   let refreshGeneration = 0;
+                  let frozenAt = Date.now();
+                  let previousRunState = view.run.state;
                   let tree = buildWorkflowPhaseTree(view.phaseModel);
                   let selectedNodeId = tree.nodes[0]?.id;
                   let expandedNodeIds = new Set(workflowPhaseTreeInitialExpanded(tree));
                   const terminalRows = () => Math.max(1, tuiRows(tui) - WORKFLOW_PANEL_FOOTER_ROWS);
                   const keyLabels: Record<string, string> = { up: "↑", down: "↓", left: "←", right: "→", pageUp: "pgup", pageDown: "pgdn" };
                   const keyLabel = (binding: string, fallback: string) => workflowKeyLabel(keybindings, binding, fallback, keyLabels);
+                  const progressNow = () => {
+                    const now = Date.now();
+                    if (view.run.state !== "running") {
+                      if (previousRunState === "running") frozenAt = now;
+                      previousRunState = view.run.state;
+                      return frozenAt;
+                    }
+                    frozenAt = now;
+                    previousRunState = "running";
+                    return now;
+                  };
                   const selectedAgentRecord = (): AgentRecord | undefined => {
                     const node = selectedNodeId ? tree.byId.get(selectedNodeId) : tree.nodes[0];
                     return node?.kind === "agent" && node.agentId ? view.agents.find((agent) => agent.id === node.agentId) : undefined;
@@ -452,6 +465,13 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                     return agent ? agentActionLabels(view, agent) : [...view.actions.keys(), "Back"];
                   };
                   let editorRunning = false;
+                  let timer: ReturnType<typeof setInterval> | undefined;
+                  const stopTimer = () => {
+                    if (timer !== undefined) {
+                      clearInterval(timer);
+                      timer = undefined;
+                    }
+                  };
                   const openArtifact = async (artifact: Promise<WorkflowArtifact>, label: string): Promise<void> => {
                     if (editorRunning) return;
                     editorRunning = true;
@@ -478,6 +498,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                     const previousExpanded = expandedNodeIds;
                     const selectedAction = actionMode ? actionOptions()[actionIndex] : undefined;
                     view = next;
+                    if (hardTerminalRunStates.has(next.run.state)) stopTimer();
                     tree = buildWorkflowPhaseTree(view.phaseModel);
                     selectedNodeId = preserveWorkflowPhaseTreeSelection(tree, { nodeId: previousNodeId }).nodeId;
                     expandedNodeIds = new Set([...previousExpanded].filter((id) => tree.byId.has(id)));
@@ -507,12 +528,13 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                       if (!disposed) tui.requestRender();
                     });
                   };
-                  const timer = setInterval(() => {
+                  timer = setInterval(() => {
                     if (refreshing || stopRequested) return;
                     refreshing = true;
                     void updateDashboard().catch(() => undefined).finally(() => { refreshing = false; });
                   }, 1000);
                   timer.unref();
+                  if (hardTerminalRunStates.has(view.run.state)) stopTimer();
                   return {
                     render(width: number) {
                       renderedWidth = width;
@@ -520,7 +542,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                       const styles = themeWorkflowProgressStyles(theme);
                       const agent = selectedAgentRecord();
                       const actions = actionMode ? { title: agent ? "Agent actions" : "Run actions", options: actionOptions(), index: actionIndex } : undefined;
-                      const phaseLines = formatWorkflowPhaseDashboard(view.run, view.snapshot, width, { nodeId: selectedNodeId, expandedNodeIds: [...expandedNodeIds], ...(narrow && !detailsMode && !actionMode ? { treeOnly: true } : {}), ...(narrow && (detailsMode || actionMode) ? { detailsOnly: true } : {}), ...(actions ? { actions } : {}) }, styles);
+                      const phaseLines = formatWorkflowPhaseDashboard(view.run, view.snapshot, width, { nodeId: selectedNodeId, expandedNodeIds: [...expandedNodeIds], ...(narrow && !detailsMode && !actionMode ? { treeOnly: true } : {}), ...(narrow && (detailsMode || actionMode) ? { detailsOnly: true } : {}), ...(actions ? { actions } : {}) }, styles, progressNow());
                       const statusLines = stopStatus ? truncateToVisualLines(styles.error(stopStatus), Number.MAX_SAFE_INTEGER, width, 0).visualLines.map((line) => line.trimEnd()) : [];
                       const content = [...statusLines, ...phaseLines];
                       const rows = terminalRows();
@@ -639,7 +661,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                       }
                       tui.requestRender();
                     },
-                    dispose() { disposed = true; clearInterval(timer); setWorkflowStatus(undefined); },
+                    dispose() { disposed = true; stopTimer(); setWorkflowStatus(undefined); },
                   };
                 })
               : await ctx.ui.select(view.dashboard, [...view.actions.keys(), "Back"]);

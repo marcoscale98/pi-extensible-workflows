@@ -337,7 +337,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   };
   type ForegroundDetachResult = { runId: string; state: "running"; detached: true; run: PersistedRun };
   type ForegroundDelivery = { store: RunStore; inline: boolean; detached: boolean; detach: () => Promise<ForegroundDetachResult>; timer?: ReturnType<typeof setTimeout> };
-  type PendingFailureDiagnostic = { diagnostic: WorkflowFailureDiagnostics; run: PersistedRun };
+  type PendingFailureDiagnostic = { diagnostic: WorkflowFailureDiagnostics; store: RunStore };
   const pendingFailureDiagnostics = new Map<string, PendingFailureDiagnostic>();
   const foregroundDeliveries = new Map<string, ForegroundDelivery>();
   const foregroundResumeClaims = new WeakSet<RunStore>();
@@ -414,7 +414,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     const pending = pendingFailureDiagnostics.get(event.toolCallId);
     if (!pending) return;
     pendingFailureDiagnostics.delete(event.toolCallId);
-    return { content: [{ type: "text" as const, text: serializeWorkflowFailureDiagnostics(pending.diagnostic) }], details: { ...pending.diagnostic, run: pending.run }, isError: true };
+    const run = (await pending.store.load()).run;
+    return { content: [{ type: "text" as const, text: serializeWorkflowFailureDiagnostics(pending.diagnostic) }], details: { ...pending.diagnostic, run }, isError: true };
   });
   const deliverTerminal = (store: RunStore, content: string | (() => string | Promise<string>), failure = false): Promise<void> => {
     const previous = terminalDeliveryQueues.get(store) ?? Promise.resolve();
@@ -1181,7 +1182,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         await eventPublisher.runFailed(store, checked.metadata, typed, state);
         const diagnostic = await createWorkflowFailureDiagnostics(store, checked.metadata, typed, persisted);
         markWorkflowFailureDiagnostics(typed, diagnostic);
-        if (params.foreground) pendingFailureDiagnostics.set(toolCallId, { diagnostic, run: persisted });
+        if (params.foreground) pendingFailureDiagnostics.set(toolCallId, { diagnostic, store });
         throw typed;
       });
       const completion = finish.finally(() => cleanupTerminalRun(runId));
@@ -1248,13 +1249,6 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     },
     renderResult(result, { isPartial, expanded }, theme, context) {
       const details = result.details;
-      if (isWorkflowFailureDiagnostics(details)) {
-        const failureRun = object(details) && isPersistedRun(details.run) ? details.run : undefined;
-        if (!failureRun) return textBlock(formatWorkflowFailureDiagnostics(details));
-        const failure = workflowProgressBlock(failureRun, theme, undefined, undefined, undefined, formatWorkflowFailureDiagnostics(details));
-        failure.setExpanded(expanded);
-        return failure;
-      }
       const runDetails = isWorkflowToolResult(details) ? details : undefined;
       const state = context.state;
       if (runDetails?.run && isPartial && runDetails.run.state === "running" && !state.workflowSpinner) {
@@ -1263,6 +1257,15 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       } else if ((!isPartial || runDetails?.run?.state !== "running") && state.workflowSpinner) {
         clearInterval(state.workflowSpinner);
         delete state.workflowSpinner;
+      }
+      if (isWorkflowFailureDiagnostics(details)) {
+        delete state.workflowProgress;
+        delete state.workflowProgressComponent;
+        const failureRun = object(details) && isPersistedRun(details.run) ? details.run : undefined;
+        if (!failureRun) return textBlock(formatWorkflowFailureDiagnostics(details));
+        const failure = workflowProgressBlock(failureRun, theme, undefined, undefined, undefined, formatWorkflowFailureDiagnostics(details));
+        failure.setExpanded(expanded);
+        return failure;
       }
       if (runDetails?.run) {
         const incoming = runDetails.run;

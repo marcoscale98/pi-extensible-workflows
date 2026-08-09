@@ -108,6 +108,48 @@ void test("inline workflow progress rebases runtime after pause and resume", () 
     Date.now = previousNow;
   }
 });
+void test("terminal inline progress freezes stale child animation and stall duration", () => {
+  const previousNow = Date.now;
+  let now = 12 * 60 * 60 * 1000;
+  Date.now = () => now;
+  try {
+    const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-terminal-progress-"));
+    const tools: Array<{ name: string; renderResult?: (result: unknown, options: unknown, theme: unknown, context: unknown) => { render: (width: number) => string[] } }> = [];
+    workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow"] }), home);
+    const tool = tools.find(({ name }) => name === "workflow");
+    assert.ok(tool?.renderResult);
+    const child = makeAgent({ activity: { kind: "text", text: "responding" }, lastEventAt: now - WORKFLOW_AGENT_STALL_THRESHOLD_MS });
+    const terminal = makeRun({ cwd: home, state: "failed", agents: [child] });
+    const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+    const component = tool.renderResult({ content: [], details: { run: terminal } }, { expanded: false, isPartial: false }, theme, { state: {}, cwd: home, invalidate: () => {} });
+    const initial = component.render(200).join("\n");
+    assert.match(initial, /stalled\? 10m/);
+    now += 60 * 60 * 1000;
+    assert.equal(component.render(200).join("\n"), initial);
+  } finally {
+    Date.now = previousNow;
+  }
+});
+void test("final failure rendering clears inline progress invalidations", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-failure-progress-"));
+  const tools: Array<{ name: string; renderResult?: (result: unknown, options: unknown, theme: unknown, context: unknown) => { render: (width: number) => string[] } }> = [];
+  workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["workflow"] }), home);
+  const tool = tools.find(({ name }) => name === "workflow");
+  assert.ok(tool?.renderResult);
+  const state: { workflowSpinner?: ReturnType<typeof setInterval>; workflowProgress?: unknown; workflowProgressComponent?: unknown } = {};
+  let invalidations = 0;
+  const context = { state, cwd: home, invalidate: () => { invalidations += 1; } };
+  const running = makeRun({ cwd: home });
+  const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+  tool.renderResult({ content: [], details: { run: running } }, { expanded: false, isPartial: true }, theme, context);
+  assert.ok(state.workflowSpinner);
+  const failure = { runId: "run", workflowName: "test", state: "failed", failedAt: null, error: { code: "INTERNAL_ERROR", message: "boom" }, completedSiblingPaths: [], artifacts: { runDirectory: home, statePath: join(home, "state.json"), journalPath: join(home, "journal.json") } };
+  tool.renderResult({ content: [], details: failure }, { expanded: false, isPartial: false }, theme, context);
+  assert.equal(state.workflowSpinner, undefined);
+  const after = invalidations;
+  await new Promise<void>((resolve) => setTimeout(resolve, 180));
+  assert.equal(invalidations, after);
+});
 void test("workflow progress shows active shell operations with start and elapsed time", () => {
   const now = 65_432;
   const run = makeRun({ workflowName: "shell-progress", activeShells: 2, activeShellStartedAt: 0 });

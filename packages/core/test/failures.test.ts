@@ -216,6 +216,47 @@ void test("foreground failures patch finalized tool results with bounded diagnos
   assert.equal(emptyResult.isError, true);
   assert.equal(emptyDiagnostic.error.message, "The workflow failed without an error message.");
 });
+void test("foreground failure results reload settled sibling agent states", async () => {
+  const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
+  let toolResultHandler: ToolResultHandler | undefined;
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-final-failure-state-"));
+  let releaseGood!: () => void;
+  const goodHold = new Promise<void>((resolve) => { releaseGood = resolve; });
+  let goodActive = false;
+  let goodAborted = false;
+  const createSession = async (input: SessionInput): Promise<TestPiSession> => {
+    return {
+      sessionId: `final-failure-${input.sessionLabel}`, sessionFile: `/sessions/final-failure-${input.sessionLabel}.jsonl`,
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+      getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
+      async prompt(text) {
+        if (text.includes("Task:\ngood")) { goodActive = true; await goodHold; if (goodAborted) throw new WorkflowError("CANCELLED", "good cancelled"); return; }
+        throw new Error("sibling failure");
+      },
+      abort: async () => { if (goodActive) { goodAborted = true; releaseGood(); } },
+      steer: async () => {},
+      dispose() {},
+    };
+  };
+  workflowExtension(testExtensionApi({
+    registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {},
+    on(name: string, handler: unknown) { if (name === "tool_result" && isToolResultHandler(handler)) toolResultHandler = handler; },
+    getThinkingLevel: () => "medium", getActiveTools: () => ["workflow"],
+  }), home, async () => {}, testTransport(createSession));
+  const workflow = tools.find(({ name }) => name === "workflow");
+  assert.ok(workflow && toolResultHandler);
+  const context = { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } };
+  const running = workflow.execute("final-failure", { name: "final-failure", concurrency: 2, script: `return parallel("siblings", { good: () => agent("good"), bad: () => agent("bad") });`, foreground: true }, new AbortController().signal, undefined, context);
+  const rejected = assert.rejects(running, WorkflowError);
+  await rejected;
+  const patched = await toolResultHandler({ type: "tool_result", toolName: "workflow", toolCallId: "final-failure", input: {}, content: [{ type: "text", text: "old" }], details: {}, isError: true }, testExtensionContext);
+  assert.ok(patched);
+  const result = decodeTestToolResult(patched);
+  if (!isTestRecord(result.details) || !isTestRecord(result.details.run) || !Array.isArray(result.details.run.agents)) throw new Error("Final failure result did not include persisted agents");
+  const states = new Map(result.details.run.agents.filter(isTestRecord).flatMap((agent) => Array.isArray(agent.structuralPath) && typeof agent.structuralPath.at(-1) === "string" ? [[agent.structuralPath.at(-1) as string, agent.state] as const] : []));
+  assert.equal(states.get("good"), "cancelled");
+  assert.equal(states.get("bad"), "failed");
+});
 void test("failure diagnostics retain identity and retry fields when long sibling lists are truncated", async () => {
   type Tool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
   const tools: Tool[] = [];

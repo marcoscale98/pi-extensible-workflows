@@ -387,6 +387,8 @@ export type WorkflowProgressRenderState = { workflowSpinner?: ReturnType<typeof 
 export function workflowProgressBlock(run: PersistedRun, theme: Theme, progress?: WorkflowProgressRefreshState, refresh?: () => Promise<PersistedRun | undefined>, invalidate?: () => void, prefix?: string) {
   const styles = themeWorkflowProgressStyles(theme);
   let expanded = false;
+  let frozenAt = Date.now();
+  let previousState = run.state;
   const currentRun = () => {
     const displayed = progress?.run ?? run;
     if (!progress || displayed.state !== "running") return displayed;
@@ -395,8 +397,17 @@ export function workflowProgressBlock(run: PersistedRun, theme: Theme, progress?
   };
   return {
     render(width: number) {
-      const frame = workflowSpinner[Math.floor(Date.now() / 80) % workflowSpinner.length] ?? "◇";
-      const progressText = formatWorkflowProgress(currentRun(), frame, styles, Date.now(), expanded, width, true);
+      const displayed = currentRun();
+      let now = Date.now();
+      if (displayed.state !== "running") {
+        if (previousState === "running") frozenAt = now;
+        now = frozenAt;
+      } else {
+        frozenAt = now;
+      }
+      previousState = displayed.state;
+      const frame = displayed.state === "running" ? workflowSpinner[Math.floor(now / 80) % workflowSpinner.length] ?? "◇" : "◇";
+      const progressText = formatWorkflowProgress(displayed, frame, styles, now, expanded, width, true);
       return truncateWorkflowProgress(prefix ? `${prefix}\n\n${progressText}` : progressText, width);
     },
     setExpanded(value: boolean) { expanded = value; },

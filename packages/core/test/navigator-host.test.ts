@@ -487,13 +487,14 @@ void test("navigator dashboard auto-refreshes the selected run", async () => {
   const commands: Array<{ handler: (args: string, ctx: unknown) => Promise<void> }> = [];
   workflowExtension(testExtensionApi({ registerTool() {}, registerCommand(_name: string, options: (typeof commands)[number]) { commands.push(options); }, on() {}, getThinkingLevel: () => "medium" as const, getActiveTools: () => ["workflow"] }), home);
   let selectCall = 0;
+  let refreshRenders = 0;
   const ctx = {
     cwd, mode: "tui", hasUI: true, sessionManager: { getSessionId: () => "session" },
     ui: {
       notify() {}, confirm: async () => false,
       select: async (_prompt: string, options: string[]) => { selectCall += 1; return selectCall === 1 ? options[0] : "Close"; },
       custom: async (factory: (tui: { terminal: { rows: number }; requestRender(): void }, theme: { fg(color: string, text: string): string }, keybindings: { matches(data: string, binding: string): boolean }, done: (value?: string) => void) => { render(width: number): string[]; handleInput?(data: string): void; dispose?(): void }) => {
-        const component = factory({ terminal: { rows: 8 }, requestRender() {} }, { fg: (_color, text) => text }, { matches: (data, binding) => data === binding }, () => {});
+        const component = factory({ terminal: { rows: 8 }, requestRender() { refreshRenders += 1; } }, { fg: (_color, text) => text }, { matches: (data, binding) => data === binding }, () => {});
         component.handleInput?.("tui.select.down");
         component.handleInput?.("tui.select.down");
         const before = component.render(200);
@@ -514,6 +515,7 @@ void test("navigator dashboard auto-refreshes the selected run", async () => {
         const bottom = component.render(200);
         assert.ok(bottom.length <= 8);
         assert.match(bottom.join("\n"), /agent-11/);
+        const terminalRefreshStart = refreshRenders;
         const shrunk = await store.load();
         await store.saveState({ ...shrunk.run, state: "completed", agents: [] });
         await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -521,6 +523,10 @@ void test("navigator dashboard auto-refreshes the selected run", async () => {
         assert.ok(compact.length <= 8);
         assert.match(compact.join("\n"), /Workflow/);
         assert.doesNotMatch(compact.join("\n"), /→ Stop/);
+        assert.ok(refreshRenders > terminalRefreshStart);
+        const terminalRefreshCount = refreshRenders;
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        assert.equal(refreshRenders, terminalRefreshCount);
         component.dispose?.();
         return undefined;
       },
