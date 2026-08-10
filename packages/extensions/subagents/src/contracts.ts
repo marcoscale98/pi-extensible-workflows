@@ -8,12 +8,10 @@ import type { SubagentWorktreeAdapter } from "./worktree.js";
 
 export const SUBAGENTS_TOOL_NAMES = [
   "subagents_run",
-  "subagents_status",
-  "subagents_result",
+  "subagents_inspect",
   "subagents_steer",
   "subagents_stop",
   "subagents_retry",
-  "subagents_list",
 ] as const;
 
 const SUBAGENTS_ROLE_OVERRIDE = Type.Object({
@@ -30,8 +28,14 @@ const SUBAGENTS_ROLE_OVERRIDE = Type.Object({
   }, { additionalProperties: false }), Type.Null()])),
 }, { additionalProperties: false });
 
+const SUBAGENTS_MODE = Type.Union([
+  Type.Literal("background"),
+  Type.Literal("foreground"),
+], { description: "Launch mode; background is the default and foreground waits for the terminal envelope" });
+
 export const SUBAGENTS_RUN_PARAMETERS = Type.Object({
   prompt: Type.String({ description: "Task for the subagent" }),
+  mode: Type.Optional(SUBAGENTS_MODE),
   label: Type.Optional(Type.String({ description: "Optional display label for the subagent" })),
   model: Type.Optional(Type.String({ description: "Optional model selection" })),
   thinking: Type.Optional(Type.String({ description: "Optional thinking level" })),
@@ -43,11 +47,13 @@ export const SUBAGENTS_RUN_PARAMETERS = Type.Object({
   timeoutMs: Type.Optional(Type.Union([Type.Integer({ minimum: 1, description: "Optional execution timeout in milliseconds" }), Type.Null()])),
 }, { additionalProperties: false });
 
-export const SUBAGENTS_STATUS_PARAMETERS = Type.Object({
-  id: Type.String({ description: "Subagent ID" }),
+export const SUBAGENTS_SINGLE_AGENT_PARAMETERS = Type.Omit(SUBAGENTS_RUN_PARAMETERS, ["mode"], { additionalProperties: false });
+
+export const SUBAGENTS_INSPECT_PARAMETERS = Type.Object({
+  id: Type.Optional(Type.String({ description: "Subagent ID; omit to list ordered run summaries" })),
 }, { additionalProperties: false });
 
-export const SUBAGENTS_RESULT_PARAMETERS = Type.Object({
+export const SUBAGENTS_ID_PARAMETERS = Type.Object({
   id: Type.String({ description: "Subagent ID" }),
 }, { additionalProperties: false });
 
@@ -61,19 +67,15 @@ export const SUBAGENTS_STOP_PARAMETERS = Type.Object({
 }, { additionalProperties: false });
 
 export const SUBAGENTS_RETRY_PARAMETERS = Type.Object({
-  id: Type.String({ description: "Subagent ID" }),
+  id: Type.String({ description: "Failed or stopped subagent ID to retry" }),
 }, { additionalProperties: false });
-
-export const SUBAGENTS_LIST_PARAMETERS = Type.Object({}, { additionalProperties: false });
 
 export const SUBAGENTS_TOOL_SCHEMAS = {
   subagents_run: SUBAGENTS_RUN_PARAMETERS,
-  subagents_status: SUBAGENTS_STATUS_PARAMETERS,
-  subagents_result: SUBAGENTS_RESULT_PARAMETERS,
+  subagents_inspect: SUBAGENTS_INSPECT_PARAMETERS,
   subagents_steer: SUBAGENTS_STEER_PARAMETERS,
   subagents_stop: SUBAGENTS_STOP_PARAMETERS,
   subagents_retry: SUBAGENTS_RETRY_PARAMETERS,
-  subagents_list: SUBAGENTS_LIST_PARAMETERS,
 } as const;
 
 export type SubagentRunRequest = Static<typeof SUBAGENTS_RUN_PARAMETERS>;
@@ -82,12 +84,19 @@ export function normalizeSubagentRunRequest(value: unknown): SubagentRunRequest 
   validateAgentOptions(value);
   if (typeof value.worktree === "string" && !value.worktree.trim()) throw new WorkflowError("INVALID_METADATA", "worktree name must be a non-empty string");
   const snapshot = structuredClone(value);
+  snapshot.mode ??= "background";
   if (snapshot.worktree !== undefined) snapshot.worktree = snapshot.worktree.trim();
   return snapshot;
 }
-export type SubagentIdRequest = Static<typeof SUBAGENTS_STATUS_PARAMETERS>;
+
+export function normalizeSingleAgentRequest(value: unknown): SubagentRunRequest {
+  if (!Value.Check(SUBAGENTS_SINGLE_AGENT_PARAMETERS, value)) throw new WorkflowError("INVALID_METADATA", "Invalid singleAgent parameters");
+  return normalizeSubagentRunRequest(value);
+}
+
+export type SubagentInspectRequest = Static<typeof SUBAGENTS_INSPECT_PARAMETERS>;
+export type SubagentIdRequest = Static<typeof SUBAGENTS_ID_PARAMETERS>;
 export type SubagentSteerRequest = Static<typeof SUBAGENTS_STEER_PARAMETERS>;
-export type SubagentListRequest = Static<typeof SUBAGENTS_LIST_PARAMETERS>;
 export type SubagentUsage = {
   readonly tokens: {
     readonly input: number;
@@ -102,6 +111,8 @@ export type SubagentProgress = Pick<AgentProgress, "accounting" | "toolCalls" | 
 export interface SubagentStatus {
   readonly id: string;
   readonly state: "running" | "completed" | "failed" | "stopped";
+  readonly startedAt?: number;
+  readonly finishedAt?: number;
   readonly worktree?: { readonly path: string; readonly branch: string };
   readonly error?: { readonly code: string; readonly message: string };
   readonly progress?: SubagentProgress;
@@ -153,12 +164,10 @@ export interface SubagentManagerDependencies {
 }
 export interface SubagentManager {
   run(request: Readonly<SubagentRunRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
-  status(request: Readonly<SubagentIdRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
-  result(request: Readonly<SubagentIdRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
+  inspect(request: Readonly<SubagentInspectRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
   steer(request: Readonly<SubagentSteerRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
   stop(request: Readonly<SubagentIdRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
   retry(request: Readonly<SubagentIdRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
-  list(request: Readonly<SubagentListRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
   dispose?(): Promise<void>;
 }
 

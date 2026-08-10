@@ -35,6 +35,7 @@ import {
 import {
   SUBAGENTS_TOOL_NAMES,
   normalizeSubagentRunRequest,
+  type SubagentInspectRequest,
   type SubagentLiveness,
   type SubagentManager,
   type SubagentManagerContext,
@@ -74,6 +75,10 @@ type PersistedSubagentStatus = SubagentStatus & { startedAt: number; finishedAt?
 type SubagentSession = NonNullable<AgentAttempt["liveSession"]>;
 type TerminalSummary = PersistedSubagentStatus;
 type SteerHandler = (message: string) => void | Promise<void>;
+type ForegroundResult =
+  | { readonly id: string; readonly state: "completed"; readonly value: JsonValue }
+  | { readonly id: string; readonly state: "failed"; readonly error: SubagentFailure }
+  | { readonly id: string; readonly state: "stopped" };
 type PersistedProgress = SubagentProgress;
 type LiveRun = {
   readonly id: string;
@@ -83,9 +88,13 @@ type LiveRun = {
   readonly owner: SubagentOwnerMarker;
   readonly controller: AbortController;
   readonly promise: Promise<AgentExecutionResult>;
+  readonly terminal: Promise<ForegroundResult>;
+  readonly resolveTerminal: (result: ForegroundResult) => void;
   state: SubagentState;
   finishedAt?: number;
   error: SubagentFailure | undefined;
+  value: JsonValue | undefined;
+  cancelled: boolean;
   session: SubagentSession | undefined;
   progress: PersistedProgress | undefined;
   accounting: AgentAccounting | undefined;
@@ -107,6 +116,7 @@ type LiveRun = {
   disposed: boolean;
   concurrencyReleased: boolean;
   notificationSent: boolean;
+  terminalResolved: boolean;
   writes: Promise<void>;
 };
 type SubagentOwnerLease = {
@@ -521,6 +531,8 @@ function publicStatus(status: SubagentStatus): SubagentStatus {
   return {
     id: status.id,
     state: status.state,
+    ...(status.startedAt === undefined ? {} : { startedAt: status.startedAt }),
+    ...(status.finishedAt === undefined ? {} : { finishedAt: status.finishedAt }),
     ...(status.worktree === undefined ? {} : { worktree: { ...status.worktree } }),
     ...(status.error === undefined ? {} : { error: { ...status.error } }),
     ...(status.progress === undefined ? {} : { progress: structuredClone(status.progress) }),
@@ -753,10 +765,11 @@ class PersistentSubagentManager implements SubagentManager {
     if (this.initializationError) throw this.initializationError;
   }
   async run(request: Readonly<SubagentRunRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown> {
-    return this.start(checkedRequest(request), context);
+    const run = await this.start(checkedRequest(request), context);
+    return run.request.mode === "foreground" ? run.terminal : { id: run.id, state: "running" };
   }
 
-  private async start(snapshot: SubagentRunRequest, context: Readonly<SubagentManagerContext>): Promise<unknown> {
+  private async start(snapshot: SubagentRunRequest, context: Readonly<SubagentManagerContext>): Promise<LiveRun> {
     await this.ensureInitialized();
     if (this.disposed) throw new WorkflowError("CANCELLED", "Subagent manager is disposed");
     if (context.signal?.aborted) throw new WorkflowError("CANCELLED", "Subagent cancelled");
@@ -778,6 +791,8 @@ class PersistentSubagentManager implements SubagentManager {
       throw internalStorageError(error, `Unable to start subagent ${id}`);
     }
     const current: { run?: LiveRun } = {};
+    let resolveTerminal!: (result: ForegroundResult) => void;
+    const terminal = new Promise<ForegroundResult>((resolve) => { resolveTerminal = resolve; });
     const executorOwnership = { default: true };
     const execution = Promise.resolve().then(async () => {
       const live = current.run;
@@ -824,7 +839,7 @@ class PersistentSubagentManager implements SubagentManager {
       if (injectedExecutor) return injectedExecutor.execute(snapshot.prompt, options, controller.signal, setSteer);
       return new WorkflowAgentExecutor(root, transport).execute(snapshot.prompt, options, controller.signal, [], setSteer);
     });
-    const run: LiveRun = { id, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, state: "running", error: undefined, session: undefined, progress: undefined, accounting: undefined, usage: undefined, activity: undefined, toolCalls: undefined, lastEventAt: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, sessionAbort: undefined, sessionDispose: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, writes: Promise.resolve() };
+    const run: LiveRun = { id, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, terminal, resolveTerminal, state: "running", error: undefined, value: undefined, cancelled: false, session: undefined, progress: undefined, accounting: undefined, usage: undefined, activity: undefined, toolCalls: undefined, lastEventAt: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, sessionAbort: undefined, sessionDispose: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, terminalResolved: false, writes: Promise.resolve() };
     current.run = run;
     this.activeRuns.set(id, run);
     const externalSignal = context.signal;
@@ -836,35 +851,27 @@ class PersistentSubagentManager implements SubagentManager {
       if (externalSignal.aborted) this.abortRun(run);
     }
     this.observe(run);
-    return { id, state: "running" };
+    return run;
   }
 
-  async status(request: Readonly<{ id: string }>): Promise<unknown> {
-    const id = checkedId(request);
+  async inspect(request: Readonly<SubagentInspectRequest>): Promise<unknown> {
     await this.ensureInitialized();
-    const active = this.activeRuns.get(id);
-    if (active) return publicStatus(persistedStatus(active));
-    const summary = this.terminalSummaries.get(id);
-    if (summary) return publicStatus(summary);
-    return publicStatus(await loadPersistedStatus(storageDirectory(this.dependencies), id));
-  }
-
-  async result(request: Readonly<{ id: string }>): Promise<unknown> {
-    const id = checkedId(request);
-    await this.ensureInitialized();
-    const active = this.activeRuns.get(id);
-    const status = active ? persistedStatus(active) : this.terminalSummaries.get(id) ?? await loadPersistedStatus(storageDirectory(this.dependencies), id);
-    if (status.state === "running") return { id, state: "running" };
-    if (status.state === "stopped") return { id, state: "stopped" };
-    if (status.state === "failed") {
-      const failure = status.error ?? await loadPersistedFailure(storageDirectory(this.dependencies), id);
-      return { id, error: { ...failure } };
+    if (request.id !== undefined) {
+      const id = checkedId({ id: request.id });
+      const active = this.activeRuns.get(id);
+      const status = active ? persistedStatus(active) : this.terminalSummaries.get(id) ?? await loadPersistedStatus(storageDirectory(this.dependencies), id);
+      const inspection = publicStatus(status);
+      if (status.state === "completed") return { ...inspection, value: await loadPersistedResult(storageDirectory(this.dependencies), id) };
+      if (status.state === "failed") {
+        const failure = status.error ?? await loadPersistedFailure(storageDirectory(this.dependencies), id);
+        return { ...inspection, error: { ...failure } };
+      }
+      return inspection;
     }
-    return { id, value: await loadPersistedResult(storageDirectory(this.dependencies), id) };
+    return this.inspectList();
   }
 
-  async list(): Promise<unknown> {
-    await this.ensureInitialized();
+  private async inspectList(): Promise<unknown> {
     const root = storageDirectory(this.dependencies);
     await secureDirectory(root);
     const entries = await readdir(root, { withFileTypes: true });
@@ -931,7 +938,8 @@ class PersistentSubagentManager implements SubagentManager {
     const active = this.activeRuns.get(id);
     const status = active ? persistedStatus(active) : this.terminalSummaries.get(id) ?? await loadPersistedStatus(storageDirectory(this.dependencies), id);
     if (status.state !== "failed" && status.state !== "stopped") throw new WorkflowError("AGENT_FAILED", `Subagent ${id} is not retryable`);
-    return this.start(await loadPersistedRequest(storageDirectory(this.dependencies), id), context);
+    const run = await this.start(await loadPersistedRequest(storageDirectory(this.dependencies), id), context);
+    return run.request.mode === "foreground" ? run.terminal : { id: run.id, state: "running" };
   }
 
   private releaseConcurrency(run: LiveRun): void {
@@ -990,9 +998,11 @@ class PersistentSubagentManager implements SubagentManager {
 
   private abortRun(run: LiveRun): void {
     if (run.disposed || run.state !== "running") return;
+    if (run.request.mode === "foreground") run.cancelled = true;
     run.controller.abort();
     this.clearSteering(run);
     void this.cleanupSession(run, false).catch(() => undefined);
+    if (run.request.mode === "foreground") void this.settleFailure(run, new WorkflowError("CANCELLED", "Subagent cancelled")).catch(() => undefined);
   }
 
   private clearSteering(run: LiveRun): void {
@@ -1056,6 +1066,7 @@ class PersistentSubagentManager implements SubagentManager {
           statusError ??= error;
         }
       }
+      this.resolveTerminal(run);
       if (disposeSession) {
         run.disposed = true;
         this.removeLiveRun(run);
@@ -1071,6 +1082,7 @@ class PersistentSubagentManager implements SubagentManager {
       await this.cleanupSession(run, true);
       const worktreeCleaned = await this.cleanupWorktree(run);
       if (worktreeCleaned) await enqueueWrite(run, () => atomicJson(statusPath(run.directory), persistedStatus(run)));
+      this.resolveTerminal(run);
       this.removeLiveRun(run);
     }
   }
@@ -1120,8 +1132,8 @@ class PersistentSubagentManager implements SubagentManager {
   }
 
   private async settleSuccess(run: LiveRun, result: AgentExecutionResult): Promise<void> {
-    if (run.disposed || run.state === "stopped") {
-      if (!run.disposed) await this.finishTerminal(run);
+    if (run.disposed || run.state !== "running") {
+      if (!run.disposed && run.state === "stopped") await this.finishTerminal(run);
       return;
     }
     try {
@@ -1130,6 +1142,7 @@ class PersistentSubagentManager implements SubagentManager {
       if (latest) this.recordAttemptAccounting(run, latest.accounting);
       const value = structuredClone(result.value);
       await enqueueWrite(run, () => atomicJson(resultPath(run.directory), value));
+      run.value = value;
       if (this.terminalOrDisposed(run)) {
         await this.finishTerminal(run);
         return;
@@ -1144,8 +1157,8 @@ class PersistentSubagentManager implements SubagentManager {
   }
 
   private async settleFailure(run: LiveRun, error: unknown): Promise<void> {
-    if (run.disposed || run.state === "stopped") {
-      if (!run.disposed) await this.finishTerminal(run);
+    if (run.disposed || run.state !== "running") {
+      if (!run.disposed && run.state === "stopped") await this.finishTerminal(run);
       return;
     }
     const candidate = typeof error === "object" && error !== null ? (error as { attempts?: unknown }).attempts : undefined;
@@ -1160,7 +1173,7 @@ class PersistentSubagentManager implements SubagentManager {
     }
     run.state = "failed";
     this.releaseConcurrency(run);
-    run.error = failureFrom(error);
+    run.error = run.cancelled ? { code: "CANCELLED", message: "Subagent cancelled" } : failureFrom(error);
     run.finishedAt = Date.now();
     try {
       await enqueueWrite(run, () => atomicJson(failurePath(run.directory), run.error));
@@ -1170,12 +1183,30 @@ class PersistentSubagentManager implements SubagentManager {
     await this.finishTerminal(run);
   }
 
+  private resolveTerminal(run: LiveRun): void {
+    if (run.terminalResolved) return;
+    run.terminalResolved = true;
+    if (run.state === "completed" && run.value !== undefined) {
+      run.resolveTerminal({ id: run.id, state: "completed", value: structuredClone(run.value) });
+      return;
+    }
+    if (run.state === "failed") {
+      run.resolveTerminal({ id: run.id, state: "failed", error: { ...(run.error ?? { code: "AGENT_FAILED", message: "Subagent failed" }) } });
+      return;
+    }
+    run.resolveTerminal({ id: run.id, state: "stopped" });
+  }
+
   private async finishTerminal(run: LiveRun): Promise<void> {
-    if (run.disposed) return;
+    if (run.disposed) {
+      this.resolveTerminal(run);
+      return;
+    }
     run.finishedAt ??= Date.now();
     this.clearSteering(run);
     this.removeExternalAbort(run);
     if (!run.executorOwnsSession) await this.cleanupSession(run, true, false);
+    else if (run.request.mode === "foreground" && run.sessionAbort) await run.sessionAbort.then(() => undefined, () => undefined);
     try {
       await this.cleanupWorktree(run);
     } catch {
@@ -1186,11 +1217,13 @@ class PersistentSubagentManager implements SubagentManager {
     } catch {
       // The terminal state remains available in memory when storage becomes unavailable.
     }
+    this.resolveTerminal(run);
     this.removeLiveRun(run);
     if (run.state === "completed" || run.state === "failed") this.notify(run);
   }
 
   private notify(run: LiveRun): void {
+    if (run.request.mode === "foreground") return;
     const notify = this.dependencies.notify;
     if (!notify || run.notificationSent || run.disposed) return;
     run.notificationSent = true;
@@ -1216,24 +1249,20 @@ class PersistentSubagentManager implements SubagentManager {
 export function createUnavailableSubagentManager(): SubagentManager {
   return {
     run: async () => unavailable("run"),
-    status: async () => unavailable("status"),
-    result: async () => unavailable("result"),
+    inspect: async () => unavailable("inspect"),
     steer: async () => unavailable("steer"),
     stop: async () => unavailable("stop"),
     retry: async () => unavailable("retry"),
-    list: async () => unavailable("list"),
   };
 }
 export function createSubagentManager(dependencies: SubagentManagerDependencies = {}): SubagentManager {
   const manager: SubagentManager = new PersistentSubagentManager(dependencies);
   return {
     run: (request, context) => manager.run(request, context),
-    status: (request, context) => manager.status(request, context),
-    result: (request, context) => manager.result(request, context),
+    inspect: (request, context) => manager.inspect(request, context),
     steer: (request, context) => manager.steer(request, context),
     stop: (request, context) => manager.stop(request, context),
     retry: (request, context) => manager.retry(request, context),
-    list: (request, context) => manager.list(request, context),
     dispose: async () => { await manager.dispose?.(); },
   };
 }

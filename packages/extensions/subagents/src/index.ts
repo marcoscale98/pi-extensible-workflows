@@ -2,15 +2,16 @@ import { defineTool, type AgentToolResult, type ExtensionAPI, type ExtensionCont
 import { Type } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
 import { loadingRegistry, registerWorkflowExtension, WorkflowError, type AgentOptions, type JsonSchema, type WorkflowExtension } from "pi-extensible-workflows";
-import type { SubagentIdRequest, SubagentListRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentSteerRequest } from "./contracts.js";
+import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
 import {
+  normalizeSingleAgentRequest,
   normalizeSubagentRunRequest,
-  SUBAGENTS_LIST_PARAMETERS,
-  SUBAGENTS_RESULT_PARAMETERS,
+  SUBAGENTS_ID_PARAMETERS,
+  SUBAGENTS_INSPECT_PARAMETERS,
   SUBAGENTS_RETRY_PARAMETERS,
   SUBAGENTS_RUN_PARAMETERS,
-  SUBAGENTS_STATUS_PARAMETERS,
+  SUBAGENTS_SINGLE_AGENT_PARAMETERS,
   SUBAGENTS_STEER_PARAMETERS,
   SUBAGENTS_STOP_PARAMETERS,
 } from "./contracts.js";
@@ -26,18 +27,18 @@ function validateSubagentRunRequest(value: unknown): SubagentRunRequest {
   return normalizeSubagentRunRequest(value);
 }
 
-function validateSubagentIdRequest(value: unknown, schema: typeof SUBAGENTS_STATUS_PARAMETERS | typeof SUBAGENTS_RESULT_PARAMETERS | typeof SUBAGENTS_STOP_PARAMETERS | typeof SUBAGENTS_RETRY_PARAMETERS, operation: string): SubagentIdRequest {
-  if (!Value.Check(schema, value)) throw new WorkflowError("INVALID_METADATA", `Invalid ${operation} parameters`);
+function validateSubagentIdRequest(value: unknown, operation: string): SubagentIdRequest {
+  if (!Value.Check(SUBAGENTS_ID_PARAMETERS, value)) throw new WorkflowError("INVALID_METADATA", `Invalid ${operation} parameters`);
+  return value;
+}
+
+function validateSubagentInspectRequest(value: unknown): SubagentInspectRequest {
+  if (!Value.Check(SUBAGENTS_INSPECT_PARAMETERS, value)) throw new WorkflowError("INVALID_METADATA", "Invalid subagents_inspect parameters");
   return value;
 }
 
 function validateSubagentSteerRequest(value: unknown): SubagentSteerRequest {
   if (!Value.Check(SUBAGENTS_STEER_PARAMETERS, value)) throw new WorkflowError("INVALID_METADATA", "Invalid subagents_steer parameters");
-  return value;
-}
-
-function validateSubagentListRequest(value: unknown): SubagentListRequest {
-  if (!Value.Check(SUBAGENTS_LIST_PARAMETERS, value)) throw new WorkflowError("INVALID_METADATA", "Invalid subagents_list parameters");
   return value;
 }
 
@@ -84,10 +85,10 @@ const SUBAGENTS_WORKFLOW_EXTENSION = {
   functions: {
     singleAgent: {
       description: "Run one agent inline with the subagents request options.",
-      input: structuredClone(SUBAGENTS_RUN_PARAMETERS),
+      input: structuredClone(SUBAGENTS_SINGLE_AGENT_PARAMETERS),
       output: SUBAGENTS_AGENT_OUTPUT_SCHEMA,
       async run(input, context) {
-        const request = normalizeSubagentRunRequest(input);
+        const request = normalizeSingleAgentRequest(input);
         const options = singleAgentOptions(request);
         if (request.worktree === undefined) return context.agent(request.prompt, options);
         return context.withWorktree(request.worktree, async (reference) => {
@@ -111,34 +112,30 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
     defineTool({
       name: "subagents_run",
       label: "Subagents Run",
-      description: "Start a background subagent and return its ID and status.",
+      description: "Start a durable subagent run. Background mode returns its ID immediately; foreground mode waits and returns the terminal value or error in this tool call. Use the ID with subagents_inspect, subagents_steer, subagents_stop, or subagents_retry.",
+      promptSnippet: "Run durable subagents in background by default; inspect, steer, stop, or retry them with the other subagents tools.",
+      promptGuidelines: [
+        "Runs are background by default; choose mode: \"foreground\" only when the terminal envelope is needed in this turn.",
+        "Do not poll a running ID; use subagents_inspect({ id }) when you need its current status or terminal result.",
+      ],
       parameters: SUBAGENTS_RUN_PARAMETERS,
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.run(validateSubagentRunRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
       },
     }),
     defineTool({
-      name: "subagents_status",
-      label: "Subagents Status",
-      description: "Read the status of a subagent.",
-      parameters: SUBAGENTS_STATUS_PARAMETERS,
+      name: "subagents_inspect",
+      label: "Subagents Inspect",
+      description: "Inspect durable subagent runs. Omit id for ordered run summaries, or provide id for detailed status, progress, activity, accounting, tool calls, timestamps, worktree metadata, and a terminal value or error when available.",
+      parameters: SUBAGENTS_INSPECT_PARAMETERS,
       async execute(toolCallId, params, signal, onUpdate, context) {
-        return toolResult(await manager.status(validateSubagentIdRequest(params, SUBAGENTS_STATUS_PARAMETERS, "subagents_status"), managerContext(toolCallId, signal, onUpdate, context)));
-      },
-    }),
-    defineTool({
-      name: "subagents_result",
-      label: "Subagents Result",
-      description: "Read a subagent result.",
-      parameters: SUBAGENTS_RESULT_PARAMETERS,
-      async execute(toolCallId, params, signal, onUpdate, context) {
-        return toolResult(await manager.result(validateSubagentIdRequest(params, SUBAGENTS_RESULT_PARAMETERS, "subagents_result"), managerContext(toolCallId, signal, onUpdate, context)));
+        return toolResult(await manager.inspect(validateSubagentInspectRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
       },
     }),
     defineTool({
       name: "subagents_steer",
       label: "Subagents Steer",
-      description: "Send a message to a running subagent.",
+      description: "Send a message to a running subagent. The message is queued safely if its steering handler is not ready; settled runs cannot be steered.",
       parameters: SUBAGENTS_STEER_PARAMETERS,
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.steer(validateSubagentSteerRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
@@ -147,36 +144,27 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
     defineTool({
       name: "subagents_stop",
       label: "Subagents Stop",
-      description: "Stop a subagent.",
+      description: "Stop one running subagent, abort its active session, persist state \"stopped\", and clean its worktree without affecting sibling runs.",
       parameters: SUBAGENTS_STOP_PARAMETERS,
       async execute(toolCallId, params, signal, onUpdate, context) {
-        return toolResult(await manager.stop(validateSubagentIdRequest(params, SUBAGENTS_STOP_PARAMETERS, "subagents_stop"), managerContext(toolCallId, signal, onUpdate, context)));
+        return toolResult(await manager.stop(validateSubagentIdRequest(params, "subagents_stop"), managerContext(toolCallId, signal, onUpdate, context)));
       },
     }),
     defineTool({
       name: "subagents_retry",
       label: "Subagents Retry",
-      description: "Retry a subagent.",
+      description: "Start a fresh run from a failed or stopped subagent's persisted request. The new run gets a new ID and preserves its original background or foreground mode.",
       parameters: SUBAGENTS_RETRY_PARAMETERS,
       async execute(toolCallId, params, signal, onUpdate, context) {
-        return toolResult(await manager.retry(validateSubagentIdRequest(params, SUBAGENTS_RETRY_PARAMETERS, "subagents_retry"), managerContext(toolCallId, signal, onUpdate, context)));
-      },
-    }),
-    defineTool({
-      name: "subagents_list",
-      label: "Subagents List",
-      description: "List subagents managed by the extension.",
-      parameters: SUBAGENTS_LIST_PARAMETERS,
-      async execute(toolCallId, params, signal, onUpdate, context) {
-        return toolResult(await manager.list(validateSubagentListRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
+        return toolResult(await manager.retry(validateSubagentIdRequest(params, "subagents_retry"), managerContext(toolCallId, signal, onUpdate, context)));
       },
     }),
   ];
 }
 
 function notificationContent(notification: { id: string; state: "completed" | "failed"; error?: { code: string; message: string } }): string {
-  if (notification.state === "completed") return `Subagent ${notification.id} completed. Read its result with subagents_result({ id: "${notification.id}" }).`;
-  return `Subagent ${notification.id} failed: ${notification.error?.message ?? "unknown error"}. Read its status with subagents_status({ id: "${notification.id}" }).`;
+  if (notification.state === "completed") return `Subagent ${notification.id} completed. Inspect it with subagents_inspect({ id: "${notification.id}" }).`;
+  return `Subagent ${notification.id} failed: ${notification.error?.message ?? "unknown error"}. Inspect it with subagents_inspect({ id: "${notification.id}" }).`;
 }
 function managerDependencies(options: SubagentsExtensionOptions, activeTools: (() => readonly string[]) | undefined, notify: ((notification: SubagentNotification) => void | Promise<void>) | undefined): SubagentsExtensionOptions["managerDependencies"] {
   const dependencies = options.managerDependencies;

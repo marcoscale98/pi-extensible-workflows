@@ -1,6 +1,14 @@
 # Changelog
 ## Unreleased
 
+## [5.4.0] - 2026-08-10
+
+### Subagents
+
+- Consolidated the `@piewf/subagents` model-facing API to `subagents_run`, `subagents_inspect`, `subagents_steer`, `subagents_stop`, and `subagents_retry` ([#198](https://github.com/vekexasia/pi-extensible-workflows/issues/198)).
+- Added foreground standalone subagent runs with durable terminal envelopes, cancellation persistence, retry-mode preservation, and duplicate follow-up suppression.
+- Documented the v5.3-to-v5.4 tool mapping and the distinction between foreground standalone runs and optional `singleAgent` workflow composition.
+
 ## [5.3.0] - 2026-08-09
 
 ### New capabilities

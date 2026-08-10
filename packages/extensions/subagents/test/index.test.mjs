@@ -13,11 +13,11 @@ import extension, {
   createSubagentManager,
   createSubagentTools,
   registerSubagentsExtension,
-  SUBAGENTS_LIST_PARAMETERS,
-  SUBAGENTS_RESULT_PARAMETERS,
+  SUBAGENTS_ID_PARAMETERS,
+  SUBAGENTS_INSPECT_PARAMETERS,
   SUBAGENTS_RETRY_PARAMETERS,
   SUBAGENTS_RUN_PARAMETERS,
-  SUBAGENTS_STATUS_PARAMETERS,
+  SUBAGENTS_SINGLE_AGENT_PARAMETERS,
   SUBAGENTS_STEER_PARAMETERS,
   SUBAGENTS_STOP_PARAMETERS,
 } from "../dist/index.js";
@@ -25,28 +25,24 @@ import extension, {
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const toolNames = [
   "subagents_run",
-  "subagents_status",
-  "subagents_result",
+  "subagents_inspect",
   "subagents_steer",
   "subagents_stop",
   "subagents_retry",
-  "subagents_list",
 ];
 
 function testContext() {
   return {};
 }
 
-test("registers namespaced subagent tools and delegates to an injected manager", async () => {
+test("registers five namespaced subagent tools and delegates to an injected manager", async () => {
   const calls = [];
   const manager = {
     async run(params) { calls.push(["run", params]); return { id: "agent-1", state: "queued" }; },
-    async status(params) { calls.push(["status", params]); return { id: params.id, state: "running" }; },
-    async result(params) { calls.push(["result", params]); return { id: params.id, value: "done" }; },
+    async inspect(params) { calls.push(["inspect", params]); return { id: params.id, state: "running" }; },
     async steer(params) { calls.push(["steer", params]); return { id: params.id, accepted: true }; },
     async stop(params) { calls.push(["stop", params]); return { id: params.id, state: "stopped" }; },
     async retry(params) { calls.push(["retry", params]); return { id: params.id, state: "queued" }; },
-    async list(params) { calls.push(["list", params]); return [{ id: "agent-1" }]; },
   };
   const tools = [];
   extension({ registerTool(tool) { tools.push(tool); } }, { manager });
@@ -54,15 +50,22 @@ test("registers namespaced subagent tools and delegates to an injected manager",
   assert.deepEqual(tools.map(({ name }) => name), toolNames);
   const result = await tools[0].execute("call-1", { prompt: "inspect" }, undefined, undefined, testContext());
   assert.deepEqual(result, { content: [{ type: "text", text: '{"id":"agent-1","state":"queued"}' }], details: { id: "agent-1", state: "queued" } });
-  assert.deepEqual(calls[0], ["run", { prompt: "inspect" }]);
+  assert.deepEqual(calls[0], ["run", { prompt: "inspect", mode: "background" }]);
 });
 
-test("exposes closed tool schemas for each control operation", () => {
-  assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "label", "model", "thinking", "tools", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
+test("exposes closed tool schemas and minimal prompt guidance", () => {
+  assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "mode", "label", "model", "thinking", "tools", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
   assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.required, ["prompt"]);
   assert.equal(SUBAGENTS_RUN_PARAMETERS.additionalProperties, false);
+  assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.properties.mode.anyOf.map(({ const: value }) => value), ["background", "foreground"]);
 
-  for (const schema of [SUBAGENTS_STATUS_PARAMETERS, SUBAGENTS_RESULT_PARAMETERS, SUBAGENTS_STOP_PARAMETERS, SUBAGENTS_RETRY_PARAMETERS]) {
+  assert.deepEqual(Object.keys(SUBAGENTS_INSPECT_PARAMETERS.properties), ["id"]);
+  assert.equal(SUBAGENTS_INSPECT_PARAMETERS.additionalProperties, false);
+  assert.equal(SUBAGENTS_INSPECT_PARAMETERS.required, undefined);
+  assert.deepEqual(Object.keys(SUBAGENTS_SINGLE_AGENT_PARAMETERS.properties), ["prompt", "label", "model", "thinking", "tools", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
+  assert.equal(SUBAGENTS_SINGLE_AGENT_PARAMETERS.additionalProperties, false);
+
+  for (const schema of [SUBAGENTS_ID_PARAMETERS, SUBAGENTS_STOP_PARAMETERS, SUBAGENTS_RETRY_PARAMETERS]) {
     assert.deepEqual(Object.keys(schema.properties), ["id"]);
     assert.deepEqual(schema.required, ["id"]);
     assert.equal(schema.additionalProperties, false);
@@ -70,18 +73,15 @@ test("exposes closed tool schemas for each control operation", () => {
   assert.deepEqual(Object.keys(SUBAGENTS_STEER_PARAMETERS.properties), ["id", "message"]);
   assert.deepEqual(SUBAGENTS_STEER_PARAMETERS.required, ["id", "message"]);
   assert.equal(SUBAGENTS_STEER_PARAMETERS.additionalProperties, false);
-  assert.deepEqual(Object.keys(SUBAGENTS_LIST_PARAMETERS.properties), []);
-  assert.equal(SUBAGENTS_LIST_PARAMETERS.additionalProperties, false);
 });
+
 async function singleAgentManagerStub() {
   return {
     async run() {},
-    async status() {},
-    async result() {},
+    async inspect() {},
     async steer() {},
     async stop() {},
     async retry() {},
-    async list() {},
   };
 }
 
@@ -116,6 +116,10 @@ test("invokes singleAgent through the registry with input and output schema vali
     const journal = { get() { return undefined; }, put() {} };
     await assert.rejects(
       loadingRegistry().invokeFunction("singleAgent", {}, context, "invalid-input", journal),
+      (error) => error?.code === "RESULT_INVALID",
+    );
+    await assert.rejects(
+      loadingRegistry().invokeFunction("singleAgent", { prompt: "structured", mode: "foreground" }, context, "mode-input", journal),
       (error) => error?.code === "RESULT_INVALID",
     );
     assert.deepEqual(await loadingRegistry().invokeFunction("singleAgent", { prompt: "structured" }, context, "structured", journal), { answer: "ok" });
@@ -250,7 +254,7 @@ test("runs one background subagent with context-derived setup and execution opti
   assert.deepEqual(options, { label: "review", workflowName: "subagents", model: "cheap", thinking: "high", tools: ["read"], schema: outputSchema, retries: 2, timeoutMs: 500 });
   assert.notEqual(execution.signal, controller.signal);
   assert.equal(root.runContext.runId, launch.details.id);
-  await waitFor(async () => (await manager.status({ id: launch.details.id }, { toolCallId: "lookup", signal: undefined, extensionContext: context })).state === "completed");
+  await waitFor(async () => (await manager.inspect({ id: launch.details.id }, { toolCallId: "lookup", signal: undefined, extensionContext: context })).state === "completed");
   const roleLaunch = await runTool.execute("call-role", { prompt: "review", label: "role", role: "reviewer" }, controller.signal, undefined, context);
   await waitFor(() => execution?.task === "review");
   assert.equal(roleLaunch.details.state, "running");
@@ -284,10 +288,143 @@ test("preserves role exclusivity and persists a background execution failure", a
   await assert.rejects(runTool.execute("call-2", { prompt: "inspect", role: "reviewer", model: "fixture/cheap" }, controller.signal, undefined, extensionContext), (error) => error?.code === "INVALID_METADATA");
   assert.equal(launches, 0);
   const launched = await runTool.execute("call-3", { prompt: "inspect" }, controller.signal, undefined, extensionContext);
-  await waitFor(async () => (await manager.status({ id: launched.details.id }, context)).state === "failed");
+  await waitFor(async () => (await manager.inspect({ id: launched.details.id }, context)).state === "failed");
   assert.equal(launches, 1);
-  assert.deepEqual(await manager.result({ id: launched.details.id }, context), { id: launched.details.id, error: { code: "AGENT_FAILED", message: "agent failed" } });
+  assert.deepEqual((await manager.inspect({ id: launched.details.id }, context)).error, { code: "AGENT_FAILED", message: "agent failed" });
   await rm(cwd, { recursive: true, force: true });
+});
+test("returns foreground terminal envelopes, preserves mode for retry, and suppresses follow-ups", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-foreground-terminal-"));
+  const storageDir = join(cwd, "subagents-storage");
+  const notifications = [];
+  let failed = false;
+  const manager = createSubagentManager({
+    storageDir,
+    notify(notification) { notifications.push(notification); },
+    createExecutor() {
+      return {
+        async execute(prompt) {
+          if (prompt === "failure" && !failed) {
+            failed = true;
+            throw new Error("foreground failure");
+          }
+          return { value: { prompt }, attempts: [], cwd };
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const success = await manager.run({ prompt: "success", mode: "foreground" }, context);
+    assert.equal(success.state, "completed");
+    assert.deepEqual(success.value, { prompt: "success" });
+    assert.deepEqual(JSON.parse(await readFile(join(storageDir, success.id, "request.json"), "utf8")), { prompt: "success", mode: "foreground" });
+    assert.deepEqual((await manager.inspect({ id: success.id }, context)).value, { prompt: "success" });
+
+    const failure = await manager.run({ prompt: "failure", mode: "foreground" }, context);
+    assert.deepEqual(failure.error, { code: "AGENT_FAILED", message: "foreground failure" });
+    assert.equal(failure.state, "failed");
+    const retry = await manager.retry({ id: failure.id }, context);
+    assert.equal(retry.state, "completed");
+    assert.deepEqual(retry.value, { prompt: "failure" });
+    assert.notEqual(retry.id, failure.id);
+    assert.deepEqual(JSON.parse(await readFile(join(storageDir, retry.id, "request.json"), "utf8")), { prompt: "failure", mode: "foreground" });
+    assert.deepEqual(notifications, []);
+    await assert.rejects(manager.inspect({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }, context), (error) => error?.code === "RUN_NOT_FOUND");
+  } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("cancelling a foreground run aborts its native session and persists CANCELLED", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-foreground-cancel-"));
+  const controller = new AbortController();
+  const started = deferred();
+  const lifecycle = { abort: 0, dispose: 0 };
+  const manager = createSubagentManager({
+    storageDir: join(cwd, "subagents-storage"),
+    createExecutor() {
+      return {
+        async execute(_prompt, options, signal) {
+          const session = {
+            async abort() { lifecycle.abort += 1; },
+            async dispose() { lifecycle.dispose += 1; },
+          };
+          await options.onAttempt?.({ attempt: 1, transport: "test", liveSession: session, accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, setup: { hookNames: [], model: { provider: "fixture", model: "model" }, tools: [], cwd } });
+          started.resolve();
+          return new Promise((resolve, reject) => {
+            void resolve;
+            signal?.addEventListener("abort", () => reject(new Error("native cancelled")), { once: true });
+          });
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  context.signal = controller.signal;
+  try {
+    const pending = manager.run({ prompt: "cancel", mode: "foreground" }, context);
+    await started.promise;
+    controller.abort();
+    const result = await pending;
+    assert.deepEqual(result.error, { code: "CANCELLED", message: "Subagent cancelled" });
+    assert.equal(result.state, "failed");
+    assert.equal(lifecycle.abort, 1);
+    assert.equal(lifecycle.dispose, 1);
+    assert.deepEqual((await manager.inspect({ id: result.id }, context)).error, { code: "CANCELLED", message: "Subagent cancelled" });
+  } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("foreground mode keeps concurrency, timeout failures, and worktree cleanup behavior", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-foreground-lifecycle-"));
+  await mkdir(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ concurrency: 1 }));
+  const pending = deferred();
+  const started = deferred();
+  let cleanupCalls = 0;
+  let timeoutMs;
+  const manager = createSubagentManager({
+    agentDir: join(cwd, "agent"),
+    storageDir: join(cwd, "subagents-storage"),
+    worktreeAdapter: {
+      async create(input) {
+        return { path: join(cwd, "worktree"), branch: `subagent/${input.runId}`, cwd, runStore: {}, async cleanup() { cleanupCalls += 1; } };
+      },
+    },
+    createExecutor() {
+      return {
+        async execute(prompt, options) {
+          timeoutMs = options.timeoutMs;
+          started.resolve();
+          if (prompt === "first") return pending.promise;
+          throw new WorkflowError("AGENT_TIMEOUT", "foreground timeout");
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const first = manager.run({ prompt: "first", mode: "foreground", worktree: "foreground", timeoutMs: 25 }, context);
+    await started.promise;
+    await assert.rejects(manager.run({ prompt: "second", mode: "foreground" }, context), (error) => error?.code === "AGENT_FAILED");
+    pending.resolve({ value: "first", attempts: [], cwd });
+    const completed = await first;
+    assert.deepEqual(completed.value, "first");
+    assert.equal(timeoutMs, 25);
+    assert.equal(cleanupCalls, 1);
+    assert.equal((await manager.inspect({ id: completed.id }, context)).worktree, undefined);
+
+    const timedOut = await manager.run({ prompt: "timeout", mode: "foreground", timeoutMs: 1 }, context);
+    assert.equal(timedOut.state, "failed");
+    assert.deepEqual(timedOut.error, { code: "AGENT_TIMEOUT", message: "foreground timeout" });
+  } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test("discovers the package through its pi manifest", async () => {
@@ -366,25 +503,25 @@ test("runs simultaneous background subagents and settles them independently", as
     await waitFor(() => worktreeInputs.length === 2);
     assert.deepEqual(worktreeInputs.map(({ name }) => name), ["one", "two"]);
     assert.notEqual(worktreeInputs[0].owner, worktreeInputs[1].owner);
-    assert.equal((await manager.status({ id: first.id }, context)).state, "running");
-    assert.equal((await manager.status({ id: second.id }, context)).state, "running");
+    assert.equal((await manager.inspect({ id: first.id }, context)).state, "running");
+    assert.equal((await manager.inspect({ id: second.id }, context)).state, "running");
 
     pending.get("first").resolve({ value: { answer: "one" }, attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "completed");
-    assert.equal((await manager.status({ id: second.id }, context)).state, "running");
-    assert.deepEqual(await manager.result({ id: first.id }, context), { id: first.id, value: { answer: "one" } });
-    assert.deepEqual(await manager.result({ id: first.id }, context), { id: first.id, value: { answer: "one" } });
+    await waitFor(async () => (await manager.inspect({ id: first.id }, context)).state === "completed");
+    assert.equal((await manager.inspect({ id: second.id }, context)).state, "running");
+    assert.deepEqual((await manager.inspect({ id: first.id }, context)).value, { answer: "one" });
+    assert.deepEqual((await manager.inspect({ id: first.id }, context)).value, { answer: "one" });
 
     pending.get("second").resolve({ value: { answer: "two" }, attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: second.id }, context)).state === "completed");
-    const listed = (await manager.list({}, context)).map(({ id, state }) => ({ id, state }));
+    await waitFor(async () => (await manager.inspect({ id: second.id }, context)).state === "completed");
+    const listed = (await manager.inspect({}, context)).map(({ id, state }) => ({ id, state }));
     const expected = await Promise.all([first, second].map(async ({ id }) => ({ id, state: "completed", startedAt: JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8")).startedAt })));
     expected.sort((left, right) => left.startedAt - right.startedAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
     assert.deepEqual(listed, expected.map(({ id, state }) => ({ id, state })));
     const restarted = createSubagentManager({ storageDir });
-    assert.equal((await restarted.status({ id: first.id }, context)).state, "completed");
-    assert.deepEqual(await restarted.result({ id: first.id }, context), { id: first.id, value: { answer: "one" } });
-    assert.deepEqual(await restarted.result({ id: first.id }, context), { id: first.id, value: { answer: "one" } });
+    assert.equal((await restarted.inspect({ id: first.id }, context)).state, "completed");
+    assert.deepEqual((await restarted.inspect({ id: first.id }, context)).value, { answer: "one" });
+    assert.deepEqual((await restarted.inspect({ id: first.id }, context)).value, { answer: "one" });
   } finally {
     for (const run of pending.values()) run.reject(new Error("test cleanup"));
     await rm(cwd, { recursive: true, force: true });
@@ -433,13 +570,13 @@ test("bounds standalone launches by effective workflow concurrency without a que
 
     const first = results[0].value;
     pending.get("first").resolve({ value: "first", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: first.id }, context)).state === "completed");
     await cleanupStarted.promise;
 
     const second = await manager.run({ prompt: "second" }, context);
     await waitFor(() => started.length === 2);
     pending.get("second").resolve({ value: "second", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: second.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: second.id }, context)).state === "completed");
     releaseCleanup.resolve();
   } finally {
     releaseCleanup.resolve();
@@ -491,7 +628,7 @@ test("releases a stopped subagent concurrency slot before worktree cleanup settl
     const first = await manager.run({ prompt: "first", worktree: "first" }, context);
     await waitFor(() => pending.has("first"));
     stopping = manager.stop({ id: first.id }, context);
-    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "stopped");
+    await waitFor(async () => (await manager.inspect({ id: first.id }, context)).state === "stopped");
     await cleanupStarted.promise;
 
     const second = await manager.run({ prompt: "second" }, context);
@@ -505,7 +642,7 @@ test("releases a stopped subagent concurrency slot before worktree cleanup settl
     assert.equal(persisted.worktree, undefined);
     assert.equal(persisted.worktreeContext, undefined);
     pending.get("second").resolve({ value: "second", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: second.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: second.id }, context)).state === "completed");
   } finally {
     releaseCleanup.resolve();
     for (const run of pending.values()) run.reject(new Error("test cleanup"));
@@ -554,7 +691,7 @@ test("bounds failed and retried standalone launches before failed worktree clean
   const context = await managerContext(cwd);
   try {
     const first = await manager.run({ prompt: "retry", worktree: "retry" }, context);
-    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "failed");
+    await waitFor(async () => (await manager.inspect({ id: first.id }, context)).state === "failed");
     await cleanupStarted.promise;
     const retried = await manager.retry({ id: first.id }, context);
     await waitFor(() => pending.has("retry"));
@@ -566,7 +703,7 @@ test("bounds failed and retried standalone launches before failed worktree clean
       return persisted.state === "failed" && persisted.worktree !== undefined && persisted.worktreeContext !== undefined;
     });
     pending.get("retry").resolve({ value: "retried", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: retried.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: retried.id }, context)).state === "completed");
   } finally {
     releaseCleanup.resolve();
     for (const run of pending.values()) run.reject(new Error("test cleanup"));
@@ -596,11 +733,11 @@ test("stopping one background subagent leaves another running", async () => {
     const first = await manager.run({ prompt: "first" }, context);
     const second = await manager.run({ prompt: "second" }, context);
     assert.equal((await manager.stop({ id: first.id }, context)).state, "stopped");
-    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "stopped");
-    assert.equal((await manager.status({ id: second.id }, context)).state, "running");
+    await waitFor(async () => (await manager.inspect({ id: first.id }, context)).state === "stopped");
+    assert.equal((await manager.inspect({ id: second.id }, context)).state, "running");
     pending.get("second").resolve({ value: "second result", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: second.id }, context)).state === "completed");
-    assert.deepEqual(await manager.result({ id: second.id }, context), { id: second.id, value: "second result" });
+    await waitFor(async () => (await manager.inspect({ id: second.id }, context)).state === "completed");
+    assert.equal((await manager.inspect({ id: second.id }, context)).value, "second result");
   } finally {
     for (const run of pending.values()) run.reject(new Error("test cleanup"));
     await rm(cwd, { recursive: true, force: true });
@@ -623,23 +760,23 @@ test("persists failed background subagents for repeatable lookup", async () => {
   const context = await managerContext(cwd);
   try {
     const manager = createSubagentManager(managerDependencies);
-    const launched = await manager.run({ prompt: "fail me", label: "failure" }, context);
-    await waitFor(async () => (await manager.status({ id: launched.id }, context)).state === "failed");
+    const launched = await manager.run({ prompt: "fail me", mode: "background", label: "failure" }, context);
+    await waitFor(async () => (await manager.inspect({ id: launched.id }, context)).state === "failed");
     const expectedFailure = { code: "AGENT_FAILED", message: "agent failed" };
-    assert.deepEqual(await manager.result({ id: launched.id }, context), { id: launched.id, error: expectedFailure });
-    assert.deepEqual(await manager.result({ id: launched.id }, context), { id: launched.id, error: expectedFailure });
+    assert.deepEqual((await manager.inspect({ id: launched.id }, context)).error, expectedFailure);
+    assert.deepEqual((await manager.inspect({ id: launched.id }, context)).error, expectedFailure);
 
     const runDirectory = join(storageDir, launched.id);
     assert.equal((await stat(storageDir)).mode & 0o777, 0o700);
     assert.equal((await stat(runDirectory)).mode & 0o777, 0o700);
     assert.equal((await stat(join(runDirectory, "request.json"))).mode & 0o777, 0o600);
-    assert.deepEqual(JSON.parse(await readFile(join(runDirectory, "request.json"), "utf8")), { prompt: "fail me", label: "failure" });
+    assert.deepEqual(JSON.parse(await readFile(join(runDirectory, "request.json"), "utf8")), { prompt: "fail me", mode: "background", label: "failure" });
     assert.deepEqual(JSON.parse(await readFile(join(runDirectory, "failure.json"), "utf8")), expectedFailure);
 
     const restarted = createSubagentManager(managerDependencies);
-    assert.equal((await restarted.status({ id: launched.id }, context)).state, "failed");
-    assert.deepEqual(await restarted.result({ id: launched.id }, context), { id: launched.id, error: expectedFailure });
-    assert.deepEqual((await restarted.list({}, context)).map(({ id, state }) => ({ id, state })), [{ id: launched.id, state: "failed" }]);
+    assert.equal((await restarted.inspect({ id: launched.id }, context)).state, "failed");
+    assert.deepEqual((await restarted.inspect({ id: launched.id }, context)).error, expectedFailure);
+    assert.deepEqual((await restarted.inspect({}, context)).map(({ id, state }) => ({ id, state })), [{ id: launched.id, state: "failed" }]);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -656,10 +793,11 @@ test("reconciles orphaned running records after a manager restart", async () => 
   const manager = createSubagentManager({ storageDir });
   const context = await managerContext(cwd);
   try {
-    const status = await manager.status({ id }, context);
-    assert.deepEqual(status, { id, state: "failed", error: { code: "INTERNAL_ERROR", message: "Subagent run was interrupted before completion" } });
-    assert.deepEqual(await manager.result({ id }, context), { id, error: { code: "INTERNAL_ERROR", message: "Subagent run was interrupted before completion" } });
-    assert.deepEqual((await manager.list({}, context)).map(({ id: listedId, state }) => ({ id: listedId, state })), [{ id, state: "failed" }]);
+    const status = await manager.inspect({ id }, context);
+    assert.equal(status.state, "failed");
+    assert.deepEqual(status.error, { code: "INTERNAL_ERROR", message: "Subagent run was interrupted before completion" });
+    assert.deepEqual((await manager.inspect({ id }, context)).error, { code: "INTERNAL_ERROR", message: "Subagent run was interrupted before completion" });
+    assert.deepEqual((await manager.inspect({}, context)).map(({ id: listedId, state }) => ({ id: listedId, state })), [{ id, state: "failed" }]);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -695,7 +833,7 @@ test("queues steering until the executor registers its handler and flushes in or
     await waitFor(() => delivered.length === 3);
     assert.deepEqual(delivered, ["first", "second", "third"]);
     pending.resolve({ value: "done", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: run.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: run.id }, context)).state === "completed");
   } finally {
     pending.resolve({ value: "cleanup", attempts: [], cwd });
     await manager.dispose();
@@ -712,7 +850,7 @@ test("rejects steering after settlement", async () => {
   const context = await managerContext(cwd);
   try {
     const run = await manager.run({ prompt: "finish" }, context);
-    await waitFor(async () => (await manager.status({ id: run.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: run.id }, context)).state === "completed");
     await assert.rejects(manager.steer({ id: run.id, message: "late" }, context));
   } finally {
     await manager.dispose();
@@ -745,10 +883,10 @@ test("stop and steer race without affecting a sibling run", async () => {
     await waitFor(() => pending.has("first") && pending.has("second"));
     await Promise.all([manager.steer({ id: first.id, message: "before-stop" }, context), manager.stop({ id: first.id }, context)]);
     await assert.rejects(manager.steer({ id: first.id, message: "after-stop" }, context));
-    assert.equal((await manager.status({ id: first.id }, context)).state, "stopped");
-    assert.equal((await manager.status({ id: second.id }, context)).state, "running");
+    assert.equal((await manager.inspect({ id: first.id }, context)).state, "stopped");
+    assert.equal((await manager.inspect({ id: second.id }, context)).state, "running");
     pending.get("second").resolve({ value: "second", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: second.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: second.id }, context)).state === "completed");
     assert.equal(delivered.some(([prompt, message]) => prompt === "first" && message === "after-stop"), false);
   } finally {
     for (const item of pending.values()) item.reject(new Error("test cleanup"));
@@ -777,16 +915,16 @@ test("persists latest progress, activity, usage, tool calls, and accounting", as
   const context = await managerContext(cwd);
   try {
     const run = await manager.run({ prompt: "progress" }, context);
-    const status = await (async () => { await waitFor(async () => Boolean((await manager.status({ id: run.id }, context)).progress)); return manager.status({ id: run.id }, context); })();
+    const status = await (async () => { await waitFor(async () => Boolean((await manager.inspect({ id: run.id }, context)).progress)); return manager.inspect({ id: run.id }, context); })();
     assert.deepEqual(status.accounting, accounting);
     assert.deepEqual(status.activity, { kind: "tool", text: "read" });
     assert.deepEqual(status.toolCalls, toolCalls);
     assert.deepEqual(status.usage, { tokens: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, total: 14 }, cost: 0.25 });
     assert.deepEqual(status.progress, { accounting, toolCalls, activity: { kind: "tool", text: "read" }, lastEventAt: 123 });
     pending.resolve({ value: "done", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: run.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: run.id }, context)).state === "completed");
     const restarted = createSubagentManager({ storageDir });
-    assert.deepEqual((await restarted.status({ id: run.id }, context)).accounting, accounting);
+    assert.deepEqual((await restarted.inspect({ id: run.id }, context)).accounting, accounting);
     await restarted.dispose();
   } finally {
     pending.resolve({ value: "cleanup", attempts: [], cwd });
@@ -819,8 +957,8 @@ test("delivers completion and failure through follow-up messages", async () => {
   try {
     const success = await registered.manager.run({ prompt: "success" }, context);
     const failure = await registered.manager.run({ prompt: "failure" }, context);
-    await waitFor(async () => (await registered.manager.status({ id: success.id }, context)).state === "completed");
-    await waitFor(async () => (await registered.manager.status({ id: failure.id }, context)).state === "failed");
+    await waitFor(async () => (await registered.manager.inspect({ id: success.id }, context)).state === "completed");
+    await waitFor(async () => (await registered.manager.inspect({ id: failure.id }, context)).state === "failed");
     await waitFor(() => messages.length === 2);
     assert.deepEqual(messages.map(({ options }) => options), [{ deliverAs: "followUp", triggerTurn: true }, { deliverAs: "followUp", triggerTurn: true }]);
     assert.match(messages[0].message.content, /Subagent .* completed/);
@@ -870,7 +1008,7 @@ test("session shutdown disposes active subagent sessions and rejects controls", 
     await shutdown?.({ type: "session_shutdown", reason: "quit" }, context);
     assert.equal(lifecycle.abort, 1);
     assert.equal(lifecycle.dispose, 1);
-    assert.equal((await registered.manager.status({ id: run.id }, context)).state, "stopped");
+    assert.equal((await registered.manager.inspect({ id: run.id }, context)).state, "stopped");
     await assert.rejects(registered.manager.steer({ id: run.id, message: "late" }, context));
   } finally {
     pending.resolve({ value: "cleanup", attempts: [], cwd });
@@ -903,7 +1041,7 @@ test("uses RunStore worktrees and removes them after a standalone run", async ()
   const context = await managerContext(cwd);
   try {
     const launched = await manager.run({ prompt: "work", worktree: "actual" }, context);
-    await waitFor(async () => (await manager.status({ id: launched.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: launched.id }, context)).state === "completed");
     assert.equal(typeof worktreePath, "string");
     await waitFor(async () => typeof worktreePath === "string" && !(await stat(worktreePath).then(() => true, () => false)));
     await waitFor(() => typeof branch === "string" && execFileSync("git", ["branch", "--list", branch], { cwd, encoding: "utf8" }).trim() === "");
@@ -946,7 +1084,7 @@ test("isolates concurrent real-git worktrees with the same name", async () => {
     }
     await waitFor(() => references.length === 2, async () => {
       const diagnostics = await Promise.all([first, second].map(async ({ id }) => {
-        const status = await manager.status({ id }, context);
+        const status = await manager.inspect({ id }, context);
         const failure = await readFile(join(storageDir, id, "failure.json"), "utf8").catch((error) => `unavailable: ${error.message}`);
         return { id, status, failure };
       }));
@@ -956,7 +1094,7 @@ test("isolates concurrent real-git worktrees with the same name", async () => {
     assert.notEqual(references[0].cwd, references[1].cwd);
     assert.notEqual(references[0].branch, references[1].branch);
     pending.resolve({ value: "done", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "completed" && (await manager.status({ id: second.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: first.id }, context)).state === "completed" && (await manager.inspect({ id: second.id }, context)).state === "completed");
     await waitFor(async () => (await Promise.all(references.map(({ cwd: worktreeCwd }) => stat(worktreeCwd).then(() => true, () => false)))).every((exists) => !exists));
     await waitFor(() => references.every(({ branch }) => execFileSync("git", ["branch", "--list", branch], { cwd, encoding: "utf8" }).trim() === ""));
   } finally {
@@ -1005,7 +1143,7 @@ test("creates and cleans an injected named worktree for a subagent", async () =>
   const context = await managerContext(cwd);
   try {
     const launched = await manager.run({ prompt: "work", worktree: "review" }, context);
-    await waitFor(async () => (await manager.status({ id: launched.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: launched.id }, context)).state === "completed");
     await waitFor(async () => JSON.parse(await readFile(join(storageDir, launched.id, "status.json"), "utf8")).worktreeContext === undefined);
     const persisted = JSON.parse(await readFile(join(storageDir, launched.id, "status.json"), "utf8"));
     assert.equal(persisted.worktreeContext, undefined);
@@ -1014,7 +1152,7 @@ test("creates and cleans an injected named worktree for a subagent", async () =>
     assert.deepEqual(created[0], { cwd, sessionId: "session-1", runId: launched.id, name: "review", owner: "worktree/named/review" });
     assert.equal(capturedOptions.worktreeOwner, "worktree/named/review");
     assert.ok(capturedRoot.runStore);
-    assert.equal((await manager.status({ id: launched.id }, context)).worktree, undefined);
+    assert.equal((await manager.inspect({ id: launched.id }, context)).worktree, undefined);
     assert.equal(cleaned, 1);
   } finally {
     await manager.dispose();
@@ -1045,7 +1183,7 @@ test("persists worktree recovery context before adapter creation", async () => {
     assert.deepEqual(persisted.worktreeContext, worktreeContext);
     assert.equal(persisted.worktree, undefined);
     releaseCreate.resolve();
-    await waitFor(async () => (await manager.status({ id: launched.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: launched.id }, context)).state === "completed");
   } finally {
     releaseCreate.resolve();
     await manager.dispose();
@@ -1086,7 +1224,7 @@ test("encodes standalone worktree names before persistence", async () => {
   try {
     for (const name of names) {
       const run = await manager.run({ prompt: name, worktree: name }, context);
-      await waitFor(async () => (await manager.status({ id: run.id }, context)).state === "completed");
+      await waitFor(async () => (await manager.inspect({ id: run.id }, context)).state === "completed");
     }
     assert.deepEqual(created.map(({ name, owner }) => ({ name, owner })), [
       { name: "nested/name", owner: "worktree/named/nested%2Fname" },
@@ -1115,15 +1253,15 @@ test("retries a failed subagent from its persisted request with a new ID", async
   });
   const context = await managerContext(cwd);
   try {
-    const original = await manager.run({ prompt: "retry me", label: "retryable" }, context);
-    await waitFor(async () => (await manager.status({ id: original.id }, context)).state === "failed");
+    const original = await manager.run({ prompt: "retry me", mode: "background", label: "retryable" }, context);
+    await waitFor(async () => (await manager.inspect({ id: original.id }, context)).state === "failed");
     const retried = await manager.retry({ id: original.id }, context);
     assert.notEqual(retried.id, original.id);
     assert.equal(retried.state, "running");
-    await waitFor(async () => (await manager.status({ id: retried.id }, context)).state === "completed");
-    assert.deepEqual(await manager.result({ id: retried.id }, context), { id: retried.id, value: { retry: true } });
+    await waitFor(async () => (await manager.inspect({ id: retried.id }, context)).state === "completed");
+    assert.deepEqual((await manager.inspect({ id: retried.id }, context)).value, { retry: true });
     assert.equal(launches, 2);
-    assert.deepEqual(JSON.parse(await readFile(join(cwd, "storage", retried.id, "request.json"), "utf8")), { prompt: "retry me", label: "retryable" });
+    assert.deepEqual(JSON.parse(await readFile(join(cwd, "storage", retried.id, "request.json"), "utf8")), { prompt: "retry me", mode: "background", label: "retryable" });
   } finally {
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
@@ -1147,12 +1285,12 @@ test("retries an interrupted persisted subagent as a new run", async () => {
   });
   const context = await managerContext(cwd);
   try {
-    assert.equal((await manager.status({ id }, context)).state, "failed");
+    assert.equal((await manager.inspect({ id }, context)).state, "failed");
     assert.deepEqual(cleanupCalls, [{ cwd, sessionId: "session-1", runId: id, name: "scope", owner: "worktree/named/scope" }]);
     const retried = await manager.retry({ id }, context);
     assert.notEqual(retried.id, id);
-    await waitFor(async () => (await manager.status({ id: retried.id }, context)).state === "completed");
-    assert.deepEqual(await manager.result({ id: retried.id }, context), { id: retried.id, value: "recovered" });
+    await waitFor(async () => (await manager.inspect({ id: retried.id }, context)).state === "completed");
+    assert.equal((await manager.inspect({ id: retried.id }, context)).value, "recovered");
   } finally {
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
@@ -1169,7 +1307,7 @@ test("removes legacy persisted worktree metadata without cleanup context", async
   const manager = createSubagentManager({ storageDir });
   const context = await managerContext(cwd);
   try {
-    assert.deepEqual(await manager.status({ id }, context), { id, state: "stopped" });
+    assert.equal((await manager.inspect({ id }, context)).state, "stopped");
     const persisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
     assert.equal(persisted.worktree, undefined);
     assert.equal(persisted.worktreeContext, undefined);
@@ -1198,7 +1336,7 @@ test("cleans a stopped persisted worktree during manager restart", async () => {
   });
   const context = await managerContext(cwd);
   try {
-    assert.equal((await manager.status({ id }, context)).state, "stopped");
+    assert.equal((await manager.inspect({ id }, context)).state, "stopped");
     assert.deepEqual(cleanupCalls, [worktreeContext]);
     const persisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
     assert.equal(persisted.worktree, undefined);
@@ -1237,17 +1375,17 @@ test("isolates failures while reconciling interrupted runs", async () => {
   const manager = createSubagentManager(managerDependencies);
   const context = await managerContext(cwd);
   try {
-    assert.equal((await manager.status({ id: malformedId }, context)).state, "failed");
-    assert.equal((await manager.status({ id: cleanupId }, context)).state, "failed");
-    assert.equal((await manager.status({ id: healthyId }, context)).state, "failed");
+    assert.equal((await manager.inspect({ id: malformedId }, context)).state, "failed");
+    assert.equal((await manager.inspect({ id: cleanupId }, context)).state, "failed");
+    assert.equal((await manager.inspect({ id: healthyId }, context)).state, "failed");
     assert.deepEqual(new Set(cleanupCalls), new Set([malformedId, cleanupId]));
     assert.equal(cleanupCalls.length, 2);
     const restarted = createSubagentManager(managerDependencies);
-    assert.equal((await restarted.status({ id: malformedId }, context)).state, "failed");
+    assert.equal((await restarted.inspect({ id: malformedId }, context)).state, "failed");
     assert.equal(cleanupCalls.filter((id) => id === malformedId).length, 1);
     assert.equal(cleanupCalls.filter((id) => id === cleanupId).length, 1);
     await restarted.dispose();
-    assert.deepEqual((await manager.list({}, context)).map(({ id, state }) => ({ id, state })), [
+    assert.deepEqual((await manager.inspect({}, context)).map(({ id, state }) => ({ id, state })), [
       { id: malformedId, state: "failed" },
       { id: cleanupId, state: "failed" },
       { id: healthyId, state: "failed" },
@@ -1273,8 +1411,8 @@ test("preserves completed results when persisted worktree cleanup fails", async 
   const manager = createSubagentManager({ storageDir, worktreeAdapter: { async create() { throw new Error("unused"); }, async cleanup() { throw new Error("cleanup failed"); } } });
   const context = await managerContext(cwd);
   try {
-    assert.deepEqual(await manager.status({ id }, context), { id, state: "completed", worktree });
-    assert.deepEqual(await manager.result({ id }, context), { id, value });
+    assert.deepEqual((await manager.inspect({ id }, context)).worktree, worktree);
+    assert.deepEqual((await manager.inspect({ id }, context)).value, value);
     assert.deepEqual(JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8")), status);
     assert.deepEqual(JSON.parse(await readFile(join(storageDir, id, "result.json"), "utf8")), value);
     await assert.rejects(stat(join(storageDir, id, "failure.json")));
@@ -1299,8 +1437,8 @@ test("reconciles a running persisted result before throwing worktree cleanup", a
   const manager = createSubagentManager({ storageDir, liveness: { isLive: () => false }, worktreeAdapter: { async create() { throw new Error("unused"); }, async cleanup() { throw new Error("cleanup failed"); } } });
   const context = await managerContext(cwd);
   try {
-    assert.deepEqual(await manager.status({ id }, context), { id, state: "completed", worktree });
-    assert.deepEqual(await manager.result({ id }, context), { id, value });
+    assert.deepEqual((await manager.inspect({ id }, context)).worktree, worktree);
+    assert.deepEqual((await manager.inspect({ id }, context)).value, value);
     const persisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
     assert.equal(persisted.state, "completed");
     assert.deepEqual(persisted.worktree, worktree);
@@ -1331,7 +1469,7 @@ test("clears persisted worktree metadata after cleanup and retries failed cleanu
   const context = await managerContext(cwd);
   const first = createSubagentManager({ storageDir, liveness: { isLive: () => true }, worktreeAdapter: adapter });
   try {
-    assert.equal((await first.status({ id }, context)).state, "stopped");
+    assert.equal((await first.inspect({ id }, context)).state, "stopped");
     const firstPersisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
     assert.deepEqual(firstPersisted.worktree, worktree);
     assert.deepEqual(firstPersisted.worktreeContext, worktreeContext);
@@ -1340,7 +1478,7 @@ test("clears persisted worktree metadata after cleanup and retries failed cleanu
   }
   const second = createSubagentManager({ storageDir, liveness: { isLive: () => true }, worktreeAdapter: adapter });
   try {
-    assert.equal((await second.status({ id }, context)).state, "stopped");
+    assert.equal((await second.inspect({ id }, context)).state, "stopped");
     const secondPersisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
     assert.equal(secondPersisted.worktree, undefined);
     assert.equal(secondPersisted.worktreeContext, undefined);
@@ -1372,7 +1510,7 @@ test("reclaims a stale storage owner before reconciling persisted runs", async (
   });
   const context = await managerContext(cwd);
   try {
-    assert.equal((await manager.status({ id }, context)).state, "failed");
+    assert.equal((await manager.inspect({ id }, context)).state, "failed");
     assert.deepEqual(cleanupCalls, [worktreeContext]);
     const owner = JSON.parse(await readFile(join(storageDir, "owner.json"), "utf8"));
     assert.notEqual(owner.token, staleOwner.token);
@@ -1433,13 +1571,13 @@ test("a second live owner skips persisted-run reconciliation", async () => {
     await cleanupStarted.promise;
     const second = createSubagentManager({ storageDir, liveness, worktreeAdapter: adapter });
     try {
-      assert.equal((await second.status({ id }, context)).state, "running");
+      assert.equal((await second.inspect({ id }, context)).state, "running");
       assert.equal(cleanupCalls, 1);
     } finally {
       await second.dispose();
     }
     releaseCleanup.resolve();
-    assert.equal((await first.status({ id }, context)).state, "failed");
+    assert.equal((await first.inspect({ id }, context)).state, "failed");
   } finally {
     releaseCleanup.resolve();
     await first.dispose();
@@ -1486,10 +1624,10 @@ test("protects a run started without the storage lease from another manager", as
       liveness: { pid: 202, processStart: 3, sessionId: "manager-b", token: "manager-b", isLive: (owner) => owner.token === "manager-a" },
       worktreeAdapter: adapter,
     });
-    assert.equal((await second.status({ id: launched.id }, context)).state, "running");
+    assert.equal((await second.inspect({ id: launched.id }, context)).state, "running");
     assert.deepEqual(cleanupCalls, []);
     pending.resolve({ value: "done", attempts: [], cwd });
-    await waitFor(async () => (await manager.status({ id: launched.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: launched.id }, context)).state === "completed");
   } finally {
     pending.resolve({ value: "cleanup", attempts: [], cwd });
     await second?.dispose();
