@@ -21,6 +21,8 @@ import {
 } from "pi-extensible-workflows";
 import type {
   AgentAttemptAction,
+  AgentAttemptActionContext,
+  StandaloneAgentAttemptActionContext,
   AgentIdentity,
   AgentSetup,
   AgentSetupContext,
@@ -62,6 +64,7 @@ type LaunchPaneOptions = { session: HerdrSession; prepared: Readonly<PreparedAge
 type PaneHandle = { pane: string; monitor: Promise<"closed" | "exited" | "idle" | "aborted">; reporter: HerdrAgentReporter; closeRemote(): Promise<void>; close(): Promise<void> };
 type HerdrBreadcrumbIdentity = Omit<AgentIdentity, "structuralPath"> & { structuralPath?: readonly string[] };
 type CompletedSessionContext = { attempt?: { setup?: { cwd?: string } }; run?: { cwd?: string } };
+type HerdrAttemptActionContext = AgentAttemptActionContext | StandaloneAgentAttemptActionContext;
 export interface HerdrExtensionOptions { env?: NodeJS.ProcessEnv; runner?: HerdrCommandRunner; workspaces?: WorkspaceManager; agentDir?: string }
 type HerdrExtensionOverrides = Pick<HerdrExtensionOptions, "env" | "runner" | "workspaces">;
 export interface HerdrExtension extends WorkflowExtension { agentAttemptActions: { openSession: AgentAttemptAction; openLiveSession: AgentAttemptAction }; agentSetupHooks: { fullyInspectable: AgentSetupHook } }
@@ -554,81 +557,83 @@ export function createHerdrExtension(options: HerdrExtensionOptions = {}): Herdr
   const runner = options.runner ?? herdrCommandRunner;
   const workspaces = options.workspaces ?? createWorkflowWorkspaces(runner);
   const fullyInspectable = isFullyInspectableMode(options.agentDir);
+  type ActionContext = HerdrAttemptActionContext;
+  const sessionCwd = (context: ActionContext): string | undefined => completedSessionCwd("run" in context ? context : { attempt: context.attempt });
+  const actionIdentity = (context: ActionContext): AgentIdentity => {
+    const parentBreadcrumb = "run" in context ? context.agent.parentBreadcrumb : undefined;
+    return { structuralPath: context.agent.structuralPath ?? [], ...(parentBreadcrumb ? { parentBreadcrumb } : {}), callSite: context.agent.label ?? context.agent.name, occurrence: context.attempt.attempt };
+  };
+  const openSessionVisible = (context: ActionContext): boolean => herdrAvailable(env) && !context.liveSession && (context.agent.state === "completed" || context.agent.state === "failed" || context.agent.state === "cancelled" || context.agent.state === "stopped") && Boolean(context.session?.sessionId && sessionCwd(context));
+  const openSession = async (context: ActionContext): Promise<void> => {
+    const session = context.session;
+    const cwd = sessionCwd(context);
+    if (!session || context.liveSession || !cwd) return;
+    await openHerdrLivePane({ action: "live", cwd, command: inspectSessionCommand(session), ...(env.HERDR_PANE_ID ? { paneId: env.HERDR_PANE_ID } : {}) }, runner);
+  };
+  const openLiveVisible = (context: ActionContext): boolean => herdrAvailable(env) && !fullyInspectable && Boolean(context.liveSession && sessionPath(context.liveSession.reference) && context.prepared && context.handoff);
+  const openLive = async (context: ActionContext): Promise<void> => {
+    const session = context.liveSession;
+    const prepared = context.prepared;
+    const handoff = context.handoff;
+    if (!session || !prepared || !handoff) return;
+    if (!sessionPath(session.reference)) throw new Error("Herdr cannot hand off a live session without a transferable session file.");
+    const label = typeof context.agent.label === "string" && context.agent.label.trim() ? context.agent.label : typeof context.agent.name === "string" && context.agent.name.trim() ? context.agent.name : "workflow agent";
+    const setWorkingMessage = (state?: HerdrAgentStatus | "done" | "completed"): void => context.ui.setWorkingMessage?.(state ? `${label}: ${state}` : undefined);
+    const handoffReleased = (): boolean => handoff.state === "completed";
+    const handoffCancelled = (): boolean => context.signal.aborted || handoffReleased();
+    await handoff.request(async () => {
+      const continueTask = needsContinuation(session.getLastAssistant());
+      let opened: PaneHandle | undefined;
+      let suspended = false;
+      let reportedWorking = false;
+      let lastState = "working";
+      let displayedState: HerdrAgentStatus | undefined;
+      const reportStatus = (state: HerdrAgentStatus): void => {
+        lastState = state;
+        if (state === "working") reportedWorking = true;
+        if (displayedState !== state) { displayedState = state; setWorkingMessage(state); }
+      };
+      try {
+        await abortSession(session);
+        if (handoffCancelled()) return;
+        if (session.suspendForHandoff) await session.suspendForHandoff();
+        suspended = true;
+        if (handoffCancelled()) return;
+        opened = await launchPane({ session, prepared, identity: actionIdentity(context), attempt: context.attempt.attempt, runner, fullyInspectable: false, env, signal: context.signal, prompt: continueTask ? "Continue the current workflow task from this session." : undefined, directPrompt: continueTask, onStatus: reportStatus });
+        if (handoffCancelled()) { if (handoffReleased()) await opened.closeRemote().catch(() => undefined); await opened.monitor; return; }
+        handoff.takeover();
+        if (displayedState === undefined || lastState === "idle") { displayedState = "working"; setWorkingMessage("working"); reportedWorking = true; }
+        await opened.monitor;
+      } finally {
+        try {
+          if (reportedWorking) setWorkingMessage(lastState === "done" ? "completed" : "idle");
+        } finally {
+          try {
+            if (suspended) await session.resumeFromHandoff?.();
+          } finally {
+            if (reportedWorking) { await new Promise<void>((resolve) => setTimeout(resolve, 50)); setWorkingMessage(); }
+          }
+        }
+      }
+    });
+  };
   return {
     version: "1.0.0",
     headline: "Herdr workflow integration",
     agentAttemptActions: {
       openSession: {
         label: "Open session in Herdr pane",
-        visible(context) { return herdrAvailable(env) && !context.liveSession && ["completed", "failed", "cancelled"].includes(context.agent.state) && Boolean(context.session?.sessionId && completedSessionCwd(context)); },
-        async run(context) {
-          const session = context.session;
-          const cwd = completedSessionCwd(context);
-          if (!session || context.liveSession || !cwd) return;
-          await openHerdrLivePane({ action: "live", cwd, command: inspectSessionCommand(session), ...(env.HERDR_PANE_ID ? { paneId: env.HERDR_PANE_ID } : {}) }, runner);
-        },
+        visible: openSessionVisible,
+        run: openSession,
+        visibleStandalone: openSessionVisible,
+        runStandalone: openSession,
       },
       openLiveSession: {
         label: "Open live session in Herdr pane",
-        visible(context) { return herdrAvailable(env) && !fullyInspectable && Boolean(context.liveSession && sessionPath(context.liveSession.reference) && context.prepared && context.handoff); },
-        async run(context) {
-          const session = context.liveSession;
-          const prepared = context.prepared;
-          const handoff = context.handoff;
-          if (!session || !prepared || !handoff) return;
-          if (!sessionPath(session.reference)) {
-            throw new Error("Herdr cannot hand off a live session without a transferable session file.");
-          }
-          const label = typeof context.agent.label === "string" && context.agent.label.trim() ? context.agent.label : typeof context.agent.name === "string" && context.agent.name.trim() ? context.agent.name : "workflow agent";
-          const setWorkingMessage = (state?: HerdrAgentStatus | "done" | "completed"): void => context.ui.setWorkingMessage?.(state ? `${label}: ${state}` : undefined);
-          const handoffReleased = (): boolean => handoff.state === "completed";
-          const handoffCancelled = (): boolean => context.signal.aborted || handoffReleased();
-          await handoff.request(async () => {
-            const continueTask = needsContinuation(session.getLastAssistant());
-            let opened: PaneHandle | undefined;
-            let suspended = false;
-            let reportedWorking = false;
-            let lastState = "working";
-            let displayedState: HerdrAgentStatus | undefined;
-            const reportStatus = (state: HerdrAgentStatus): void => {
-              lastState = state;
-              if (state === "working") reportedWorking = true;
-              if (displayedState !== state) {
-                displayedState = state;
-                setWorkingMessage(state);
-              }
-            };
-            try {
-              await abortSession(session);
-              if (handoffCancelled()) return;
-              if (session.suspendForHandoff) await session.suspendForHandoff();
-              suspended = true;
-              if (handoffCancelled()) return;
-              opened = await launchPane({ session, prepared, identity: { structuralPath: context.agent.structuralPath ?? [], ...(context.agent.parentBreadcrumb ? { parentBreadcrumb: context.agent.parentBreadcrumb } : {}), callSite: context.agent.label ?? context.agent.name, occurrence: context.attempt.attempt }, attempt: context.attempt.attempt, runner, fullyInspectable: false, env, signal: context.signal, prompt: continueTask ? "Continue the current workflow task from this session." : undefined, directPrompt: continueTask, onStatus: reportStatus });
-              if (handoffCancelled()) { if (handoffReleased()) await opened.closeRemote().catch(() => undefined); await opened.monitor; return; }
-              handoff.takeover();
-              if (displayedState === undefined || lastState === "idle") {
-                displayedState = "working";
-                setWorkingMessage("working");
-                reportedWorking = true;
-              }
-              await opened.monitor;
-            } finally {
-              try {
-                if (reportedWorking) setWorkingMessage(lastState === "done" ? "completed" : "idle");
-              } finally {
-                try {
-                  if (suspended) await session.resumeFromHandoff?.();
-                } finally {
-                  if (reportedWorking) {
-                    await new Promise<void>((resolve) => setTimeout(resolve, 50));
-                    setWorkingMessage();
-                  }
-                }
-              }
-            }
-          });
-        },
+        visible: openLiveVisible,
+        run: openLive,
+        visibleStandalone: openLiveVisible,
+        runStandalone: openLive,
       },
     },
     agentSetupHooks: {

@@ -73,7 +73,7 @@
           </tbody>
         </table></div>
         <h3>Interactive inspection</h3>
-        <p>In Pi's TUI, <code>/subagents</code> opens a picker of durable standalone runs. Select a run to inspect its current or terminal status without invoking the LLM; persisted labels and roles are shown, with <code>role=none</code> when no role was requested.</p>
+        <p>In Pi's TUI, <code>/subagents</code> opens a picker of durable standalone runs for the current session. Select a run to inspect the same activity, stall warning, state, model, role, tools, attempts, duration, token accounting, cost, and error fields used by <code>/workflow</code>; prompt, request failure, and result details remain bounded, and requests without a role remain <code>role=none</code>. The detail view also exposes registered standalone agent actions, <code>Steer</code> and <code>Stop</code> while running, <code>Retry</code> for failed or stopped runs, and copy/editor controls where applicable. Inspection does not launch a new LLM call; lifecycle actions may steer, stop, or retry a run.</p>
         <h3>Background example</h3>
         <pre><code class="language-javascript"><span class="tok-function">subagents_run</span><span class="tok-punctuation">({</span>
   <span class="tok-property">prompt</span><span class="tok-punctuation">:</span> <span class="tok-string">"Review the current changes."</span><span class="tok-punctuation">,</span>

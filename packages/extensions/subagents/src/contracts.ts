@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { AgentActivity, AgentAccounting, AgentExecutionOptions, AgentExecutionResult, AgentExecutionRoot, AgentProgress, AgentToolCallProgress, AgentTransport } from "pi-extensible-workflows";
+import type { AgentActivity, AgentAccounting, AgentAttemptSummary, AgentExecutionOptions, AgentExecutionResult, AgentExecutionRoot, AgentProgress, AgentToolCallProgress, AgentTransport, LiveSessionHandoff, PreparedAgentSession, WorkflowAgentSession, WorkflowAgentSessionReference } from "pi-extensible-workflows";
 import { validateAgentOptions, WorkflowError } from "pi-extensible-workflows";
 import type { Static } from "typebox";
 import { Value } from "typebox/value";
@@ -13,6 +13,8 @@ export const SUBAGENTS_TOOL_NAMES = [
   "subagents_stop",
   "subagents_retry",
 ] as const;
+export const SUBAGENT_ATTEMPT_DETAILS_LIMIT = 1;
+export const SUBAGENT_SYSTEM_PROMPT_LIMIT = 64 * 1024;
 
 const SUBAGENTS_ROLE_OVERRIDE = Type.Object({
   name: Type.String({ description: "Workflow role name" }),
@@ -110,6 +112,7 @@ export type SubagentUsage = {
 export type SubagentProgress = Pick<AgentProgress, "accounting" | "toolCalls" | "state" | "activity" | "lastEventAt">;
 export interface SubagentStatus {
   readonly id: string;
+  readonly sessionId?: string;
   readonly state: "running" | "completed" | "failed" | "stopped";
   readonly startedAt?: number;
   readonly finishedAt?: number;
@@ -121,9 +124,14 @@ export interface SubagentStatus {
   readonly toolCalls?: readonly AgentToolCallProgress[];
   readonly accounting?: AgentAccounting;
   readonly lastEventAt?: number;
+  readonly attempts?: number;
+  readonly attemptDetails?: readonly AgentAttemptSummary[];
+  readonly systemPrompt?: string;
 }
 export interface SubagentNotification {
   readonly id: string;
+  readonly label?: string;
+  readonly role?: string;
   readonly state: "completed" | "failed";
   readonly error?: { readonly code: string; readonly message: string };
 }
@@ -132,6 +140,16 @@ export interface SubagentManagerContext {
   readonly signal: AbortSignal | undefined;
   readonly onUpdate: ((value: unknown) => void) | undefined;
   readonly extensionContext: ExtensionContext;
+  readonly waitForForeground?: boolean;
+  readonly includeAttemptMetadata?: boolean;
+}
+export interface SubagentAttemptActionData {
+  readonly attempt: AgentAttemptSummary;
+  readonly session?: WorkflowAgentSessionReference;
+  readonly liveSession?: WorkflowAgentSession;
+  readonly prepared?: Readonly<PreparedAgentSession>;
+  readonly handoff?: LiveSessionHandoff;
+  readonly signal: AbortSignal;
 }
 
 export interface SubagentOwnerMarker {
@@ -169,11 +187,13 @@ export interface SubagentManager {
   steer(request: Readonly<SubagentSteerRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
   stop(request: Readonly<SubagentIdRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
   retry(request: Readonly<SubagentIdRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown>;
+  getAttemptActionData?(id: string): Readonly<SubagentAttemptActionData> | undefined;
   dispose?(): Promise<void>;
 }
 
 export interface SubagentsExtensionOptions {
   readonly manager?: SubagentManager;
+  readonly clipboard?: (value: string) => Promise<void>;
   readonly managerDependencies?: SubagentManagerDependencies;
 }
 

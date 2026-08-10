@@ -1,4 +1,4 @@
-/* global URL, setTimeout */
+/* global URL, setTimeout, setImmediate */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -76,7 +76,7 @@ test("renders subagent calls and background or foreground progress consistently"
     theme,
     { args: { ...args, mode: "background" }, state: backgroundState, invalidate() {} },
   ).render(80).join("\n");
-  assert.match(background, /Subagent: scout.*\[running\].*mode=background role=reviewer/);
+  assert.match(background, /^✓ Subagent: scout.*\[launched\].*mode=background role=reviewer/);
   assert.equal(backgroundState.subagentSpinner, undefined);
 
   const foregroundState = {};
@@ -126,19 +126,52 @@ test("renders subagent calls and background or foreground progress consistently"
 
   const inspect = tools.find(({ name }) => name === "subagents_inspect");
   assert.ok(inspect?.renderResult);
-  const inspected = inspect.renderResult(
+  const inspectComponent = inspect.renderResult(
     { content: [], details: { id: "inspected", state: "running" } },
     { expanded: false, isPartial: false },
     theme,
     { args: { id: "inspected" }, state: {}, invalidate() {} },
-  ).render(80).join("\n");
+  );
+  const inspected = inspectComponent.render(80).join("\n");
+  assert.match(inspected, /^◇ Subagent: inspecte.*\[running\]/);
+  assert.equal(inspectComponent.render(80).join("\n"), inspected);
   assert.doesNotMatch(inspected, /role=/);
+  const inspection = inspect.renderResult(
+    {
+      content: [],
+      details: {
+        id: "inspected",
+        state: "completed",
+        startedAt: 0,
+        finishedAt: 1000,
+        lastEventAt: 900,
+        progress: { state: { model: { provider: "fixture", model: "reviewer", thinking: "high" } } },
+        activity: { kind: "tool", text: "read" },
+        accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 },
+        usage: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 }, cost: 0.5 },
+        toolCalls: [{ id: "tool-1", name: "read", state: "completed" }],
+        worktree: { path: "/tmp/worktree", branch: "subagent/inspect" },
+        value: { answer: 42 },
+      },
+    },
+    { expanded: true, isPartial: false },
+    theme,
+    { args: { id: "inspected" }, state: {}, invalidate() {} },
+  ).render(120).join("\n");
+  assert.match(inspection, /startedAt=1970-01-01T00:00:00\.000Z/);
+  assert.match(inspection, /model=fixture\/reviewer:high/);
+  assert.match(inspection, /activity=tool read/);
+  assert.match(inspection, /accounting=input=1 output=2 cacheRead=3 cacheWrite=4 cost=0\.5/);
+  assert.match(inspection, /toolCalls=1.*read \[completed\]/s);
+  assert.match(inspection, /value:.*"answer": 42/s);
 });
 
 test("pins live background subagents below the editor until they settle", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-widget-"));
   const pending = deferred();
   const started = deferred();
+  const cleanupStarted = deferred();
+  const releaseCleanup = deferred();
   let executionOptions;
   const tools = [];
   const handlers = new Map();
@@ -153,6 +186,17 @@ test("pins live background subagents below the editor until they settle", async 
   registerSubagentsExtension(pi, {
     managerDependencies: {
       storageDir: join(cwd, "subagents-storage"),
+      worktreeAdapter: {
+        async create(input) {
+          return {
+            path: join(cwd, "worktree"),
+            branch: `subagent/${input.runId}`,
+            cwd,
+            runStore: {},
+            async cleanup() { cleanupStarted.resolve(); await releaseCleanup.promise; },
+          };
+        },
+      },
       createExecutor() {
         return {
           async execute(_prompt, options) {
@@ -179,7 +223,7 @@ test("pins live background subagents below the editor until they settle", async 
   try {
     handlers.get("session_start")({}, context);
     const run = tools.find(({ name }) => name === "subagents_run");
-    const launch = await run.execute("widget-call", { prompt: "watch", label: "scout", mode: "background" }, undefined, undefined, context);
+    const launch = await run.execute("widget-call", { prompt: "watch", label: "scout", mode: "background", worktree: "widget" }, undefined, undefined, context);
     await started.promise;
     assert.equal(launch.details.state, "running");
     assert.deepEqual(widgetCalls[0].options, { placement: "belowEditor" });
@@ -190,8 +234,11 @@ test("pins live background subagents below the editor until they settle", async 
     assert.ok(renders > 0);
 
     pending.resolve({ value: "done", attempts: [], cwd });
-    await waitFor(() => widgetCalls.at(-1)?.value === undefined);
+    await cleanupStarted.promise;
+    assert.equal(widgetCalls.at(-1)?.value, undefined);
+    releaseCleanup.resolve();
   } finally {
+    releaseCleanup.resolve();
     await handlers.get("session_shutdown")({}, context);
     await rm(cwd, { recursive: true, force: true });
   }
@@ -202,20 +249,26 @@ test("opens the /subagents picker and inspects durable status without an agent c
   const storageDir = join(cwd, "subagents-storage");
   const firstId = "run-1";
   const secondId = "run-2";
+  const newestId = "run-3";
+  const otherSessionId = "run-other";
   await mkdir(join(storageDir, firstId), { recursive: true });
   await mkdir(join(storageDir, secondId), { recursive: true });
+  await mkdir(join(storageDir, newestId), { recursive: true });
   await writeFile(join(storageDir, firstId, "request.json"), JSON.stringify({ prompt: "review", label: "reviewer", role: "critic", mode: "background" }));
   await writeFile(join(storageDir, secondId, "request.json"), JSON.stringify({ prompt: "summarize", mode: "background" }));
+  await writeFile(join(storageDir, newestId, "request.json"), JSON.stringify({ prompt: "newest", label: "newest", mode: "background" }));
   const inspectCalls = [];
   const manager = {
     async run() { throw new Error("/subagents must not launch a run"); },
     async inspect(params, context) {
       inspectCalls.push({ params, context });
-      if (params.id === secondId) return { id: secondId, state: "completed", startedAt: 10, finishedAt: 20, value: "done" };
-      if (params.id === firstId) return { id: firstId, state: "running", startedAt: 10, activity: { kind: "tool", text: "read" } };
+      if (params.id === secondId) return { id: secondId, sessionId: "session-1", state: "completed", startedAt: 10, finishedAt: 20, value: "done" };
+      if (params.id === firstId) return { id: firstId, sessionId: "session-1", state: "running", startedAt: 10, activity: { kind: "tool", text: "read" } };
       return [
-        { id: firstId, state: "running", startedAt: 10 },
-        { id: secondId, state: "completed", startedAt: 20, finishedAt: 30 },
+        { id: secondId, sessionId: "session-1", state: "completed", startedAt: 20, finishedAt: 30 },
+        { id: otherSessionId, sessionId: "session-2", state: "running", startedAt: 50 },
+        { id: firstId, sessionId: "session-1", state: "running", startedAt: 10 },
+        { id: newestId, sessionId: "session-1", state: "completed", startedAt: 30, finishedAt: 40 },
       ];
     },
     async steer() {},
@@ -243,7 +296,7 @@ test("opens the /subagents picker and inspects durable status without an agent c
         assert.match(title, /Subagents/);
         pickerOptions.push([...options]);
         pickerCount += 1;
-        return Promise.resolve(pickerCount === 1 ? options[1] : "Close");
+        return Promise.resolve(pickerCount === 1 ? options[2] : "Close");
       },
       async custom(factory) {
         const component = factory({ terminal: { rows: 20 }, requestRender() {} }, theme, { matches(data, binding) { return data === "escape" && binding === "tui.select.cancel"; } }, () => undefined);
@@ -258,6 +311,12 @@ test("opens the /subagents picker and inspects durable status without an agent c
     assert.equal(inspectCalls[0].params.id, undefined);
     assert.equal(inspectCalls[1].params.id, secondId);
     assert.equal(inspectCalls.every(({ context: callContext }) => callContext.extensionContext === context), true);
+    assert.equal(inspectCalls[0].context.includeAttemptMetadata, undefined);
+    assert.equal(inspectCalls[1].context.includeAttemptMetadata, true);
+    assert.match(pickerOptions[0][0], /label=reviewer.*\[running\].*run-1/);
+    assert.match(pickerOptions[0][1], /label=newest.*\[completed\].*run-3/);
+    assert.match(pickerOptions[0][2], /label=none.*\[completed\].*run-2/);
+    assert.doesNotMatch(pickerOptions[0].join("\n"), /run-other/);
     assert.match(pickerOptions[0].join("\n"), /label=reviewer.*role=critic/);
     assert.match(pickerOptions[0].join("\n"), /label=none.*role=none/);
     assert.match(detailScreens[0], /label=none/);
@@ -267,7 +326,585 @@ test("opens the /subagents picker and inspects durable status without an agent c
     await rm(cwd, { recursive: true, force: true });
   }
 });
+test("emits terminal status before cleanup and a cleaned status after worktree cleanup", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-terminal-status-order-"));
+  const storageDir = join(cwd, "storage");
+  const pending = deferred();
+  const started = deferred();
+  const cleanupStarted = deferred();
+  const releaseCleanup = deferred();
+  const statuses = [];
+  const manager = createSubagentManager({
+    storageDir,
+    onStatus(status) { statuses.push(status); },
+    worktreeAdapter: {
+      async create(input) {
+        return {
+          path: join(cwd, "worktree"),
+          branch: `subagent/${input.runId}`,
+          cwd,
+          runStore: {},
+          async cleanup() { cleanupStarted.resolve(); await releaseCleanup.promise; },
+        };
+      },
+    },
+    createExecutor() {
+      return {
+        async execute() { started.resolve(); return pending.promise; },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const launch = await manager.run({ prompt: "status order", mode: "background", worktree: "status-order" }, context);
+    await started.promise;
+    pending.resolve({ value: "done", attempts: [], cwd });
+    await cleanupStarted.promise;
+    const terminalBeforeCleanup = statuses.filter((status) => status.id === launch.id && status.state === "completed").at(-1);
+    assert.equal(terminalBeforeCleanup?.worktree?.path, join(cwd, "worktree"));
+    releaseCleanup.resolve();
+    await waitFor(() => statuses.some((status) => status.id === launch.id && status.state === "completed" && status.worktree === undefined));
+    const terminalAfterCleanup = statuses.filter((status) => status.id === launch.id && status.state === "completed").at(-1);
+    assert.equal(terminalAfterCleanup?.worktree, undefined);
+  } finally {
+    releaseCleanup.resolve();
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
+test("refreshes an open running subagent detail without overlap and stops at terminal state", async () => {
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  const timerCallbacks = [];
+  const clearedTimers = [];
+  globalThis.setInterval = (callback, delay) => {
+    assert.equal(delay, 1000);
+    timerCallbacks.push(callback);
+    return { unref() {} };
+  };
+  globalThis.clearInterval = (timer) => { clearedTimers.push(timer); };
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-refresh-"));
+  const storageDir = join(cwd, "storage");
+  const id = "run-refresh";
+  const refresh = deferred();
+  let detailCalls = 0;
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "refresh", label: "refresh", mode: "background" }));
+  const running = { id, sessionId: "session-1", state: "running", startedAt: 1, activity: { kind: "tool", text: "before" } };
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) {
+      if (!params.id) return [running];
+      detailCalls += 1;
+      if (detailCalls === 1) return running;
+      if (detailCalls === 2) return refresh.promise;
+      return { id, sessionId: "session-1", state: "completed", startedAt: 1, finishedAt: 2, activity: { kind: "text", text: "done" } };
+    },
+    async steer() {},
+    async stop() {},
+    async retry() {},
+  };
+  const commands = [];
+  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  let pickerCount = 0;
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve)); };
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      async select(_title, options) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; },
+      async custom(factory) {
+        let finish;
+        const completed = new Promise((resolve) => { finish = resolve; });
+        let renders = 0;
+        const component = factory({ terminal: { rows: 20 }, requestRender() { renders += 1; } }, { fg: (_color, text) => text, bold: (text) => text }, { matches(data, binding) { return data === binding || data === "escape" && binding === "tui.select.cancel"; } }, (value) => finish(value));
+        assert.equal(timerCallbacks.length, 1);
+        assert.match(component.render(120).join("\n"), /before/);
+        timerCallbacks[0]();
+        timerCallbacks[0]();
+        assert.equal(detailCalls, 2);
+        refresh.resolve({ ...running, state: "completed", finishedAt: 2, activity: { kind: "text", text: "done" } });
+        await flush();
+        assert.equal(detailCalls, 2);
+        assert.match(component.render(120).join("\n"), /done/);
+        assert.equal(clearedTimers.length, 1);
+        const rendersAtTerminal = renders;
+        timerCallbacks[0]();
+        await flush();
+        assert.equal(detailCalls, 2);
+        assert.equal(renders, rendersAtTerminal);
+        component.handleInput("escape");
+        await completed;
+        return completed;
+      },
+      notify(message) { throw new Error(message); },
+    },
+  };
+  try {
+    await command.options.handler("", context);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("ignores an in-flight detail refresh after the panel closes", async () => {
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  const timerCallbacks = [];
+  const clearedTimers = [];
+  globalThis.setInterval = (callback, delay) => { assert.equal(delay, 1000); timerCallbacks.push(callback); return {}; };
+  globalThis.clearInterval = (timer) => { clearedTimers.push(timer); };
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-refresh-close-"));
+  const storageDir = join(cwd, "storage");
+  const id = "run-refresh-close";
+  const refresh = deferred();
+  let detailCalls = 0;
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "refresh close", mode: "background" }));
+  const running = { id, sessionId: "session-1", state: "running", startedAt: 1 };
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) {
+      if (!params.id) return [running];
+      detailCalls += 1;
+      if (detailCalls === 1) return running;
+      return refresh.promise;
+    },
+    async steer() {},
+    async stop() {},
+    async retry() {},
+  };
+  const commands = [];
+  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  let pickerCount = 0;
+  const flush = async () => { for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setImmediate(resolve)); };
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      async select(_title, options) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; },
+      async custom(factory) {
+        let finish;
+        const completed = new Promise((resolve) => { finish = resolve; });
+        let renders = 0;
+        const component = factory({ terminal: { rows: 20 }, requestRender() { renders += 1; } }, { fg: (_color, text) => text, bold: (text) => text }, { matches(data, binding) { return data === binding || data === "escape" && binding === "tui.select.cancel"; } }, (value) => finish(value));
+        assert.equal(timerCallbacks.length, 1);
+        timerCallbacks[0]();
+        component.handleInput("escape");
+        await completed;
+        refresh.resolve({ ...running, state: "completed", finishedAt: 2 });
+        await flush();
+        assert.equal(detailCalls, 2);
+        assert.equal(renders, 0);
+        assert.equal(clearedTimers.length, 1);
+        return completed;
+      },
+      notify(message) { throw new Error(message); },
+    },
+  };
+  try {
+    await command.options.handler("", context);
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("matches workflow agent detail fields and runs standalone registered and copy actions with live context", async () => {
+  resetWorkflowRegistry();
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-agent-actions-"));
+  const storageDir = join(cwd, "storage");
+  await mkdir(join(storageDir, "run-agent-actions"), { recursive: true });
+  await writeFile(join(storageDir, "run-agent-actions", "request.json"), JSON.stringify({ prompt: "Review", label: "scout", role: "scout", mode: "background" }));
+  const attempt = {
+    attempt: 2,
+    transport: "fixture",
+    session: { transport: "fixture", sessionId: "agent-session", locator: { sessionFile: join(cwd, "session.jsonl") } },
+    setup: { hookNames: ["setup"], model: { provider: "fixture", model: "model" }, tools: ["read"], cwd },
+    accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 },
+  };
+  const liveSession = { reference: attempt.session };
+  const prepared = { cwd, model: { provider: "fixture", model: "model" }, tools: ["read"], sessionLabel: "scout" };
+  const handoff = { state: "local-running", transferred: false };
+  const status = {
+    id: "run-agent-actions",
+    sessionId: "session-1",
+    state: "running",
+    startedAt: Date.now() - 601_000,
+    lastEventAt: Date.now() - 601_000,
+    attempts: 2,
+    attemptDetails: [attempt],
+    systemPrompt: "System instructions",
+    progress: { accounting: attempt.accounting, toolCalls: [{ id: "tool", name: "read", state: "completed" }], state: { model: { provider: "fixture", model: "model" }, tools: ["read"] }, activity: { kind: "tool", text: "read" }, lastEventAt: attempt.startedAt },
+    activity: { kind: "tool", text: "read" },
+    accounting: attempt.accounting,
+    toolCalls: [{ id: "tool", name: "read", state: "completed" }],
+    worktree: { path: join(cwd, "worktree"), branch: "subagent/run-agent-actions" },
+  };
+  let actionContext;
+  let stopped = false;
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) { return params.id ? { ...status, state: stopped ? "stopped" : "running" } : [{ ...status, state: stopped ? "stopped" : "running" }]; },
+    async steer() { return { id: status.id, accepted: true }; },
+    async stop() { stopped = true; return { ...status, state: "stopped" }; },
+    async retry() { return { id: "retry-agent-actions", state: "running" }; },
+    getAttemptActionData() { return { attempt, session: attempt.session, liveSession, prepared, handoff, signal: new AbortController().signal }; },
+  };
+  registerWorkflowExtension({ version: "1.0.0", headline: "Standalone action fixture", agentAttemptActions: {
+    standaloneFixture: {
+      label: "Standalone fixture action",
+      visible() { return false; },
+      run() {},
+      visibleStandalone(context) { return context.agent.name === "scout" && context.attempt.attempt === 2 && context.liveSession === liveSession && context.prepared === prepared && context.handoff === handoff; },
+      runStandalone(context) { actionContext = context; },
+    },
+  } });
+  const commands = [];
+  const copied = [];
+  const renders = [];
+  const pi = {
+    registerTool() {},
+    registerCommand(name, options) { commands.push({ name, options }); },
+  };
+  registerSubagentsExtension(pi, { manager, managerDependencies: { storageDir }, clipboard: async (value) => { copied.push(value); } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  let pickerCount = 0;
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      async select(_title, options) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; },
+      async custom(factory) {
+        let component;
+        let finish;
+        const completed = new Promise((resolve) => { finish = resolve; });
+        component = factory({ terminal: { rows: 30 }, requestRender() {} }, theme, { matches(data, binding) { return (data === "escape" && binding === "tui.select.cancel") || data === binding; } }, (value) => finish(value));
+        renders.push(component.render(140).join("\n"));
+        assert.match(renders.at(-1), /Activity: read/);
+        assert.match(renders.at(-1), /stalled\? 10m/);
+        assert.match(renders.at(-1), /Model: fixture\/model/);
+        assert.match(renders.at(-1), /Role: scout/);
+        assert.match(renders.at(-1), /Tools: read/);
+        assert.match(renders.at(-1), /Attempts: 2/);
+        assert.match(renders.at(-1), /Duration: 10m/);
+        assert.match(renders.at(-1), /Tokens: ∑10/);
+        component.handleInput("a");
+        const actionScreen = component.render(140).join("\n");
+        assert.match(actionScreen, /Standalone fixture action/);
+        assert.match(actionScreen, /Copy branch/);
+        assert.match(actionScreen, /Copy worktree path/);
+        assert.match(actionScreen, /Open prompt in editor/);
+        assert.match(actionScreen, /Open system prompt in editor/);
+        assert.match(actionScreen, /Steer/);
+        assert.match(actionScreen, /Stop/);
+        assert.match(actionScreen, /Copy agent ID/);
+        component.handleInput("tui.select.confirm");
+        await waitFor(() => actionContext !== undefined);
+        assert.equal(actionContext.liveSession, liveSession);
+        assert.equal(actionContext.prepared, prepared);
+        assert.equal(actionContext.handoff, handoff);
+        assert.equal(actionContext.session.sessionId, "agent-session");
+        await waitFor(() => !component.render(140).join("\n").includes("Agent actions"));
+        component.handleInput("a");
+        for (let index = 0; index < 7; index += 1) component.handleInput("tui.select.down");
+        component.handleInput("tui.select.confirm");
+        await waitFor(() => copied.length === 1);
+        assert.equal(copied[0], status.id);
+        await waitFor(() => !component.render(140).join("\n").includes("Agent actions"));
+        component.handleInput("escape");
+        return completed;
+      },
+      notify() {},
+    },
+  };
+  try {
+    await command.options.handler("", context);
+  } finally {
+    resetWorkflowRegistry();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+test("captures steering text inside the detail panel without nesting UI prompts", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-steer-focus-"));
+  const storageDir = join(cwd, "storage");
+  const id = "run-steer-focus";
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "control", label: "control", mode: "background" }));
+  const steers = [];
+  const status = { id, sessionId: "session-1", state: "running", startedAt: 1 };
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) { return params.id ? status : [status]; },
+    async steer(request) { steers.push(request.message); return { id, accepted: true }; },
+    async stop() {},
+    async retry() {},
+  };
+  const commands = [];
+  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  let pickerCount = 0;
+  let customCount = 0;
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      async select(_title, options) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; },
+      async custom(factory) {
+        customCount += 1;
+        let finish;
+        const completed = new Promise((resolve) => { finish = resolve; });
+        const component = factory({ terminal: { rows: 30 }, requestRender() {} }, { fg: (_color, text) => text, bold: (text) => text }, { matches(data, binding) { return data === binding || data === "escape" && binding === "tui.select.cancel"; } }, (value) => finish(value));
+        if (customCount === 1) {
+          component.handleInput("a");
+          for (let index = 0; index < 10 && !component.render(140).join("\n").includes("→ Steer"); index += 1) component.handleInput("tui.select.down");
+          assert.match(component.render(140).join("\n"), /→ Steer/);
+          component.handleInput("tui.select.confirm");
+          assert.match(component.render(140).join("\n"), /Steer subagent/);
+          for (const character of "continue inside the panel") component.handleInput(character);
+          component.handleInput("\r");
+        } else {
+          component.handleInput("escape");
+        }
+        const result = await completed;
+        return result;
+      },
+      async input() { throw new Error("nested input must not be used"); },
+      notify() {},
+    },
+  };
+  try {
+    await command.options.handler("", context);
+    assert.deepEqual(steers, ["continue inside the panel"]);
+    assert.equal(customCount, 1);
+    assert.equal(pickerCount, 1);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+test("runs navigator steer, stop, and non-blocking retry actions with state revalidation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-controls-"));
+  const storageDir = join(cwd, "storage");
+  const id = "run-controls";
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "control", label: "control", mode: "foreground" }));
+  let state = "running";
+  const steers = [];
+  const retryContexts = [];
+  const selectedOptions = [];
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) {
+      const status = { id, sessionId: "session-1", state, startedAt: 1, ...(state === "running" ? { lastEventAt: 1 } : { finishedAt: 2, error: state === "failed" ? { code: "AGENT_FAILED", message: "failed" } : undefined }) };
+      return params.id ? status : [status];
+    },
+    async steer(request) { steers.push(request.message); return { id, accepted: true }; },
+    async stop() { state = "stopped"; return { id, state }; },
+    async retry(_request, context) { retryContexts.push(context); return { id: "retried-controls", state: "running" }; },
+  };
+  const commands = [];
+  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  let pickerCount = 0;
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      async select(_title, options) {
+        selectedOptions.push([...options]);
+        if (!options.includes("Steer") && !options.includes("Stop") && !options.includes("Retry")) {
+          pickerCount += 1;
+          return pickerCount === 1 ? options[0] : "Close";
+        }
+        if (options.includes("Steer") && steers.length === 0) return "Steer";
+        if (options.includes("Stop")) return "Stop";
+        return "Retry";
+      },
+      async input() { return "continue with the checklist"; },
+      notify() {},
+    },
+  };
+  try {
+    await command.options.handler("", context);
+    assert.deepEqual(steers, ["continue with the checklist"]);
+    assert.equal(state, "stopped");
+    assert.equal(retryContexts.length, 1);
+    assert.equal(retryContexts[0].waitForForeground, false);
+    assert.equal(selectedOptions.some((options) => options.includes("Steer") && options.includes("Stop") && !options.includes("Retry")), true);
+    assert.equal(selectedOptions.some((options) => options.includes("Retry") && !options.includes("Steer") && !options.includes("Stop")), true);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+test("reports an invalid navigator retry result without leaving the picker", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-invalid-retry-"));
+  const storageDir = join(cwd, "storage");
+  const id = "run-invalid-retry";
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "retry", mode: "background" }));
+  let retryCalled = false;
+  const notices = [];
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) { const status = { id, sessionId: "session-1", state: "stopped", startedAt: 1, finishedAt: 2 }; return params.id ? status : [status]; },
+    async steer() {},
+    async stop() {},
+    async retry() { retryCalled = true; return { id, state: "stopped" }; },
+  };
+  const commands = [];
+  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  let pickerCount = 0;
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      async select(_title, options) {
+        if (!options.includes("Retry")) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; }
+        return retryCalled ? "Back" : "Retry";
+      },
+      notify(message) { notices.push(message); },
+    },
+  };
+  try {
+    await command.options.handler("", context);
+    assert.equal(retryCalled, true);
+    assert.match(notices.join("\n"), /invalid subagent result/i);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+test("navigator skips malformed persisted attempt metadata", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-malformed-"));
+  const storageDir = join(cwd, "storage");
+  await mkdir(join(storageDir, "good"), { recursive: true });
+  await writeFile(join(storageDir, "good", "request.json"), JSON.stringify({ prompt: "good", label: "good", mode: "background" }));
+  const good = { id: "good", sessionId: "session-1", state: "completed", startedAt: 1, finishedAt: 2 };
+  const malformed = { id: "bad", sessionId: "session-1", state: "completed", startedAt: 1, attempts: 1, attemptDetails: [{}], systemPrompt: 42 };
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) { return params.id ? good : [malformed, good]; },
+    async steer() {},
+    async stop() {},
+    async retry() {},
+  };
+  const commands = [];
+  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  const pickerOptions = [];
+  let pickerCount = 0;
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      async select(_title, options) {
+        pickerOptions.push([...options]);
+        if (options.some((option) => option.includes("good"))) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; }
+        return "Back";
+      },
+      notify() {},
+    },
+  };
+  try {
+    await command.options.handler("", context);
+    assert.equal(pickerOptions[0].some((option) => option.includes("bad")), false);
+    assert.equal(pickerOptions[0].some((option) => option.includes("good")), true);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+test("opens bounded prompt, system prompt, and result artifacts from the subagent navigator", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-editors-"));
+  const storageDir = join(cwd, "storage");
+  const id = "run-editors";
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "PROMPT_START", label: "editor", mode: "background" }));
+  const attempt = { attempt: 1, transport: "fixture", setup: { hookNames: [], model: { provider: "fixture", model: "model" }, tools: [], cwd }, accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 } };
+  const status = { id, sessionId: "session-1", state: "completed", startedAt: 1, finishedAt: 2, attempts: 1, attemptDetails: [attempt], systemPrompt: "SYSTEM_PROMPT_START" };
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) { return params.id ? { ...status, value: { answer: 42 } } : [status]; },
+    async steer() {},
+    async stop() {},
+    async retry() {},
+  };
+  const editorPath = join(cwd, "fake-editor.sh");
+  const editedPath = join(cwd, "edited-content");
+  const openedPath = join(cwd, "opened-path");
+  await writeFile(editorPath, "#!/bin/sh\ncat \"$3\" > \"$1\"\nprintf '%s' \"$3\" > \"$2\"\n", { mode: 0o755 });
+  const previous = { VISUAL: process.env.VISUAL, EDITOR: process.env.EDITOR, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
+  process.env.VISUAL = `${editorPath} ${editedPath} ${openedPath}`;
+  process.env.EDITOR = process.env.VISUAL;
+  process.env.PI_CODING_AGENT_DIR = cwd;
+  const commands = [];
+  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  let pickerCount = 0;
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      async select(_title, options) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; },
+      async custom(factory) {
+        let finish;
+        const completed = new Promise((resolve) => { finish = resolve; });
+        const component = factory({ terminal: { rows: 30 }, stop() {}, start() {}, requestRender() {} }, { fg: (_color, text) => text, bold: (text) => text }, { matches(data, binding) { return data === binding || data === "escape" && binding === "tui.select.cancel"; } }, (value) => finish(value));
+        const waitForArtifact = async (label, marker) => {
+          for (let step = 0; step < 100; step += 1) {
+            if (component.render(140).join("\n").includes(`→ ${label}`)) { component.handleInput("tui.select.confirm"); break; }
+            component.handleInput("tui.select.down");
+            await new Promise((resolve) => setTimeout(resolve, 1));
+          }
+          await waitFor(async () => { try { return (await readFile(editedPath, "utf8")).includes(marker); } catch { return false; } });
+          assert.match(await readFile(openedPath, "utf8"), /artifact\.(md|json)$/);
+          await waitFor(() => !component.render(140).join("\n").includes("Agent actions"));
+          component.handleInput("a");
+        };
+        component.handleInput("a");
+        await waitForArtifact("Open prompt in editor", "PROMPT_START");
+        await waitForArtifact("Open system prompt in editor", "SYSTEM_PROMPT_START");
+        await waitForArtifact("Open result in editor", '"answer": 42');
+        component.handleInput("escape");
+        component.handleInput("escape");
+        return completed;
+      },
+      notify() {},
+    },
+  };
+  try {
+    await command.options.handler("", context);
+    assert.equal(pickerCount, 2);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) Reflect.deleteProperty(process.env, name);
+      else process.env[name] = value;
+    }
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 test("exposes closed tool schemas and minimal prompt guidance", () => {
   assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "mode", "label", "model", "thinking", "tools", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
   assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.required, ["prompt"]);
@@ -470,6 +1107,8 @@ test("runs one background subagent with context-derived setup and execution opti
   assert.notEqual(execution.signal, controller.signal);
   assert.equal(root.runContext.runId, launch.details.id);
   await waitFor(async () => (await manager.inspect({ id: launch.details.id }, { toolCallId: "lookup", signal: undefined, extensionContext: context })).state === "completed");
+  assert.equal((await manager.inspect({ id: launch.details.id }, { toolCallId: "lookup", signal: undefined, extensionContext: context })).sessionId, "session-1");
+  assert.equal(JSON.parse(await readFile(join(cwd, "subagents-storage", launch.details.id, "status.json"), "utf8")).sessionId, "session-1");
   const roleLaunch = await runTool.execute("call-role", { prompt: "review", label: "role", role: "reviewer" }, controller.signal, undefined, context);
   await waitFor(() => execution?.task === "review");
   assert.equal(roleLaunch.details.state, "running");
@@ -546,9 +1185,9 @@ test("returns foreground terminal envelopes, preserves mode for retry, and suppr
     assert.deepEqual(retry.value, { prompt: "failure" });
     assert.notEqual(retry.id, failure.id);
     assert.deepEqual(JSON.parse(await readFile(join(storageDir, retry.id, "request.json"), "utf8")), { prompt: "failure", mode: "foreground" });
-    assert.deepEqual(updates.filter(({ id }) => id === success.id).map(({ state }) => state), ["running", "completed"]);
-    assert.deepEqual(updates.filter(({ id }) => id === failure.id).map(({ state }) => state), ["running", "failed"]);
-    assert.deepEqual(updates.filter(({ id }) => id === retry.id).map(({ state }) => state), ["running", "completed"]);
+    assert.deepEqual(updates.filter(({ id }) => id === success.id).map(({ state }) => state), ["running", "completed", "completed"]);
+    assert.deepEqual(updates.filter(({ id }) => id === failure.id).map(({ state }) => state), ["running", "failed", "failed"]);
+    assert.deepEqual(updates.filter(({ id }) => id === retry.id).map(({ state }) => state), ["running", "completed", "completed"]);
     assert.deepEqual(notifications, []);
     await assert.rejects(manager.inspect({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }, context), (error) => error?.code === "RUN_NOT_FOUND");
   } finally {
@@ -594,6 +1233,92 @@ test("cancelling a foreground run aborts its native session and persists CANCELL
     assert.equal(lifecycle.dispose, 1);
     assert.deepEqual((await manager.inspect({ id: result.id }, context)).error, { code: "CANCELLED", message: "Subagent cancelled" });
   } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stopping an injected executor disposes its session after delayed rejection", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-stop-injected-session-"));
+  const started = deferred();
+  const settlement = deferred();
+  const lifecycle = { abort: 0, dispose: 0 };
+  const manager = createSubagentManager({
+    storageDir: join(cwd, "subagents-storage"),
+    createExecutor() {
+      return {
+        async execute(_prompt, options) {
+          const session = {
+            async abort() { lifecycle.abort += 1; },
+            async dispose() { lifecycle.dispose += 1; },
+          };
+          await options.onAttempt?.({ liveSession: session });
+          started.resolve();
+          return settlement.promise;
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const run = await manager.run({ prompt: "stop", mode: "background" }, context);
+    await started.promise;
+    const stopped = await manager.stop({ id: run.id }, context);
+    assert.equal(stopped.state, "stopped");
+    assert.equal(lifecycle.abort, 1);
+    assert.equal(lifecycle.dispose, 0);
+    settlement.reject(new Error("delayed executor rejection"));
+    await waitFor(() => lifecycle.dispose === 1);
+    assert.equal(lifecycle.abort, 1);
+    assert.equal(lifecycle.dispose, 1);
+  } finally {
+    settlement.resolve({ value: "cleanup", attempts: [], cwd });
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("disposes each replaced injected session once after a stopped run settles", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-stop-replaced-sessions-"));
+  const started = deferred();
+  const releaseReplacement = deferred();
+  const replacementSent = deferred();
+  const settlement = deferred();
+  const lifecycle = { first: { abort: 0, dispose: 0 }, second: { abort: 0, dispose: 0 } };
+  const session = (counts) => ({
+    async abort() { counts.abort += 1; },
+    async dispose() { counts.dispose += 1; },
+  });
+  const manager = createSubagentManager({
+    storageDir: join(cwd, "subagents-storage"),
+    createExecutor() {
+      return {
+        async execute(_prompt, options) {
+          await options.onAttempt?.({ liveSession: session(lifecycle.first) });
+          started.resolve();
+          await releaseReplacement.promise;
+          await options.onAttempt?.({ liveSession: session(lifecycle.second) });
+          replacementSent.resolve();
+          return settlement.promise;
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const run = await manager.run({ prompt: "replace", mode: "background" }, context);
+    await started.promise;
+    await manager.stop({ id: run.id }, context);
+    assert.deepEqual(lifecycle.first, { abort: 1, dispose: 0 });
+    releaseReplacement.resolve();
+    await replacementSent.promise;
+    settlement.reject(new Error("delayed replacement rejection"));
+    await waitFor(() => lifecycle.first.dispose === 1 && lifecycle.second.abort === 1 && lifecycle.second.dispose === 1);
+    assert.deepEqual(lifecycle.first, { abort: 1, dispose: 1 });
+    assert.deepEqual(lifecycle.second, { abort: 1, dispose: 1 });
+  } finally {
+    releaseReplacement.resolve();
+    settlement.resolve({ value: "cleanup", attempts: [], cwd });
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
   }
@@ -1175,14 +1900,14 @@ test("delivers completion and failure through follow-up messages", async () => {
   }, { managerDependencies });
   const context = await managerContext(cwd);
   try {
-    const success = await registered.manager.run({ prompt: "success" }, context);
-    const failure = await registered.manager.run({ prompt: "failure" }, context);
+    const success = await registered.manager.run({ prompt: "success", label: "docs-check", role: "scout" }, context);
+    const failure = await registered.manager.run({ prompt: "failure", label: "tests-check", role: "reviewer" }, context);
     await waitFor(async () => (await registered.manager.inspect({ id: success.id }, context)).state === "completed");
     await waitFor(async () => (await registered.manager.inspect({ id: failure.id }, context)).state === "failed");
     await waitFor(() => messages.length === 2);
     assert.deepEqual(messages.map(({ options }) => options), [{ deliverAs: "followUp", triggerTurn: true }, { deliverAs: "followUp", triggerTurn: true }]);
-    assert.match(messages[0].message.content, /Subagent .* completed/);
-    assert.match(messages[1].message.content, /Subagent .* failed/);
+    assert.match(messages[0].message.content, /Subagent docs-check role=scout \([^)]+\) completed/);
+    assert.match(messages[1].message.content, /Subagent tests-check role=reviewer \([^)]+\) failed/);
   } finally {
     await shutdown?.({ type: "session_shutdown", reason: "quit" }, context);
     await rm(cwd, { recursive: true, force: true });
@@ -1575,7 +2300,7 @@ test("isolates failures while reconciling interrupted runs", async () => {
   const startedAt = Date.now() - 100;
   for (const id of [malformedId, cleanupId, healthyId]) await mkdir(join(storageDir, id), { recursive: true });
   await writeFile(join(storageDir, malformedId, "request.json"), JSON.stringify({ prompt: 42 }));
-  await writeFile(join(storageDir, malformedId, "status.json"), JSON.stringify({ id: malformedId, state: "running", startedAt, worktreeContext: { cwd, sessionId: "session-1", runId: malformedId, name: "malformed", owner: "worktree/named/malformed" } }));
+  await writeFile(join(storageDir, malformedId, "status.json"), JSON.stringify({ id: malformedId, state: "running", startedAt, attemptDetails: [{}], systemPrompt: "x".repeat(70_000), worktreeContext: { cwd, sessionId: "session-1", runId: malformedId, name: "malformed", owner: "worktree/named/malformed" } }));
   await writeFile(join(storageDir, cleanupId, "request.json"), JSON.stringify({ prompt: "cleanup", worktree: "cleanup" }));
   await writeFile(join(storageDir, cleanupId, "status.json"), JSON.stringify({ id: cleanupId, state: "running", startedAt: startedAt + 1, worktreeContext: { cwd, sessionId: "session-1", runId: cleanupId, name: "cleanup", owner: "worktree/named/cleanup" } }));
   await writeFile(join(storageDir, healthyId, "request.json"), JSON.stringify({ prompt: "healthy" }));
@@ -1610,6 +2335,26 @@ test("isolates failures while reconciling interrupted runs", async () => {
       { id: cleanupId, state: "failed" },
       { id: healthyId, state: "failed" },
     ]);
+  } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("keeps healthy persisted rows available when another status has an I/O error", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-reconcile-storage-error-"));
+  const storageDir = join(cwd, "storage");
+  const healthyId = "66666666-6666-4666-8666-666666666666";
+  const unreadableId = "77777777-7777-4777-8777-777777777777";
+  await mkdir(join(storageDir, healthyId), { recursive: true });
+  await mkdir(join(storageDir, unreadableId, "status.json"), { recursive: true });
+  await writeFile(join(storageDir, healthyId, "status.json"), JSON.stringify({ id: healthyId, state: "stopped", startedAt: 1, finishedAt: 2 }));
+  const manager = createSubagentManager({ storageDir });
+  const context = await managerContext(cwd);
+  try {
+    assert.deepEqual((await manager.inspect({}, context)).map(({ id }) => id), [healthyId]);
+    assert.equal((await manager.inspect({ id: healthyId }, context)).state, "stopped");
+    await assert.rejects(manager.inspect({ id: unreadableId }, context), (error) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR" && /Unable to read subagent/.test(error.message));
   } finally {
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
@@ -1851,6 +2596,216 @@ test("protects a run started without the storage lease from another manager", as
   } finally {
     pending.resolve({ value: "cleanup", attempts: [], cwd });
     await second?.dispose();
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+test("backgrounds a foreground retry when the caller does not wait", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-nonblocking-retry-"));
+  const pending = deferred();
+  const retryStarted = deferred();
+  let executions = 0;
+  const manager = createSubagentManager({
+    storageDir: join(cwd, "storage"),
+    createExecutor() {
+      return {
+        async execute() {
+          executions += 1;
+          if (executions === 1) throw new Error("first failure");
+          retryStarted.resolve();
+          return pending.promise;
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const failed = await manager.run({ prompt: "retry me", mode: "foreground" }, context);
+    assert.equal(failed.state, "failed");
+    const retried = await manager.retry({ id: failed.id }, { ...context, waitForForeground: false });
+    assert.equal(retried.state, "running");
+    await retryStarted.promise;
+    pending.resolve({ value: "retried", attempts: [], cwd });
+    await waitFor(async () => (await manager.inspect({ id: retried.id }, context)).state === "completed");
+  } finally {
+    pending.resolve({ value: "cleanup", attempts: [], cwd });
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+test("tolerates malformed injected attempt setup while retaining valid accounting", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-malformed-injected-attempt-"));
+  const storageDir = join(cwd, "storage");
+  const accounting = { input: 4, output: 5, cacheRead: 6, cacheWrite: 7, cost: 0.75 };
+  const manager = createSubagentManager({
+    storageDir,
+    createExecutor() {
+      return {
+        async execute() {
+          return { value: { answer: "ok" }, attempts: [{ attempt: 1, transport: "fixture", setup: {}, accounting }], cwd };
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const result = await manager.run({ prompt: "tolerate malformed metadata", mode: "foreground" }, context);
+    assert.equal(result.state, "completed");
+    const status = await manager.inspect({ id: result.id }, context);
+    assert.deepEqual(status.accounting, accounting);
+  } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("refreshes and clears the system prompt independently of attempt summary validity", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-system-prompt-refresh-"));
+  const attemptsReady = deferred();
+  const continueAfterSecond = deferred();
+  const cleared = deferred();
+  const release = deferred();
+  const accounting = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 };
+  const setup = { hookNames: [], model: { provider: "fixture", model: "model" }, tools: [], cwd };
+  const prepared = (systemPrompt) => ({ cwd, model: { provider: "fixture", model: "model" }, tools: [], sessionLabel: "subagent", systemPrompt });
+  const manager = createSubagentManager({
+    storageDir: join(cwd, "subagents-storage"),
+    createExecutor() {
+      return {
+        async execute(_prompt, options) {
+          const session = {
+            async abort() {},
+            async dispose() {},
+          };
+          await options.onAttempt?.({ attempt: 1, transport: "fixture", setup, accounting });
+          await options.onAttempt?.({ attempt: 1, transport: "fixture", liveSession: session, prepared: prepared("FIRST"), setup, accounting });
+          await options.onAttempt?.({ attempt: 2, transport: "fixture", liveSession: session, prepared: prepared("SECOND"), setup: {}, accounting });
+          await options.onAttempt?.({ attempt: 2, transport: "fixture", session: { transport: "fixture", sessionId: "session-2" }, setup, accounting });
+          attemptsReady.resolve();
+          await continueAfterSecond.promise;
+          await options.onAttempt?.({ attempt: 3, transport: "fixture", liveSession: session, prepared: { ...prepared("THIRD"), systemPrompt: 42 }, setup: {}, accounting });
+          cleared.resolve();
+          await release.promise;
+          await options.onAttempt?.({ attempt: 4, transport: "fixture", liveSession: session, prepared: prepared("FINAL"), setup, accounting });
+          await options.onAttempt?.({ attempt: 4, transport: "fixture", session: { transport: "fixture", sessionId: "session-4" }, setup, accounting });
+          return { value: "done", attempts: [], cwd };
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  const detailContext = { ...context, includeAttemptMetadata: true };
+  try {
+    const run = await manager.run({ prompt: "system prompt", mode: "background" }, context);
+    await attemptsReady.promise;
+    assert.equal((await manager.inspect({ id: run.id }, detailContext)).systemPrompt, "SECOND");
+    continueAfterSecond.resolve();
+    await cleared.promise;
+    assert.equal((await manager.inspect({ id: run.id }, detailContext)).systemPrompt, undefined);
+    release.resolve();
+    await waitFor(async () => (await manager.inspect({ id: run.id }, context)).state === "completed");
+    assert.equal((await manager.inspect({ id: run.id }, detailContext)).systemPrompt, "FINAL");
+  } finally {
+    continueAfterSecond.resolve();
+    release.resolve();
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("retains a valid live session when injected attempt setup is malformed", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-malformed-live-attempt-"));
+  const lifecycle = { abort: 0, dispose: 0 };
+  const started = deferred();
+  const controller = new AbortController();
+  const manager = createSubagentManager({
+    storageDir: join(cwd, "storage"),
+    createExecutor() {
+      return {
+        async execute(_prompt, options, signal) {
+          const session = {
+            reference: { transport: "fixture", sessionId: "live-session" },
+            getState() { return { model: { provider: "fixture", model: "model" }, tools: [] }; },
+            getSessionStats() { return { tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }; },
+            getLastAssistant() { return undefined; },
+            subscribe() { return () => {}; },
+            async prompt() { return {}; },
+            async steer() {},
+            async abort() { lifecycle.abort += 1; },
+            async dispose() { lifecycle.dispose += 1; },
+          };
+          await options.onAttempt?.({ attempt: 1, transport: "fixture", liveSession: session, setup: {}, accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } });
+          started.resolve();
+          return new Promise((resolve, reject) => {
+            void resolve;
+            signal?.addEventListener("abort", () => reject(new Error("native cancelled")), { once: true });
+          });
+        },
+      };
+    },
+  });
+  const context = { ...(await managerContext(cwd)), signal: controller.signal };
+  try {
+    const pending = manager.run({ prompt: "malformed live metadata", mode: "foreground" }, context);
+    await started.promise;
+    controller.abort();
+    const result = await pending;
+    assert.equal(result.state, "failed");
+    assert.equal(lifecycle.abort, 1);
+    assert.equal(lifecycle.dispose, 1);
+  } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("loads legacy oversized progress metadata without breaking the picker list", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-legacy-progress-"));
+  const storageDir = join(cwd, "storage");
+  const goodId = "11111111-1111-4111-8111-111111111111";
+  const legacyId = "22222222-2222-4222-8222-222222222222";
+  const invalidId = "33333333-3333-4333-8333-333333333333";
+  const accounting = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 };
+  await mkdir(join(storageDir, goodId), { recursive: true });
+  await mkdir(join(storageDir, legacyId), { recursive: true });
+  await mkdir(join(storageDir, invalidId), { recursive: true });
+  await writeFile(join(storageDir, goodId, "status.json"), JSON.stringify({ id: goodId, state: "completed", startedAt: 1 }));
+  await writeFile(join(storageDir, legacyId, "status.json"), JSON.stringify({
+    id: legacyId,
+    state: "completed",
+    startedAt: 2,
+    progress: { accounting, toolCalls: [], state: { model: { provider: "fixture", model: "model" }, tools: [], systemPrompt: "x".repeat(70_000) } },
+  }));
+  await writeFile(join(storageDir, invalidId, "status.json"), JSON.stringify({ id: invalidId, state: "completed", startedAt: "invalid" }));
+  const manager = createSubagentManager({ storageDir });
+  const context = await managerContext(cwd);
+  try {
+    const statuses = await manager.inspect({}, context);
+    assert.deepEqual(statuses.map(({ id }) => id), [goodId, legacyId]);
+    const legacy = statuses.find(({ id }) => id === legacyId);
+    assert.equal(legacy?.progress?.state?.systemPrompt, undefined);
+    assert.equal(legacy?.attemptDetails, undefined);
+    assert.equal(legacy?.systemPrompt, undefined);
+  } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("rejects malformed persisted attempt metadata at the manager boundary", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-malformed-attempt-metadata-"));
+  const storageDir = join(cwd, "storage");
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "malformed" }));
+  const manager = createSubagentManager({ storageDir });
+  const context = await managerContext(cwd);
+  try {
+    for (const [field, value] of [["sessionId", 42], ["attempts", 0], ["attemptDetails", [{}]], ["systemPrompt", 42]]) {
+      await writeFile(join(storageDir, id, "status.json"), JSON.stringify({ id, state: "completed", startedAt: 1, [field]: value }));
+      await assert.rejects(manager.inspect({ id }, context), (error) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR");
+    }
+  } finally {
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
   }

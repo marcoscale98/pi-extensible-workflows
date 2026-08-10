@@ -450,6 +450,14 @@ void test("registers setup hooks by priority and stable name", () => {
   assert.throws(() => { registry.register({ version: "1.0.0", headline: "Duplicate", agentSetupHooks: { early: { setup() {} } } }); }, (error: unknown) => error instanceof WorkflowError && error.code === "DUPLICATE_NAME");
   assert.throws(() => { registry.register({ version: "1.0.0", headline: "Hooks", agentSetupHooks: { bad: { priority: Number.NaN, setup() {} } } }); }, (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
 });
+void test("requires standalone agent action visibility and execution together", () => {
+  for (const action of [
+    { label: "Standalone", visible: () => true, run() {}, visibleStandalone: () => true },
+    { label: "Standalone", visible: () => true, run() {}, runStandalone() {} },
+  ]) {
+    assert.throws(() => { new WorkflowRegistry().register({ version: "1.0.0", headline: "Invalid action", agentAttemptActions: { standalone: action } }); }, (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
+  }
+});
 void test("shares the registry between package imports and Pi's jiti loader", () => {
   const script = `
 import { createRequire } from "node:module";

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { executeCommand, testExtensionApi } from "./support.js";
-import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, formatNavigatorDashboard, formatNavigatorRun, registerWorkflowExtension, RunStore, openWorkflowArtifact, WorkflowError } from "../src/index.js";
+import workflowExtension, { agentActionLabels, createLaunchSnapshot, DEFAULT_SETTINGS, formatAgentDetail, formatNavigatorDashboard, formatNavigatorRun, formatWorkflowPhaseDashboard, registerWorkflowExtension, RunStore, openWorkflowArtifact, WorkflowError } from "../src/index.js";
 import { testTransport, type TestPiSession } from "./test-transport.js";
 
 type OwnershipNodes = Parameters<RunStore["saveOwnership"]>[0];
@@ -28,6 +28,25 @@ void test("workflow slash subcommands are rejected with picker guidance", async 
   await executeCommand(command, "resume run-id", { ui: { notify(message: string) { notices.push(message); } } });
   assert.match(notices[0] ?? "", /\/workflow/);
   assert.match(notices[0] ?? "", /do not accept arguments/);
+});
+void test("selected workflow agent details use the shared formatter seam", () => {
+  const agent = { id: "agent-1", name: "reviewer", path: "agent-1", state: "running" as const, model: { provider: "openai", model: "gpt" }, tools: ["read"], attempts: 2, startedAt: 0, durationMs: 2000, lastEventAt: 0, role: "critic", activity: { kind: "tool" as const, text: "read" }, accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 } };
+  const shared = formatAgentDetail(agent, undefined, 600_000);
+  const run = { id: "run-1", workflowName: "shared", cwd: "/tmp", sessionId: "session", state: "running" as const, agents: [agent], agentSessions: [] };
+  const snapshot = createLaunchSnapshot({ script: "export const meta={name:'shared'}", args: null, metadata: { name: "shared" }, settings: DEFAULT_SETTINGS, models: ["openai/gpt"], tools: ["read"], agentTypes: [], schemas: [] });
+  const dashboard = formatNavigatorDashboard(run, [], [], 600_000);
+  const phase = formatWorkflowPhaseDashboard(run, snapshot, 120, { agentId: agent.id }, undefined, 600_000).join("\n");
+  for (const line of shared) assert.ok(phase.includes(line), `missing shared detail line: ${line}`);
+  assert.match(dashboard, /reviewer · running/);
+  const failed = { ...agent, state: "failed" as const, attemptDetails: [{ attempt: 1, transport: "fixture", setup: { hookNames: [], model: agent.model, tools: agent.tools, cwd: "/tmp" }, accounting: agent.accounting, error: { code: "AGENT_FAILED", message: "boom" } }] };
+  assert.match(formatWorkflowPhaseDashboard({ ...run, agents: [failed] }, snapshot, 120, { agentId: failed.id }, undefined, 600_000).join("\n"), /Error: AGENT_FAILED: boom/);
+});
+void test("shared agent action labels gate standalone controls by state", () => {
+  const labels = (state: "running" | "completed" | "failed" | "stopped") => agentActionLabels({ extensionLabels: [], hasWorktree: false, openPrompt: false, openSystemPrompt: false, openResult: false, standaloneState: state });
+  assert.deepEqual(labels("running").slice(-4), ["Steer", "Stop", "Copy agent ID", "Back"]);
+  assert.deepEqual(labels("completed").slice(-2), ["Copy agent ID", "Back"]);
+  assert.deepEqual(labels("failed").slice(-3), ["Retry", "Copy agent ID", "Back"]);
+  assert.deepEqual(labels("stopped").slice(-3), ["Retry", "Copy agent ID", "Back"]);
 });
 void test("session-scoped navigator shows metadata and confirms terminal deletion", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-navigator-"));

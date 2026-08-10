@@ -51,7 +51,7 @@ subagents_run({ prompt: "Summarize README.md.", mode: "foreground" })
 
 ## Interactive inspection
 
-In Pi's TUI, `/subagents` opens a picker of durable standalone runs. Select a run to inspect its current or terminal status, including persisted label and role data; requests without a role are shown as `role=none`. The command is read-only, does not invoke the LLM, and refreshes only when you return to the picker.
+In Pi's TUI, `/subagents` opens a picker of durable standalone runs for the current session. Select a run to inspect the same activity, stall warning, state, model, role, tools, attempts, duration, token accounting, cost, and error fields used by `/workflow`; prompt, request failure, and result details remain bounded, and requests without a role remain `role=none`. The detail view also exposes registered standalone agent actions plus `Steer` and `Stop` while running, `Retry` for failed or stopped runs, and copy/editor controls where applicable. Inspection does not launch a new LLM call; lifecycle actions may steer, stop, or retry a run.
 
 ## Tools
 

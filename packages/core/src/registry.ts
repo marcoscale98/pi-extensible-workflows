@@ -75,7 +75,8 @@ export class WorkflowRegistry {
       if (this.#hooks.has(name)) fail("DUPLICATE_NAME", `Agent setup hook already registered: ${name}`);
     }
     for (const [name, action] of Object.entries(agentAttemptActions)) {
-      if (!IDENTIFIER.test(name) || !object(action) || Object.keys(action).some((key) => !["label", "visible", "run"].includes(key)) || typeof action.label !== "string" || !action.label.trim() || typeof action.visible !== "function" || typeof action.run !== "function") fail("INVALID_METADATA", `Invalid agent attempt action: ${name}`);
+      if (!IDENTIFIER.test(name) || !object(action) || Object.keys(action).some((key) => !["label", "visible", "run", "visibleStandalone", "runStandalone"].includes(key)) || typeof action.label !== "string" || !action.label.trim() || typeof action.visible !== "function" || typeof action.run !== "function" || action.visibleStandalone !== undefined && typeof action.visibleStandalone !== "function" || action.runStandalone !== undefined && typeof action.runStandalone !== "function") fail("INVALID_METADATA", `Invalid agent attempt action: ${name}`);
+      if ((action.visibleStandalone !== undefined) !== (action.runStandalone !== undefined)) fail("INVALID_METADATA", `Standalone agent attempt actions require visibleStandalone and runStandalone: ${name}`);
       if (this.#agentAttemptActions.has(name)) fail("DUPLICATE_NAME", `Agent attempt action already registered: ${name}`);
     }
     const stored = deepFreeze({ ...extension, functions, modelAliases, agentSetupHooks, agentAttemptActions, ...(roleDirectories.length ? { roleDirectories } : {}) });

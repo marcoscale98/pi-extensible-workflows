@@ -4,6 +4,8 @@ import type { SubagentRunRequest, SubagentStatus } from "./contracts.js";
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const TERMINAL_STATES = new Set<SubagentStatus["state"]>(["completed", "failed", "stopped"]);
+const MAX_INSPECT_VALUE_CHARS = 4000;
+const MAX_INSPECT_TOOL_CALLS = 32;
 type SubagentRenderArgs = Partial<SubagentRunRequest> & { id?: string };
 
 type ProgressComponent = ReturnType<typeof subagentProgressBlock>;
@@ -96,6 +98,23 @@ function accounting(status: SubagentStatus): string | undefined {
   return `tokens=${String(total)} cost=$${value.cost.toFixed(2)}`;
 }
 
+function timestamp(value: number | undefined): string | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function boundedValue(value: unknown): string {
+  let text: string;
+  try {
+    const serialized: unknown = JSON.stringify(value, null, 2);
+    text = typeof serialized === "string" ? serialized : String(value);
+  } catch {
+    text = String(value);
+  }
+  return text.length > MAX_INSPECT_VALUE_CHARS ? `${text.slice(0, MAX_INSPECT_VALUE_CHARS)}…` : text;
+}
+
 function formatSubagentProgress(status: SubagentStatus, args: SubagentRenderArgs, theme: Theme, spinner: string, now: number, expanded: boolean): string {
   const color = stateColor(status.state);
   const elapsed = runtime(status.startedAt, status.finishedAt, now);
@@ -113,6 +132,43 @@ function formatSubagentProgress(status: SubagentStatus, args: SubagentRenderArgs
     const usage = accounting(status);
     if (usage) lines.push(`  ${theme.fg("dim", usage)}`);
     if (status.worktree) lines.push(`  ${theme.fg("dim", `worktree=${status.worktree.path} branch=${status.worktree.branch}`)}`);
+  }
+  return lines.join("\n");
+}
+
+function formatSubagentLaunch(status: SubagentStatus, args: SubagentRenderArgs, theme: Theme, expanded: boolean): string {
+  const metadata = requestMetadata(args, args.id === undefined);
+  const lines = [
+    `${theme.fg("success", "✓")} ${theme.bold(theme.fg("accent", `Subagent: ${label({ ...args, id: status.id })}`))} ${theme.fg("success", "[launched]")}${metadata ? ` ${theme.fg("dim", metadata)}` : ""}`,
+  ];
+  if (expanded) lines.push(`  ${theme.fg("dim", `id=${status.id}`)}`);
+  return lines.join("\n");
+}
+
+function formatSubagentInspection(status: SubagentStatus, args: { id?: string }, details: unknown, theme: Theme, expanded: boolean): string {
+  const lines = [formatSubagentProgress(status, { id: args.id ?? status.id }, theme, "◇", Date.now(), false)];
+  if (!expanded) return lines[0] ?? "";
+  lines.push(`  ${theme.fg("dim", `id=${status.id}`)}`);
+  const startedAt = timestamp(status.startedAt);
+  const finishedAt = timestamp(status.finishedAt);
+  const lastEventAt = timestamp(status.lastEventAt);
+  if (startedAt) lines.push(`  ${theme.fg("dim", `startedAt=${startedAt}`)}`);
+  if (finishedAt) lines.push(`  ${theme.fg("dim", `finishedAt=${finishedAt}`)}`);
+  if (lastEventAt) lines.push(`  ${theme.fg("dim", `lastEventAt=${lastEventAt}`)}`);
+  const model = status.progress?.state?.model;
+  if (model) lines.push(`  ${theme.fg("dim", `model=${model.provider}/${model.model}${model.thinking ? `:${model.thinking}` : ""}`)}`);
+  if (status.activity) lines.push(`  ${theme.fg("dim", `activity=${status.activity.kind}${status.activity.text ? ` ${status.activity.text}` : ""}`)}`);
+  if (status.accounting) lines.push(`  ${theme.fg("dim", `accounting=input=${String(status.accounting.input)} output=${String(status.accounting.output)} cacheRead=${String(status.accounting.cacheRead)} cacheWrite=${String(status.accounting.cacheWrite)} cost=${String(status.accounting.cost)}`)}`);
+  if (status.usage) lines.push(`  ${theme.fg("dim", `usage=tokens=${String(status.usage.tokens.total)} cost=${String(status.usage.cost)}`)}`);
+  if (status.worktree) lines.push(`  ${theme.fg("dim", `worktree=${status.worktree.path} branch=${status.worktree.branch}`)}`);
+  if (status.toolCalls?.length) {
+    lines.push(`  ${theme.fg("dim", `toolCalls=${String(status.toolCalls.length)}`)}`);
+    for (const call of status.toolCalls.slice(-MAX_INSPECT_TOOL_CALLS)) lines.push(`    ${theme.fg("dim", `${call.name} [${call.state}]`)}`);
+  }
+  const record = typeof details === "object" && details !== null && !Array.isArray(details) ? details as Record<string, unknown> : undefined;
+  if (record && Object.prototype.hasOwnProperty.call(record, "value")) {
+    lines.push(`  ${theme.fg("dim", "value:")}`);
+    for (const line of boundedValue(record.value).split("\n")) lines.push(`    ${line}`);
   }
   return lines.join("\n");
 }
@@ -159,6 +215,7 @@ export function renderSubagentResult(result: AgentToolResult<unknown>, options: 
   }
 
   if (!status || context.isError) return textBlock(resultText(result));
+  if (!options.isPartial && status.state === "running") return textBlock(formatSubagentLaunch(status, context.args, theme, options.expanded));
   if (TERMINAL_STATES.has(status.state)) state.subagentProgressFrozenAt ??= Date.now();
   else delete state.subagentProgressFrozenAt;
   let component = state.subagentProgressComponent;
@@ -250,11 +307,7 @@ export function renderSubagentInspectCall(args: { id?: string }, theme: Theme) {
 
 export function renderSubagentInspectResult(result: AgentToolResult<unknown>, options: { expanded: boolean }, theme: Theme, args: { id?: string }) {
   const status = statusValue(result.details);
-  if (status) {
-    const component = subagentProgressBlock(status, { id: args.id ?? status.id }, theme, Date.now());
-    component.setExpanded(options.expanded);
-    return component;
-  }
+  if (status) return textBlock(formatSubagentInspection(status, args, result.details, theme, options.expanded));
   if (Array.isArray(result.details)) {
     const statuses = result.details.map(statusValue).filter((value): value is SubagentStatus => value !== undefined);
     const lines = [theme.bold(theme.fg("accent", `Subagents (${String(statuses.length)})`)), ...statuses.map((entry) => {

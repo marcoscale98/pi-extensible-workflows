@@ -6,7 +6,7 @@ import { type WorkflowRegistryApi } from "./registry.js";
 import { deepFreeze, object, resolveModelReference, validateModelAliases } from "./utils.js";
 import { saveModelAliases, resolveWorkflowSettings, workflowProjectSettingsPath, workflowSettingsPath } from "./validation.js";
 import { openWorkflowArtifact, workflowPromptArtifact, workflowResultArtifact, workflowScriptArtifact, type WorkflowArtifact } from "./workflow-artifacts.js";
-import { agentBreadcrumb, formatCheckpointReview, formatNavigatorRun, formatWorkflowPhaseDashboard, navigatorAttentionSort, navigatorRunLabels, SETTLED_AGENT_STATES, themeWorkflowProgressStyles } from "./host-view.js";
+import { agentActionLabels, agentBreadcrumb, formatCheckpointReview, formatNavigatorRun, formatWorkflowPhaseDashboard, navigatorAttentionSort, navigatorRunLabels, SETTLED_AGENT_STATES, themeWorkflowProgressStyles, visibleAgentAttemptActions as visibleRegisteredAgentAttemptActions } from "./host-view.js";
 import { buildWorkflowPhaseModel, buildWorkflowPhaseTree, navigateWorkflowPhaseTree, preserveWorkflowPhaseTreeSelection, workflowPhaseTreeInitialExpanded } from "./host-phases.js";
 import { type WorkflowRecoveryContext, type createWorkflowRecovery } from "./host-recovery.js";
 import { failureDiagnosticsFrom, formatWorkflowFailureDelivery, formatWorkflowFailureDeliveryFallback } from "./host-delivery.js";
@@ -354,20 +354,17 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
           };
           const visibleAgentAttemptActions = (dashboard: Awaited<ReturnType<typeof loadDashboard>>, agent: AgentRecord): readonly [string, import("./types.js").AgentAttemptAction][] => {
             const context = agentAttemptActionContext(dashboard, agent);
-            if (!context) return [];
-            return Object.entries(registry.agentAttemptActions()).filter(([, action]) => { try { return action.visible(context); } catch { return false; } });
+            return context ? visibleRegisteredAgentAttemptActions(registry.agentAttemptActions(), context) : [];
           };
-          const agentActionLabels = (dashboard: Awaited<ReturnType<typeof loadDashboard>>, agent: AgentRecord): string[] => {
+          const agentActionOptions = (dashboard: Awaited<ReturnType<typeof loadDashboard>>, agent: AgentRecord): string[] => {
             const worktree = agentWorktreeFor(dashboard, agent);
-            return [
-              ...visibleAgentAttemptActions(dashboard, agent).map(([, action]) => action.label),
-              ...(worktree ? ["Copy branch", "Copy worktree path"] : []),
-              ...(ctx.mode === "tui" && agent.prompt !== undefined ? ["Open prompt in editor"] : []),
-              ...(ctx.mode === "tui" && agent.systemPrompt !== undefined ? ["Open system prompt in editor"] : []),
-              ...(ctx.mode === "tui" && dashboard.agentResults.has(agent.id) ? ["Open result in editor"] : []),
-              "Copy agent ID",
-              "Back",
-            ];
+            return agentActionLabels({
+              extensionLabels: visibleAgentAttemptActions(dashboard, agent).map(([, action]) => action.label),
+              hasWorktree: worktree !== undefined,
+              openPrompt: ctx.mode === "tui" && agent.prompt !== undefined,
+              openSystemPrompt: ctx.mode === "tui" && agent.systemPrompt !== undefined,
+              openResult: ctx.mode === "tui" && dashboard.agentResults.has(agent.id),
+            });
           };
           const selectAgent = async (dashboard: Awaited<ReturnType<typeof loadDashboard>>, requestedAgentId?: string): Promise<void> => {
             const byId = new Map(dashboard.agents.map((agent) => [agent.id, agent]));
@@ -382,7 +379,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
             }
             if (!selected) return;
             const worktree = agentWorktreeFor(dashboard, selected);
-            const actions = agentActionLabels(dashboard, selected);
+            const actions = agentActionOptions(dashboard, selected);
             for (;;) {
               const action = await ctx.ui.select(title(selected), actions);
               if (!action || action === "Back") return;
@@ -462,7 +459,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                   };
                   const actionOptions = () => {
                     const agent = selectedAgentRecord();
-                    return agent ? agentActionLabels(view, agent) : [...view.actions.keys(), "Back"];
+                    return agent ? agentActionOptions(view, agent) : [...view.actions.keys(), "Back"];
                   };
                   let editorRunning = false;
                   let timer: ReturnType<typeof setInterval> | undefined;

@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
-import { normalizeSubagentRunRequest, type SubagentManager, type SubagentManagerContext, type SubagentRunRequest, type SubagentStatus } from "./contracts.js";
+import { copyToClipboard, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { Editor, truncateToWidth, type EditorTheme } from "@earendil-works/pi-tui";
+import { agentActionLabels, deepFreeze, formatAgentDetail, jsonValue, loadingRegistry, navigatorAttentionSortByState, openWorkflowArtifact, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions, workflowPromptArtifact, workflowResultArtifact, type AgentAttemptSummary, type AgentDetailPresentation, type StandaloneAgentAttemptActionContext, type WorkflowArtifact } from "pi-extensible-workflows";
+import { normalizeSubagentRunRequest, SUBAGENT_ATTEMPT_DETAILS_LIMIT, SUBAGENT_SYSTEM_PROMPT_LIMIT, type SubagentManager, type SubagentManagerContext, type SubagentRunRequest, type SubagentStatus } from "./contracts.js";
 
 const MAX_DETAIL_TEXT = 4000;
 const MAX_DETAIL_TOOL_CALLS = 32;
@@ -13,7 +14,6 @@ type NavigatorEntry = {
   readonly requestError?: string;
 };
 type Inspection = { readonly entry: NavigatorEntry; readonly record: Record<string, unknown> };
-type NavigatorTheme = Pick<Theme, "fg" | "bold">;
 
 type RegisterCommand = ExtensionAPI["registerCommand"];
 
@@ -21,13 +21,166 @@ function errorMessage(error: unknown): string { return error instanceof Error ? 
 function objectValue(value: unknown): Record<string, unknown> | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function isFileNotFound(error: unknown): boolean { return objectValue(error)?.code === "ENOENT"; }
 function safeRunId(id: string): boolean { return id !== "." && id !== ".." && /^[A-Za-z0-9._-]+$/.test(id); }
-
+type ModelThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+function resourceSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["setup"]["disabledAgentResources"]> | undefined {
+  const record = objectValue(value);
+  const skills = stringArrayValue(record?.skills);
+  const extensions = stringArrayValue(record?.extensions);
+  const unmatchedSkills = stringArrayValue(record?.unmatchedSkills);
+  const unmatchedExtensions = stringArrayValue(record?.unmatchedExtensions);
+  if (!record || !skills || !extensions || !unmatchedSkills || !unmatchedExtensions) return undefined;
+  const excludedSkills = record.excludedSkills === undefined ? undefined : stringArrayValue(record.excludedSkills);
+  const excludedExtensions = record.excludedExtensions === undefined ? undefined : stringArrayValue(record.excludedExtensions);
+  if (record.excludedSkills !== undefined && excludedSkills === undefined || record.excludedExtensions !== undefined && excludedExtensions === undefined) return undefined;
+  return { skills, extensions, unmatchedSkills, unmatchedExtensions, ...(excludedSkills === undefined ? {} : { excludedSkills }), ...(excludedExtensions === undefined ? {} : { excludedExtensions }) };
+}
+function thinkingValue(value: unknown): ModelThinking | undefined { return value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" ? value : undefined; }
+function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
+function nonnegativeInteger(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
+function stringArrayValue(value: unknown): readonly string[] | undefined { return Array.isArray(value) && value.length <= 256 && value.every((item) => typeof item === "string") ? value : undefined; }
+function accountingValue(value: unknown): NonNullable<SubagentStatus["accounting"]> | undefined {
+  const record = objectValue(value);
+  if (!record) return undefined;
+  const input = record.input;
+  const output = record.output;
+  const cacheRead = record.cacheRead;
+  const cacheWrite = record.cacheWrite;
+  const cost = record.cost;
+  if (!finiteNumber(input) || !finiteNumber(output) || !finiteNumber(cacheRead) || !finiteNumber(cacheWrite) || !finiteNumber(cost)) return undefined;
+  return { input, output, cacheRead, cacheWrite, cost };
+}
+function activityValue(value: unknown): NonNullable<SubagentStatus["activity"]> | undefined {
+  const record = objectValue(value);
+  return record && (record.kind === "reasoning" || record.kind === "tool" || record.kind === "text") && typeof record.text === "string" ? { kind: record.kind, text: record.text } : undefined;
+}
+function toolCallsValue(value: unknown): NonNullable<SubagentStatus["toolCalls"]> | undefined {
+  if (!Array.isArray(value) || value.length > 256) return undefined;
+  const calls: NonNullable<SubagentStatus["toolCalls"]>[number][] = [];
+  for (const item of value) {
+    const record = objectValue(item);
+    if (!record || typeof record.id !== "string" || typeof record.name !== "string" || record.state !== "running" && record.state !== "completed" && record.state !== "failed") return undefined;
+    calls.push({ id: record.id, name: record.name, state: record.state });
+  }
+  return calls;
+}
+function usageValue(value: unknown): NonNullable<SubagentStatus["usage"]> | undefined {
+  const record = objectValue(value);
+  const tokens = objectValue(record?.tokens);
+  if (!record || !tokens) return undefined;
+  const input = tokens.input;
+  const output = tokens.output;
+  const cacheRead = tokens.cacheRead;
+  const cacheWrite = tokens.cacheWrite;
+  const total = tokens.total;
+  const cost = record.cost;
+  if (!finiteNumber(input) || !finiteNumber(output) || !finiteNumber(cacheRead) || !finiteNumber(cacheWrite) || !finiteNumber(total) || !finiteNumber(cost)) return undefined;
+  return { tokens: { input, output, cacheRead, cacheWrite, total }, cost };
+}
+function sessionReferenceValue(value: unknown): AgentAttemptSummary["session"] | undefined {
+  const record = objectValue(value);
+  const transport = record?.transport;
+  const sessionId = record?.sessionId;
+  if (!record || typeof transport !== "string" || !transport.trim() || typeof sessionId !== "string" || !sessionId.trim()) return undefined;
+  return { transport, sessionId, ...(record.locator === undefined || !jsonValue(record.locator) ? {} : { locator: record.locator }) };
+}
+function errorValue(value: unknown): { readonly code: string; readonly message: string } | undefined {
+  const record = objectValue(value);
+  return record && typeof record.code === "string" && typeof record.message === "string" ? { code: record.code, message: record.message } : undefined;
+}
+function worktreeValue(value: unknown): { readonly path: string; readonly branch: string } | undefined {
+  const record = objectValue(value);
+  return record && typeof record.path === "string" && record.path.trim() && typeof record.branch === "string" && record.branch.trim() ? { path: record.path, branch: record.branch } : undefined;
+}
+function progressValue(value: unknown): NonNullable<SubagentStatus["progress"]> | undefined {
+  const record = objectValue(value);
+  if (!record) return undefined;
+  const accounting = accountingValue(record.accounting);
+  const toolCalls = toolCallsValue(record.toolCalls);
+  if (!accounting || !toolCalls) return undefined;
+  const activity = record.activity === undefined ? undefined : activityValue(record.activity);
+  if (record.activity !== undefined && activity === undefined) return undefined;
+  const rawState = record.state;
+  let state: NonNullable<NonNullable<SubagentStatus["progress"]>["state"]> | undefined;
+  if (rawState !== undefined) {
+    const stateRecord = objectValue(rawState);
+    const model = objectValue(stateRecord?.model);
+    const tools = stringArrayValue(stateRecord?.tools);
+    if (!stateRecord || !model || !tools || typeof model.provider !== "string" || typeof model.model !== "string") return undefined;
+    const thinking = thinkingValue(model.thinking);
+    if (model.thinking !== undefined && thinking === undefined) return undefined;
+    state = { model: { provider: model.provider, model: model.model, ...(thinking === undefined ? {} : { thinking }) }, tools };
+  }
+  const lastEventAt = record.lastEventAt;
+  if (lastEventAt !== undefined && !nonnegativeInteger(lastEventAt)) return undefined;
+  return { accounting, toolCalls, ...(state === undefined ? {} : { state }), ...(activity === undefined ? {} : { activity }), ...(lastEventAt === undefined ? {} : { lastEventAt }) };
+}
+function attemptValue(value: unknown): AgentAttemptSummary | undefined {
+  const record = objectValue(value);
+  const setup = objectValue(record?.setup);
+  const model = objectValue(setup?.model);
+  const hookNames = stringArrayValue(setup?.hookNames);
+  const tools = stringArrayValue(setup?.tools);
+  const resources = setup?.disabledAgentResources === undefined ? undefined : resourceSummaryValue(setup.disabledAgentResources);
+  const accounting = accountingValue(record?.accounting);
+  const session = record?.session === undefined ? undefined : sessionReferenceValue(record.session);
+  const error = record?.error === undefined ? undefined : errorValue(record.error);
+  const thinking = thinkingValue(model?.thinking);
+  if (!record || !nonnegativeInteger(record.attempt) || record.attempt < 1 || typeof record.transport !== "string" || !record.transport.trim() || !setup || typeof setup.cwd !== "string" || !setup.cwd.trim() || !model || typeof model.provider !== "string" || !model.provider.trim() || typeof model.model !== "string" || !model.model.trim() || model.thinking !== undefined && thinking === undefined || !hookNames || !tools || setup.disabledAgentResources !== undefined && resources === undefined || !accounting || record.session !== undefined && session === undefined || record.error !== undefined && error === undefined) return undefined;
+  return {
+    attempt: record.attempt,
+    transport: record.transport,
+    setup: { hookNames, model: { provider: model.provider, model: model.model, ...(thinking === undefined ? {} : { thinking }) }, tools, cwd: setup.cwd, ...(resources === undefined ? {} : { disabledAgentResources: resources }) },
+    accounting,
+    ...(session === undefined ? {} : { session }),
+    ...(error === undefined ? {} : { error }),
+  };
+}
 function statusValue(value: unknown): SubagentStatus | undefined {
   const record = objectValue(value);
   const id = record?.id;
   const state = record?.state;
   if (!record || typeof id !== "string" || !id || state !== "running" && state !== "completed" && state !== "failed" && state !== "stopped") return undefined;
-  return value as SubagentStatus;
+  const startedAt = record.startedAt;
+  const finishedAt = record.finishedAt;
+  const lastEventAt = record.lastEventAt;
+  if (startedAt !== undefined && !nonnegativeInteger(startedAt) || finishedAt !== undefined && (!nonnegativeInteger(finishedAt) || typeof startedAt === "number" && finishedAt < startedAt) || lastEventAt !== undefined && !nonnegativeInteger(lastEventAt)) return undefined;
+  const sessionId = record.sessionId;
+  if (sessionId !== undefined && (typeof sessionId !== "string" || !sessionId.trim())) return undefined;
+  const worktree = record.worktree === undefined ? undefined : worktreeValue(record.worktree);
+  if (record.worktree !== undefined && worktree === undefined) return undefined;
+  const error = record.error === undefined ? undefined : errorValue(record.error);
+  if (record.error !== undefined && error === undefined) return undefined;
+  const attempts = record.attempts;
+  if (attempts !== undefined && (!nonnegativeInteger(attempts) || attempts < 1)) return undefined;
+  const attemptDetails = record.attemptDetails === undefined ? undefined : Array.isArray(record.attemptDetails) ? record.attemptDetails.slice(-SUBAGENT_ATTEMPT_DETAILS_LIMIT).map(attemptValue) : undefined;
+  if (record.attemptDetails !== undefined && (!attemptDetails || attemptDetails.some((attempt): attempt is undefined => attempt === undefined))) return undefined;
+  const systemPrompt = record.systemPrompt;
+  if (systemPrompt !== undefined && (typeof systemPrompt !== "string" || systemPrompt.length > SUBAGENT_SYSTEM_PROMPT_LIMIT)) return undefined;
+  const progress = record.progress === undefined ? undefined : progressValue(record.progress);
+  const activity = record.activity === undefined ? undefined : activityValue(record.activity);
+  const toolCalls = record.toolCalls === undefined ? undefined : toolCallsValue(record.toolCalls);
+  const accounting = record.accounting === undefined ? undefined : accountingValue(record.accounting);
+  const usage = record.usage === undefined ? undefined : usageValue(record.usage);
+  if (record.progress !== undefined && progress === undefined || record.activity !== undefined && activity === undefined || record.toolCalls !== undefined && toolCalls === undefined || record.accounting !== undefined && accounting === undefined || record.usage !== undefined && usage === undefined) return undefined;
+  const result: SubagentStatus = {
+    id,
+    ...(sessionId === undefined ? {} : { sessionId }),
+    state,
+    ...(startedAt === undefined ? {} : { startedAt }),
+    ...(finishedAt === undefined ? {} : { finishedAt }),
+    ...(worktree === undefined ? {} : { worktree }),
+    ...(error === undefined ? {} : { error }),
+    ...(attempts === undefined ? {} : { attempts }),
+    ...(attemptDetails === undefined ? {} : { attemptDetails: attemptDetails.filter((attempt): attempt is AgentAttemptSummary => attempt !== undefined) }),
+    ...(progress === undefined ? {} : { progress }),
+    ...(activity === undefined ? {} : { activity }),
+    ...(toolCalls === undefined ? {} : { toolCalls }),
+    ...(accounting === undefined ? {} : { accounting }),
+    ...(usage === undefined ? {} : { usage }),
+    ...(systemPrompt === undefined ? {} : { systemPrompt }),
+    ...(lastEventAt === undefined ? {} : { lastEventAt }),
+  };
+  return result;
 }
 
 function inspectionValue(value: unknown): { status: SubagentStatus; record: Record<string, unknown> } | undefined {
@@ -36,8 +189,8 @@ function inspectionValue(value: unknown): { status: SubagentStatus; record: Reco
   return record && status ? { status, record } : undefined;
 }
 
-function managerContext(context: ExtensionCommandContext): SubagentManagerContext {
-  return { toolCallId: "subagents-command", signal: undefined, onUpdate: undefined, extensionContext: context };
+function managerContext(context: ExtensionCommandContext, waitForForeground = true, includeAttemptMetadata = false): SubagentManagerContext {
+  return { toolCallId: "subagents-command", signal: undefined, onUpdate: undefined, ...(waitForForeground ? {} : { waitForForeground: false }), ...(includeAttemptMetadata ? { includeAttemptMetadata: true } : {}), extensionContext: context };
 }
 
 async function loadRequest(storageDirectory: string, id: string): Promise<{ request?: SubagentRunRequest; error?: string }> {
@@ -51,21 +204,27 @@ async function loadRequest(storageDirectory: string, id: string): Promise<{ requ
   }
 }
 
+const ATTENTION_ORDER: Readonly<Record<SubagentStatus["state"], number>> = { running: 0, failed: 1, stopped: 2, completed: 3 };
+function attentionSort(entries: readonly NavigatorEntry[]): NavigatorEntry[] {
+  return navigatorAttentionSortByState(entries, (entry) => entry.status.state, (entry) => entry.status.finishedAt, ATTENTION_ORDER);
+}
+
 async function loadEntries(manager: SubagentManager, storageDirectory: string, context: ExtensionCommandContext): Promise<NavigatorEntry[]> {
   const value = await manager.inspect({}, managerContext(context));
   if (!Array.isArray(value)) return [];
   const entries: NavigatorEntry[] = [];
+  const sessionId = context.sessionManager.getSessionId();
   for (const candidate of value) {
     const status = statusValue(candidate);
-    if (!status) continue;
+    if (!status || status.sessionId !== sessionId) continue;
     const request = await loadRequest(storageDirectory, status.id);
     entries.push({ status, ...(request.request === undefined ? {} : { request: request.request }), ...(request.error === undefined ? {} : { requestError: request.error }) });
   }
-  return entries;
+  return attentionSort(entries);
 }
 
 async function inspectEntry(manager: SubagentManager, storageDirectory: string, entry: NavigatorEntry, context: ExtensionCommandContext): Promise<Inspection> {
-  const inspected = inspectionValue(await manager.inspect({ id: entry.status.id }, managerContext(context)));
+  const inspected = inspectionValue(await manager.inspect({ id: entry.status.id }, managerContext(context, true, true)));
   if (!inspected) throw new Error(`Subagent ${entry.status.id} returned an invalid inspection`);
   const request = await loadRequest(storageDirectory, entry.status.id);
   return {
@@ -82,110 +241,349 @@ function requestRole(request: SubagentRunRequest | undefined): string {
   return typeof override?.name === "string" && override.name.trim() ? override.name.trim() : "none";
 }
 function shortId(id: string): string { return id.length > 12 ? id.slice(0, 8) : id; }
-function pickerLabel(entry: NavigatorEntry, index: number): string { return `${String(index + 1)}. label=${requestLabel(entry.request)} role=${requestRole(entry.request)} [${entry.status.state}] ${shortId(entry.status.id)}`; }
-function stateColor(state: SubagentStatus["state"]): "accent" | "success" | "error" { return state === "running" ? "accent" : state === "completed" ? "success" : "error"; }
+function pickerLabel(entry: NavigatorEntry, index: number): string { return `${String(index + 1)}. label=${boundedText(requestLabel(entry.request), 256)} role=${boundedText(requestRole(entry.request), 256)} [${entry.status.state}] ${shortId(entry.status.id)}`; }
 function boundedText(value: unknown, limit = MAX_DETAIL_TEXT): string {
   const text = typeof value === "string" ? value : (() => { try { const serialized: unknown = JSON.stringify(value); return typeof serialized === "string" ? serialized : String(value); } catch { return String(value); } })();
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 function timestamp(value: unknown): string | undefined { return typeof value === "number" && Number.isFinite(value) ? new Date(value).toISOString() : undefined; }
-function numberValue(value: unknown): string { return typeof value === "number" && Number.isFinite(value) ? String(value) : "?"; }
 
 function appendValue(lines: string[], title: string, value: unknown): void {
   lines.push(`${title}:`);
   for (const line of boundedText(value).split("\n")) lines.push(`  ${line}`);
 }
 
-function detailLines(inspection: Inspection, theme?: NavigatorTheme): string[] {
+function latestAttempt(status: SubagentStatus): AgentAttemptSummary | undefined {
+  return [...(status.attemptDetails ?? [])].sort((left, right) => right.attempt - left.attempt)[0];
+}
+function usageAccounting(status: SubagentStatus): NonNullable<SubagentStatus["accounting"]> | undefined {
+  if (status.accounting) return status.accounting;
+  if (status.progress?.accounting) return status.progress.accounting;
+  const usage = status.usage;
+  if (!usage) return undefined;
+  return { input: usage.tokens.input, output: usage.tokens.output, cacheRead: usage.tokens.cacheRead, cacheWrite: usage.tokens.cacheWrite, cost: usage.cost };
+}
+function detailPresentation(inspection: Inspection): AgentDetailPresentation {
+  const { status, request } = inspection.entry;
+  const attempt = latestAttempt(status);
+  const state = status.progress?.state;
+  const activity = status.activity ?? status.progress?.activity;
+  const model = state?.model ?? attempt?.setup.model;
+  const tools = state?.tools ?? attempt?.setup.tools;
+  const lastEventAt = status.lastEventAt ?? status.progress?.lastEventAt;
+  const attempts = status.attempts ?? attempt?.attempt;
+  const accounting = usageAccounting(status);
+  const role = requestRole(request);
+  const error = status.error ?? attempt?.error;
+  return {
+    state: status.state,
+    ...(activity === undefined ? {} : { activity: { kind: activity.kind, text: boundedText(activity.text) } }),
+    ...(lastEventAt === undefined ? {} : { lastEventAt }),
+    ...(model === undefined ? {} : { model: { provider: boundedText(model.provider, 256), model: boundedText(model.model, 256), ...(model.thinking === undefined ? {} : { thinking: model.thinking }) } }),
+    ...(role === "none" ? {} : { role: boundedText(role, 256) }),
+    ...(tools === undefined ? {} : { tools: tools.slice(0, 256).map((tool) => boundedText(tool, 256)) }),
+    ...(attempts === undefined ? {} : { attempts }),
+    ...(status.startedAt === undefined ? {} : { startedAt: status.startedAt }),
+    ...(status.finishedAt === undefined ? {} : { finishedAt: status.finishedAt }),
+    ...(accounting === undefined ? {} : { accounting }),
+    ...(error === undefined ? {} : { error: { code: boundedText(error.code, 256), message: boundedText(error.message) } }),
+  };
+}
+function detailLines(inspection: Inspection, theme?: Theme): string[] {
   const { entry, record } = inspection;
   const { status, request } = entry;
-  const color = stateColor(status.state);
-  const colorize = (value: string): string => theme?.fg(color, value) ?? value;
+  const styles = theme === undefined ? undefined : themeWorkflowProgressStyles(theme);
   const lines = [
-    theme?.bold(theme.fg("accent", `Subagent ${status.id}`)) ?? `Subagent ${status.id}`,
-    `state=${colorize(status.state)}`,
-    `label=${requestLabel(request)}`,
-    `role=${requestRole(request)}`,
+    theme?.bold(theme.fg("accent", `Subagent ${boundedText(status.id, 256)}`)) ?? `Subagent ${boundedText(status.id, 256)}`,
+    `label=${boundedText(requestLabel(request), 256)} role=${boundedText(requestRole(request), 256)}`,
+    ...formatAgentDetail(detailPresentation(inspection), styles, status.finishedAt ?? Date.now()),
   ];
   const startedAt = timestamp(status.startedAt);
   const finishedAt = timestamp(status.finishedAt);
-  const lastEventAt = timestamp(status.lastEventAt);
   if (startedAt) lines.push(`startedAt=${startedAt}`);
   if (finishedAt) lines.push(`finishedAt=${finishedAt}`);
-  if (lastEventAt) lines.push(`lastEventAt=${lastEventAt}`);
   if (request?.prompt) appendValue(lines, "prompt", request.prompt);
   if (entry.requestError) lines.push(`request=unavailable: ${boundedText(entry.requestError)}`);
-  const activity = objectValue(status.activity);
-  if (activity) lines.push(`activity=${typeof activity.kind === "string" ? activity.kind : "unknown"}${typeof activity.text === "string" && activity.text ? ` ${boundedText(activity.text, 1000)}` : ""}`);
-  const progress = objectValue(status.progress);
-  const progressState = objectValue(progress?.state);
-  const model = progressState?.model;
-  const modelRecord = objectValue(model);
-  if (modelRecord && typeof modelRecord.provider === "string" && typeof modelRecord.model === "string") lines.push(`model=${modelRecord.provider}/${modelRecord.model}${typeof modelRecord.thinking === "string" ? `:${modelRecord.thinking}` : ""}`);
-  const accounting = objectValue(status.accounting);
-  if (accounting) lines.push(`accounting=input=${numberValue(accounting.input)} output=${numberValue(accounting.output)} cacheRead=${numberValue(accounting.cacheRead)} cacheWrite=${numberValue(accounting.cacheWrite)} cost=${numberValue(accounting.cost)}`);
-  const usage = objectValue(status.usage);
-  if (usage) lines.push(`usage=tokens=${numberValue(objectValue(usage.tokens)?.total)} cost=${numberValue(usage.cost)}`);
-  const worktree = objectValue(status.worktree);
-  if (worktree && typeof worktree.path === "string" && typeof worktree.branch === "string") lines.push(`worktree=${worktree.path} branch=${worktree.branch}`);
-  if (Array.isArray(status.toolCalls) && status.toolCalls.length) {
+  if (status.worktree) lines.push(`worktree=${boundedText(status.worktree.path)} branch=${boundedText(status.worktree.branch)}`);
+  if (status.toolCalls?.length) {
     lines.push(`toolCalls=${String(status.toolCalls.length)}`);
-    for (const call of status.toolCalls.slice(-MAX_DETAIL_TOOL_CALLS)) {
-      const callValue = objectValue(call);
-      if (callValue) lines.push(`  ${typeof callValue.name === "string" ? callValue.name : "unknown"} [${typeof callValue.state === "string" ? callValue.state : "unknown"}]`);
-    }
+    for (const call of status.toolCalls.slice(-MAX_DETAIL_TOOL_CALLS)) lines.push(`  ${boundedText(call.name, 256)} [${call.state}]`);
   }
-  const failure = objectValue(status.error);
-  if (failure && typeof failure.code === "string") appendValue(lines, `error=${failure.code}`, failure.message);
-
   if (Object.prototype.hasOwnProperty.call(record, "value")) appendValue(lines, "value", record.value);
   return lines;
 }
 
 function tuiRows(tui: { terminal?: { rows?: number } }): number { return typeof tui.terminal?.rows === "number" && Number.isFinite(tui.terminal.rows) ? tui.terminal.rows : 24; }
+function unrefTimer(timer: ReturnType<typeof setInterval>): void {
+  const value: unknown = timer;
+  if (typeof value !== "object" || value === null || !("unref" in value) || typeof value.unref !== "function") return;
+  Reflect.apply(value.unref, value, []);
+}
 
-async function showDetail(manager: SubagentManager, storageDirectory: string, entry: NavigatorEntry, context: ExtensionCommandContext): Promise<void> {
-  const inspection = await inspectEntry(manager, storageDirectory, entry, context);
-  if (context.mode !== "tui") {
-    await context.ui.select(detailLines(inspection).join("\n"), ["Back"]);
-    return;
+type NavigatorTui = Parameters<typeof openWorkflowArtifact>[0];
+type DetailResult = { readonly kind: "steer"; readonly message: string } | "retry" | undefined;
+function standaloneActionContext(manager: SubagentManager, inspection: Inspection, context: ExtensionCommandContext): StandaloneAgentAttemptActionContext | undefined {
+  const status = inspection.entry.status;
+  const request = inspection.entry.request;
+  const liveData = manager.getAttemptActionData?.(status.id);
+  const attempt = attemptValue(liveData?.attempt) ?? latestAttempt(status);
+  if (!attempt) return undefined;
+  const session = attempt.session;
+  const live = liveData?.liveSession && session && liveData.liveSession.reference.transport === session.transport && liveData.liveSession.reference.sessionId === session.sessionId ? liveData.liveSession : undefined;
+  const label = request?.label?.trim();
+  const role = requestRole(request);
+  const name = label || (role === "none" ? "subagent" : role);
+  const ui = {
+    notify: (message: string, level: "info" | "warning" | "error" = "info") => { context.ui.notify(message, level); },
+    confirm: (title: string, message: string) => context.ui.confirm(title, message),
+    select: (title: string, options: readonly string[]) => context.ui.select(title, [...options]),
+    input: (title: string, placeholder?: string) => context.ui.input(title, placeholder),
+    setWorkingMessage: (message?: string) => { context.ui.setWorkingMessage(message); },
+  };
+  const actionAttempt = deepFreeze(attempt);
+  const actionAgent = deepFreeze({ id: status.id, name, state: status.state, ...(label === undefined ? {} : { label }) });
+  return {
+    agent: actionAgent,
+    attempt: actionAttempt,
+    ...(actionAttempt.session === undefined ? {} : { session: actionAttempt.session }),
+    ...(live === undefined ? {} : { liveSession: live, ...(liveData?.prepared === undefined ? {} : { prepared: liveData.prepared }), ...(liveData?.handoff === undefined ? {} : { handoff: liveData.handoff }) }),
+    signal: liveData?.signal ?? new AbortController().signal,
+    ui: Object.freeze(ui),
+  };
+}
+function actionOptions(manager: SubagentManager, inspection: Inspection, context: ExtensionCommandContext): string[] {
+  const actionContext = standaloneActionContext(manager, inspection, context);
+  const extensionLabels = actionContext === undefined ? [] : visibleStandaloneAgentAttemptActions(loadingRegistry().agentAttemptActions(), actionContext).map(([, action]) => action.label);
+  const value = inspection.record.value;
+  return agentActionLabels({
+    extensionLabels,
+    hasWorktree: inspection.entry.status.worktree !== undefined,
+    openPrompt: context.mode === "tui" && inspection.entry.request?.prompt !== undefined,
+    openSystemPrompt: context.mode === "tui" && inspection.entry.status.systemPrompt !== undefined,
+    openResult: context.mode === "tui" && Object.prototype.hasOwnProperty.call(inspection.record, "value") && jsonValue(value),
+    standaloneState: inspection.entry.status.state,
+  });
+}
+function retryResult(value: unknown): { readonly id: string; readonly state: "running" } | undefined {
+  const record = objectValue(value);
+  return record && typeof record.id === "string" && record.id.trim() && record.state === "running" ? { id: record.id, state: "running" } : undefined;
+}
+async function openNavigatorArtifact(context: ExtensionCommandContext, tui: NavigatorTui, artifact: WorkflowArtifact, label: string): Promise<void> {
+  const command = SettingsManager.create(context.cwd, getAgentDir(), { projectTrusted: context.isProjectTrusted() }).getExternalEditorCommand();
+  if (!command) { context.ui.notify(`Cannot open ${label}: no external editor is configured.`, "warning"); return; }
+  const exitCode = await openWorkflowArtifact(tui, command, artifact);
+  if (exitCode !== 0) context.ui.notify(`Cannot open ${label}: external editor ${exitCode === null ? "could not be started" : `exited with code ${String(exitCode)}`}.`, "warning");
+}
+async function steerSubagent(manager: SubagentManager, storageDirectory: string, entry: NavigatorEntry, context: ExtensionCommandContext, message: string): Promise<void> {
+  const current = await inspectEntry(manager, storageDirectory, entry, context);
+  if (current.entry.status.state !== "running") throw new Error(`Subagent ${entry.status.id} is no longer running`);
+  await manager.steer({ id: entry.status.id, message }, managerContext(context));
+  context.ui.notify(`Steered subagent ${entry.status.id}.`, "info");
+}
+async function performAction(manager: SubagentManager, storageDirectory: string, entry: NavigatorEntry, action: string, context: ExtensionCommandContext, tui: NavigatorTui | undefined, clipboard: (value: string) => Promise<void>): Promise<"stay" | "retry"> {
+  const fresh = await inspectEntry(manager, storageDirectory, entry, context);
+  const available = actionOptions(manager, fresh, context);
+  if (!available.includes(action)) throw new Error(`Action ${action} is no longer available`);
+  const actionContext = standaloneActionContext(manager, fresh, context);
+  const registered = actionContext === undefined ? undefined : visibleStandaloneAgentAttemptActions(loadingRegistry().agentAttemptActions(), actionContext).find(([, candidate]) => candidate.label === action);
+  if (registered) {
+    if (!actionContext || registered[1].runStandalone === undefined) throw new Error(`Action ${action} has no standalone implementation`);
+    await registered[1].runStandalone(actionContext);
+    return "stay";
   }
-  await context.ui.custom((tui, theme, keybindings, done) => {
+  if (action === "Copy agent ID") { await clipboard(fresh.entry.status.id); context.ui.notify("Copied agent ID.", "info"); return "stay"; }
+  if (action === "Copy branch" && fresh.entry.status.worktree) { await clipboard(fresh.entry.status.worktree.branch); context.ui.notify("Copied branch.", "info"); return "stay"; }
+  if (action === "Copy worktree path" && fresh.entry.status.worktree) { await clipboard(fresh.entry.status.worktree.path); context.ui.notify("Copied worktree path.", "info"); return "stay"; }
+  if (action === "Open prompt in editor" && tui && fresh.entry.request?.prompt !== undefined) { await openNavigatorArtifact(context, tui, workflowPromptArtifact(fresh.entry.request.prompt), "agent prompt"); return "stay"; }
+  if (action === "Open system prompt in editor" && tui && fresh.entry.status.systemPrompt !== undefined) { await openNavigatorArtifact(context, tui, workflowPromptArtifact(fresh.entry.status.systemPrompt), "agent system prompt"); return "stay"; }
+  if (action === "Open result in editor" && tui && Object.prototype.hasOwnProperty.call(fresh.record, "value") && jsonValue(fresh.record.value)) { await openNavigatorArtifact(context, tui, workflowResultArtifact(fresh.record.value), "agent result"); return "stay"; }
+  if (action === "Steer") {
+    const message = await context.ui.input("Steer subagent", "Message for the running subagent");
+    if (message === undefined) return "stay";
+    await steerSubagent(manager, storageDirectory, entry, context, message);
+    return "stay";
+  }
+  if (action === "Stop") {
+    const current = await inspectEntry(manager, storageDirectory, entry, context);
+    if (current.entry.status.state !== "running") throw new Error(`Subagent ${entry.status.id} is no longer running`);
+    await manager.stop({ id: entry.status.id }, managerContext(context));
+    context.ui.notify(`Stopped subagent ${entry.status.id}.`, "info");
+    return "stay";
+  }
+  if (action === "Retry") {
+    const current = await inspectEntry(manager, storageDirectory, entry, context);
+    if (current.entry.status.state !== "failed" && current.entry.status.state !== "stopped") throw new Error(`Subagent ${entry.status.id} is no longer retryable`);
+    const result = retryResult(await manager.retry({ id: entry.status.id }, managerContext(context, false)));
+    if (!result) throw new Error("Retry returned an invalid subagent result");
+    context.ui.notify(`Retried subagent ${entry.status.id} as ${result.id}.`, "info");
+    return "retry";
+  }
+  return "stay";
+}
+async function showDetail(manager: SubagentManager, storageDirectory: string, entry: NavigatorEntry, context: ExtensionCommandContext, clipboard: (value: string) => Promise<void>): Promise<"exit" | undefined> {
+  let inspection = await inspectEntry(manager, storageDirectory, entry, context);
+  if (context.mode !== "tui") {
+    for (;;) {
+      const action = await context.ui.select(detailLines(inspection).join("\n"), actionOptions(manager, inspection, context));
+      if (!action || action === "Back") return;
+      try {
+        if (await performAction(manager, storageDirectory, entry, action, context, undefined, clipboard) === "retry") return;
+        inspection = await inspectEntry(manager, storageDirectory, entry, context);
+      } catch (error) {
+        context.ui.notify(`Cannot ${action.toLowerCase()}: ${errorMessage(error)}`, "warning");
+      }
+    }
+  }
+  const result = await context.ui.custom<DetailResult>((tui, theme, keybindings, done) => {
     let offset = 0;
-    const renderLines = (width: number): string[] => {
-      const lines = detailLines(inspection, theme).map((line) => truncateToWidth(line, Math.max(1, width), "…"));
-      const viewport = Math.max(1, tuiRows(tui) - 1);
-      const maxOffset = Math.max(0, lines.length - viewport);
-      offset = Math.min(offset, maxOffset);
-      const hint = theme.fg("dim", "↑/↓ scroll · enter/esc back");
-      return [...lines.slice(offset, offset + viewport), hint];
+    let actionMode = false;
+    let actionIndex = 0;
+    let actionRunning = false;
+    let disposed = false;
+    let steerMode = false;
+    const editorTheme: EditorTheme = {
+      borderColor: (text) => theme.fg("accent", text),
+      selectList: {
+        selectedPrefix: (text) => theme.fg("accent", text),
+        selectedText: (text) => theme.fg("accent", text),
+        description: (text) => theme.fg("muted", text),
+        scrollInfo: (text) => theme.fg("dim", text),
+        noMatch: (text) => theme.fg("warning", text),
+      },
     };
+    const steerEditor = new Editor(tui, editorTheme);
+    let refreshTimer: ReturnType<typeof setInterval> | undefined;
+    let refreshing = false;
+    let refreshGeneration = 0;
+    const requestRender = (): void => {
+      if (!disposed) tui.requestRender();
+    };
+    const stopRefresh = (): void => {
+      if (refreshTimer !== undefined) {
+        clearInterval(refreshTimer);
+        refreshTimer = undefined;
+      }
+      refreshGeneration += 1;
+    };
+    const reportRefreshError = (error: unknown): void => {
+      if (disposed) return;
+      try { context.ui.notify(`Cannot refresh subagent ${entry.status.id}: ${errorMessage(error)}`, "warning"); } catch { /* The session UI may already be closing. */ }
+    };
+    const refreshInspection = async (): Promise<void> => {
+      if (disposed || actionRunning || refreshing || inspection.entry.status.state !== "running") return;
+      refreshing = true;
+      const generation = ++refreshGeneration;
+      try {
+        const next = await inspectEntry(manager, storageDirectory, entry, context);
+        if (generation !== refreshGeneration) return;
+        inspection = next;
+        if (inspection.entry.status.state !== "running") stopRefresh();
+        if (actionMode) {
+          const options = actionOptions(manager, inspection, context);
+          actionIndex = Math.min(actionIndex, Math.max(0, options.length - 1));
+        }
+        requestRender();
+      } catch (error: unknown) {
+        if (generation === refreshGeneration) reportRefreshError(error);
+      } finally {
+        refreshing = false;
+      }
+    };
+    const close = (value: DetailResult): void => {
+      if (disposed) return;
+      disposed = true;
+      stopRefresh();
+      done(value);
+    };
+    steerEditor.onSubmit = (value) => {
+      const message = value.trim();
+      if (message) close({ kind: "steer", message });
+    };
+    const isDisposed = (): boolean => disposed;
+    const renderLines = (width: number): string[] => {
+      if (disposed) return [];
+      const options = actionMode ? actionOptions(manager, inspection, context) : [];
+      const detail = detailLines(inspection, theme).map((line) => truncateToWidth(line, Math.max(1, width), "…"));
+      const rows = steerMode ? [...detail, "", theme.bold("Steer subagent"), ...steerEditor.render(Math.max(1, width))] : actionMode ? [...detail, "", theme.bold("Agent actions"), ...options.map((option, index) => `${index === actionIndex ? "→ " : "  "}${index === actionIndex ? theme.fg("accent", option) : option}`)] : detail;
+      const viewport = Math.max(1, tuiRows(tui) - 1);
+      const maxOffset = Math.max(0, rows.length - viewport);
+      offset = Math.min(offset, maxOffset);
+      const hint = theme.fg("dim", steerMode ? "enter submit · esc back" : actionMode ? "↑/↓ actions · enter run · esc back" : "↑/↓ scroll · a actions · enter actions · esc back");
+      return [...rows.slice(offset, offset + viewport), hint];
+    };
+    const runAction = (action: string): void => {
+      if (disposed) return;
+      actionRunning = true;
+      requestRender();
+      void performAction(manager, storageDirectory, entry, action, context, tui, clipboard).then(async (outcome) => {
+        if (disposed) return;
+        if (outcome === "retry") { close("retry"); return; }
+        const next = await inspectEntry(manager, storageDirectory, entry, context);
+        if (isDisposed()) return;
+        inspection = next;
+        if (inspection.entry.status.state !== "running") stopRefresh();
+        actionMode = false;
+        actionIndex = 0;
+        offset = 0;
+      }).catch((error: unknown) => {
+        if (!disposed) context.ui.notify(`Cannot ${action.toLowerCase()}: ${errorMessage(error)}`, "warning");
+      }).finally(() => {
+        actionRunning = false;
+        if (!disposed) requestRender();
+      });
+    };
+    if (inspection.entry.status.state === "running") {
+      refreshTimer = setInterval(() => { void refreshInspection().catch(reportRefreshError); }, 1000);
+      unrefTimer(refreshTimer);
+    }
     return {
       render: renderLines,
       invalidate() {},
       handleInput(data: string) {
-        if (keybindings.matches(data, "tui.select.cancel") || keybindings.matches(data, "tui.select.confirm")) { done(undefined); return; }
-        const viewport = Math.max(1, tuiRows(tui) - 1);
-        if (keybindings.matches(data, "tui.select.up")) offset = Math.max(0, offset - 1);
-        else if (keybindings.matches(data, "tui.select.down")) offset += 1;
-        else if (keybindings.matches(data, "tui.select.pageUp")) offset = Math.max(0, offset - viewport);
-        else if (keybindings.matches(data, "tui.select.pageDown")) offset += viewport;
-        else return;
-        tui.requestRender();
+        if (disposed || actionRunning) return;
+        if (steerMode) {
+          if (keybindings.matches(data, "tui.select.cancel")) { steerMode = false; actionMode = true; steerEditor.setText(""); offset = 0; }
+          else steerEditor.handleInput(data);
+          requestRender();
+          return;
+        }
+        if (!actionMode && data === "a") { actionMode = true; actionIndex = 0; offset = 0; requestRender(); return; }
+        if (keybindings.matches(data, "tui.select.cancel")) {
+          if (actionMode) { actionMode = false; actionIndex = 0; offset = 0; requestRender(); } else close(undefined);
+          return;
+        }
+        if (!actionMode) {
+          if (keybindings.matches(data, "tui.select.confirm")) { actionMode = true; actionIndex = 0; offset = 0; requestRender(); }
+          else if (keybindings.matches(data, "tui.select.up")) { offset = Math.max(0, offset - 1); requestRender(); }
+          else if (keybindings.matches(data, "tui.select.down")) { offset += 1; requestRender(); }
+          return;
+        }
+        const options = actionOptions(manager, inspection, context);
+        if (keybindings.matches(data, "tui.select.up")) actionIndex = (actionIndex + options.length - 1) % options.length;
+        else if (keybindings.matches(data, "tui.select.down")) actionIndex = (actionIndex + 1) % options.length;
+        else if (keybindings.matches(data, "tui.select.confirm")) { const action = options[actionIndex]; if (action === "Steer") { steerMode = true; actionMode = false; steerEditor.setText(""); offset = 0; } else if (action && action !== "Back") runAction(action); else actionMode = false; }
+        else if (keybindings.matches(data, "tui.select.pageUp")) offset = Math.max(0, offset - Math.max(1, tuiRows(tui) - 1));
+        else if (keybindings.matches(data, "tui.select.pageDown")) offset += Math.max(1, tuiRows(tui) - 1);
+        requestRender();
       },
+      dispose() { if (!disposed) { disposed = true; stopRefresh(); } },
     };
   });
+  if (!result || result === "retry") return;
+  try { await steerSubagent(manager, storageDirectory, entry, context, result.message); }
+  catch (error) { context.ui.notify(`Cannot steer: ${errorMessage(error)}`, "warning"); }
+  return "exit";
 }
 
-async function runNavigator(manager: SubagentManager, storageDirectory: string, args: string, context: ExtensionCommandContext): Promise<void> {
+async function runNavigator(manager: SubagentManager, storageDirectory: string, args: string, context: ExtensionCommandContext, clipboard: (value: string) => Promise<void>): Promise<void> {
   if (args.trim()) {
-    context.ui.notify("Subagent slash commands do not accept arguments. Open the picker with /subagents; inspection is read-only.", "warning");
+    context.ui.notify("Subagent slash commands do not accept arguments. Open the picker with /subagents to inspect and control current-session runs.", "warning");
     return;
   }
   for (;;) {
     const entries = await loadEntries(manager, storageDirectory, context);
     if (!entries.length) {
-      context.ui.notify("No durable subagent runs.", "info");
+      context.ui.notify("No durable subagent runs in this session.", "info");
       return;
     }
     if (!context.hasUI) {
@@ -198,19 +596,19 @@ async function runNavigator(manager: SubagentManager, storageDirectory: string, 
     const selected = entries[labels.indexOf(choice)];
     if (!selected) return;
     try {
-      await showDetail(manager, storageDirectory, selected, context);
+      if (await showDetail(manager, storageDirectory, selected, context, clipboard) === "exit") return;
     } catch (error) {
       context.ui.notify(`Cannot inspect subagent ${selected.status.id}: ${errorMessage(error)}`, "warning");
     }
   }
 }
 
-export function registerSubagentNavigator(registerCommand: RegisterCommand, manager: SubagentManager, storageDirectory: string): void {
+export function registerSubagentNavigator(registerCommand: RegisterCommand, manager: SubagentManager, storageDirectory: string, clipboard: (value: string) => Promise<void> = copyToClipboard): void {
   registerCommand("subagents", {
     description: "Open the durable subagent picker and inspect run status",
     handler: async (args, context) => {
       try {
-        await runNavigator(manager, storageDirectory, args, context);
+        await runNavigator(manager, storageDirectory, args, context, clipboard);
       } catch (error) {
         context.ui.notify(`Cannot inspect subagents: ${errorMessage(error)}`, "warning");
       }

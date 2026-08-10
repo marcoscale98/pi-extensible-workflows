@@ -21,8 +21,8 @@ import {
   type AgentActivity,
   type AgentAccounting,
   type AgentAttempt,
+  type AgentAttemptSummary,
   type AgentExecutionOptions,
-  type AgentExecutionResult,
   type AgentExecutionRoot,
   type AgentProgress,
   type AgentToolCallProgress,
@@ -33,10 +33,13 @@ import {
   type WorkflowRunContext,
 } from "pi-extensible-workflows";
 import {
+  SUBAGENT_ATTEMPT_DETAILS_LIMIT,
+  SUBAGENT_SYSTEM_PROMPT_LIMIT,
   SUBAGENTS_TOOL_NAMES,
   normalizeSubagentRunRequest,
   type SubagentInspectRequest,
   type SubagentLiveness,
+  type SubagentAttemptActionData,
   type SubagentManager,
   type SubagentManagerContext,
   type SubagentManagerDependencies,
@@ -56,7 +59,13 @@ const OWNER_WRITE_GRACE_MS = 30_000;
 const MAX_STORAGE_OWNER_ATTEMPTS = 8;
 const MAX_TERMINAL_SUMMARIES = 128;
 const MAX_PENDING_STEERING_MESSAGES = 16;
+const MAX_PERSISTED_ATTEMPT_ARRAY_ITEMS = 256;
+const MAX_PERSISTED_ATTEMPT_STRING_CHARS = 4096;
+const MAX_PERSISTED_ATTEMPT_LOCATOR_CHARS = 16 * 1024;
 const SUBAGENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+class InvalidPersistedSubagentStatusError extends WorkflowError {
+  constructor() { super("INTERNAL_ERROR", "Persisted subagent status is invalid"); }
+}
 const EXCLUDED_TOOLS = new Set<string>([
   ...SUBAGENTS_TOOL_NAMES,
   "workflow",
@@ -73,6 +82,8 @@ type SubagentState = SubagentStatus["state"];
 type SubagentFailure = { code: string; message: string };
 type PersistedSubagentStatus = SubagentStatus & { startedAt: number; finishedAt?: number; owner?: SubagentOwnerMarker; worktreeContext?: SubagentWorktreeContext };
 type SubagentSession = NonNullable<AgentAttempt["liveSession"]>;
+type SubagentSessionLifecycle = Pick<SubagentSession, "abort" | "dispose">;
+type SessionCleanupState = { abort?: Promise<void>; dispose?: Promise<void> };
 type TerminalSummary = PersistedSubagentStatus;
 type SteerHandler = (message: string) => void | Promise<void>;
 type ForegroundResult =
@@ -82,12 +93,13 @@ type ForegroundResult =
 type PersistedProgress = SubagentProgress;
 type LiveRun = {
   readonly id: string;
+  readonly sessionId: string;
   readonly request: Readonly<SubagentRunRequest>;
   readonly directory: string;
   readonly startedAt: number;
   readonly owner: SubagentOwnerMarker;
   readonly controller: AbortController;
-  readonly promise: Promise<AgentExecutionResult>;
+  readonly promise: Promise<unknown>;
   readonly terminal: Promise<ForegroundResult>;
   readonly resolveTerminal: (result: ForegroundResult) => void;
   readonly update: ((status: SubagentStatus) => void) | undefined;
@@ -97,13 +109,21 @@ type LiveRun = {
   error: SubagentFailure | undefined;
   value: JsonValue | undefined;
   cancelled: boolean;
-  session: SubagentSession | undefined;
+  session: SubagentSessionLifecycle | undefined;
+  readonly sessionCleanups: WeakMap<SubagentSessionLifecycle, SessionCleanupState>;
+  readonly activeSessions: Set<SubagentSessionLifecycle>;
   progress: PersistedProgress | undefined;
   accounting: AgentAccounting | undefined;
   usage: SubagentUsage | undefined;
   activity: AgentActivity | undefined;
   toolCalls: readonly AgentToolCallProgress[] | undefined;
   lastEventAt: number | undefined;
+  attemptDetails: readonly AgentAttemptSummary[] | undefined;
+  attempts: number | undefined;
+  systemPrompt: string | undefined;
+  systemPromptAttempt: number | undefined;
+  prepared: Readonly<import("pi-extensible-workflows").PreparedAgentSession> | undefined;
+  handoff: import("pi-extensible-workflows").LiveSessionHandoff | undefined;
   worktree: SubagentWorktreeHandle | undefined;
   worktreeContext: SubagentWorktreeContext | undefined;
   worktreeCleanup: Promise<void> | undefined;
@@ -112,8 +132,6 @@ type LiveRun = {
   steerFlush: Promise<void> | undefined;
   externalAbort: (() => void) | undefined;
   externalSignal: AbortSignal | undefined;
-  sessionAbort: Promise<void> | undefined;
-  sessionDispose: Promise<void> | undefined;
   executorOwnsSession: boolean;
   disposed: boolean;
   concurrencyReleased: boolean;
@@ -389,11 +407,37 @@ function usageFromAccounting(accounting: AgentAccounting): SubagentUsage {
   const total = accounting.input + accounting.output + accounting.cacheRead + accounting.cacheWrite;
   return { tokens: { input: accounting.input, output: accounting.output, cacheRead: accounting.cacheRead, cacheWrite: accounting.cacheWrite, total }, cost: accounting.cost };
 }
+function boundedAttemptText(value: string): string { return value.length > MAX_PERSISTED_ATTEMPT_STRING_CHARS ? value.slice(0, MAX_PERSISTED_ATTEMPT_STRING_CHARS) : value; }
+function boundedAttemptStrings(values: readonly string[]): readonly string[] { return values.slice(0, MAX_PERSISTED_ATTEMPT_ARRAY_ITEMS).map(boundedAttemptText); }
+function boundedAttemptLocator(value: JsonValue | undefined): JsonValue | undefined {
+  if (value === undefined) return undefined;
+  let serialized: string;
+  try { serialized = JSON.stringify(value); } catch { return undefined; }
+  return serialized.length > MAX_PERSISTED_ATTEMPT_LOCATOR_CHARS ? undefined : structuredClone(value);
+}
+function boundedAttemptSetup(setup: AgentAttempt["setup"]): AgentAttemptSummary["setup"] {
+  const resources = setup.disabledAgentResources;
+  return {
+    hookNames: boundedAttemptStrings(setup.hookNames),
+    model: { provider: boundedAttemptText(setup.model.provider), model: boundedAttemptText(setup.model.model), ...(setup.model.thinking === undefined ? {} : { thinking: setup.model.thinking }) },
+    tools: boundedAttemptStrings(setup.tools),
+    cwd: boundedAttemptText(setup.cwd),
+    ...(resources === undefined ? {} : { disabledAgentResources: { skills: boundedAttemptStrings(resources.skills), extensions: boundedAttemptStrings(resources.extensions), unmatchedSkills: boundedAttemptStrings(resources.unmatchedSkills), unmatchedExtensions: boundedAttemptStrings(resources.unmatchedExtensions), ...(resources.excludedSkills === undefined ? {} : { excludedSkills: boundedAttemptStrings(resources.excludedSkills) }), ...(resources.excludedExtensions === undefined ? {} : { excludedExtensions: boundedAttemptStrings(resources.excludedExtensions) }) } }),
+  };
+}
+function portableProgress(progress: PersistedProgress): PersistedProgress {
+  const copy = structuredClone(progress);
+  if (copy.state === undefined) return copy;
+  const state = { ...copy.state };
+  delete state.systemPrompt;
+  return { ...copy, state };
+}
+
 function statusFields(run: LiveRun): Pick<SubagentStatus, "progress" | "activity" | "usage" | "toolCalls" | "accounting" | "lastEventAt"> {
   const accounting = run.accounting ?? run.progress?.accounting;
   const usage = run.usage ?? (accounting === undefined ? undefined : usageFromAccounting(accounting));
   return {
-    ...(run.progress === undefined ? {} : { progress: structuredClone(run.progress) }),
+    ...(run.progress === undefined ? {} : { progress: portableProgress(run.progress) }),
     ...(run.activity === undefined ? {} : { activity: structuredClone(run.activity) }),
     ...(usage === undefined ? {} : { usage: structuredClone(usage) }),
     ...(run.toolCalls === undefined ? {} : { toolCalls: structuredClone(run.toolCalls) }),
@@ -409,6 +453,7 @@ function withoutOwner(status: PersistedSubagentStatus): PersistedSubagentStatus 
 function persistedStatus(run: LiveRun): PersistedSubagentStatus {
   const status: PersistedSubagentStatus = {
     id: run.id,
+    sessionId: run.sessionId,
     state: run.state,
     startedAt: run.startedAt,
     owner: { ...run.owner },
@@ -416,6 +461,9 @@ function persistedStatus(run: LiveRun): PersistedSubagentStatus {
     ...(run.worktree === undefined ? {} : { worktree: { path: run.worktree.path, branch: run.worktree.branch } }),
     ...(run.worktreeContext === undefined ? {} : { worktreeContext: { ...run.worktreeContext } }),
     ...(run.error === undefined ? {} : { error: run.error }),
+    ...(run.attempts === undefined ? {} : { attempts: run.attempts }),
+    ...(run.attemptDetails === undefined ? {} : { attemptDetails: structuredClone(run.attemptDetails) }),
+    ...(run.systemPrompt === undefined ? {} : { systemPrompt: run.systemPrompt }),
     ...statusFields(run),
   };
   return run.state === "running" ? status : withoutOwner(status);
@@ -428,12 +476,23 @@ function decodeFailure(value: unknown): SubagentFailure | undefined {
   return code && typeof record.message === "string" ? { code, message: record.message } : undefined;
 }
 function finite(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+function attemptNumberValue(value: unknown): number | undefined {
+  const attempt = recordValue(value)?.attempt;
+  return typeof attempt === "number" && Number.isSafeInteger(attempt) && attempt >= 1 ? attempt : undefined;
+}
 function accountingValue(value: unknown): AgentAccounting | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  const names = ["input", "output", "cacheRead", "cacheWrite", "cost"];
-  if (names.some((name) => !finite(record[name]))) return undefined;
-  return { input: record.input as number, output: record.output as number, cacheRead: record.cacheRead as number, cacheWrite: record.cacheWrite as number, cost: record.cost as number };
+  const input = record.input;
+  const output = record.output;
+  const cacheRead = record.cacheRead;
+  const cacheWrite = record.cacheWrite;
+  const cost = record.cost;
+  if (!finite(input) || !finite(output) || !finite(cacheRead) || !finite(cacheWrite) || !finite(cost)) return undefined;
+  return { input, output, cacheRead, cacheWrite, cost };
 }
 function activityValue(value: unknown): AgentActivity | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -451,7 +510,104 @@ function toolCallsValue(value: unknown): readonly AgentToolCallProgress[] | unde
   }
   return calls;
 }
-function sessionStateValue(value: unknown): WorkflowAgentSessionState | undefined {
+function stringArrayValue(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length > 256) return undefined;
+  const strings = value.filter((item): item is string => typeof item === "string");
+  return strings.length === value.length ? strings : undefined;
+}
+function modelValue(value: unknown): ModelSpec | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const thinking = record.thinking;
+  if (typeof record.provider !== "string" || !record.provider.trim() || typeof record.model !== "string" || !record.model.trim() || thinking !== undefined && thinking !== "off" && thinking !== "minimal" && thinking !== "low" && thinking !== "medium" && thinking !== "high" && thinking !== "xhigh" && thinking !== "max") return undefined;
+  return { provider: record.provider, model: record.model, ...(thinking === undefined ? {} : { thinking }) };
+}
+function sessionReferenceValue(value: unknown): AgentAttemptSummary["session"] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const transport = record.transport;
+  const sessionId = record.sessionId;
+  const rawLocator = record.locator;
+  if (typeof transport !== "string" || !transport.trim() || typeof sessionId !== "string" || !sessionId.trim()) return undefined;
+  if (rawLocator !== undefined && !jsonValue(rawLocator)) return undefined;
+  const locator = rawLocator === undefined ? undefined : boundedAttemptLocator(rawLocator);
+  return { transport: boundedAttemptText(transport), sessionId: boundedAttemptText(sessionId), ...(locator === undefined ? {} : { locator }) };
+}
+function resourceSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["setup"]["disabledAgentResources"]> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const skills = stringArrayValue(record.skills);
+  const extensions = stringArrayValue(record.extensions);
+  const unmatchedSkills = stringArrayValue(record.unmatchedSkills);
+  const unmatchedExtensions = stringArrayValue(record.unmatchedExtensions);
+  const excludedSkills = record.excludedSkills === undefined ? undefined : stringArrayValue(record.excludedSkills);
+  const excludedExtensions = record.excludedExtensions === undefined ? undefined : stringArrayValue(record.excludedExtensions);
+  if (!skills || !extensions || !unmatchedSkills || !unmatchedExtensions || record.excludedSkills !== undefined && !excludedSkills || record.excludedExtensions !== undefined && !excludedExtensions) return undefined;
+  return { skills, extensions, unmatchedSkills, unmatchedExtensions, ...(excludedSkills === undefined ? {} : { excludedSkills }), ...(excludedExtensions === undefined ? {} : { excludedExtensions }) };
+}
+function setupSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["setup"]> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const hookNames = stringArrayValue(record.hookNames);
+  const tools = stringArrayValue(record.tools);
+  const model = modelValue(record.model);
+  const resources = record.disabledAgentResources === undefined ? undefined : resourceSummaryValue(record.disabledAgentResources);
+  if (!hookNames || !tools || !model || typeof record.cwd !== "string" || !record.cwd.trim() || record.disabledAgentResources !== undefined && !resources) return undefined;
+  return { hookNames, model, tools, cwd: record.cwd, ...(resources === undefined ? {} : { disabledAgentResources: resources }) };
+}
+function attemptSummaryValue(value: unknown): AgentAttemptSummary | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const attempt = record.attempt;
+  const transport = record.transport;
+  const session = record.session === undefined ? undefined : sessionReferenceValue(record.session);
+  const setup = setupSummaryValue(record.setup);
+  const accounting = accountingValue(record.accounting);
+  const error = record.error === undefined ? undefined : decodeFailure(record.error);
+  if (typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 1 || typeof transport !== "string" || !transport.trim() || !setup || !accounting || record.session !== undefined && !session || record.error !== undefined && !error) return undefined;
+  return {
+    attempt,
+    transport: boundedAttemptText(transport),
+    ...(session === undefined ? {} : { session }),
+    ...(error === undefined ? {} : { error: { code: boundedAttemptText(error.code), message: boundedAttemptText(error.message) } }),
+    accounting: { ...accounting },
+    setup: boundedAttemptSetup(setup),
+  };
+}
+function isSessionLifecycle(value: unknown): value is SubagentSessionLifecycle {
+  const record = recordValue(value);
+  return Boolean(record && typeof record.abort === "function" && typeof record.dispose === "function");
+}
+function isLiveSession(value: unknown): value is SubagentSession {
+  const record = recordValue(value);
+  return Boolean(isSessionLifecycle(value) && record && sessionReferenceValue(record.reference) && typeof record.getState === "function" && typeof record.getSessionStats === "function" && typeof record.getLastAssistant === "function" && typeof record.subscribe === "function" && typeof record.prompt === "function" && typeof record.steer === "function");
+}
+function isPreparedSession(value: unknown): value is NonNullable<AgentAttempt["prepared"]> {
+  const record = recordValue(value);
+  const model = modelValue(record?.model);
+  const tools = stringArrayValue(record?.tools);
+  if (!record || !model || !tools || typeof record.cwd !== "string" || !record.cwd.trim() || typeof record.sessionLabel !== "string") return false;
+  const textFields = ["initialPrompt", "agentDir", "systemPromptPath", "systemPromptAppend", "piRuntimeError"];
+  if (textFields.some((field) => record[field] !== undefined && typeof record[field] !== "string")) return false;
+  if (record.systemPrompt !== undefined && (typeof record.systemPrompt !== "string" || record.systemPrompt.length > SUBAGENT_SYSTEM_PROMPT_LIMIT)) return false;
+  const runtime = recordValue(record.piRuntime);
+  if (record.piRuntime !== undefined && (!runtime || typeof runtime.executable !== "string" || !runtime.executable.trim() || runtime.entrypoint !== undefined && (typeof runtime.entrypoint !== "string" || !runtime.entrypoint.trim()))) return false;
+  return true;
+}
+function isLiveSessionHandoff(value: unknown): value is NonNullable<AgentAttempt["handoff"]> {
+  const record = recordValue(value);
+  return Boolean(record && (record.state === "local-running" || record.state === "handoff-pending" || record.state === "herdr-running" || record.state === "returning-local" || record.state === "completed") && typeof record.transferred === "boolean" && typeof record.observe === "function" && typeof record.request === "function" && typeof record.waitForTakeover === "function" && typeof record.takeover === "function" && typeof record.waitForResume === "function" && typeof record.release === "function");
+}
+type ValidExecutionResult = { readonly value: JsonValue; readonly attempts: readonly unknown[] };
+function executionResultValue(value: unknown): ValidExecutionResult | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const result = record.value;
+  const attempts = record.attempts;
+  if (!jsonValue(result) || !Array.isArray(attempts)) return undefined;
+  return { value: result, attempts };
+}
+function sessionStateValue(value: unknown, includeSystemPrompt = true): WorkflowAgentSessionState | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const model = record.model;
@@ -462,8 +618,9 @@ function sessionStateValue(value: unknown): WorkflowAgentSessionState | undefine
   const tools = rawTools.filter((tool): tool is string => typeof tool === "string");
   if (tools.length !== rawTools.length) return undefined;
   if (record.thinking !== undefined && typeof record.thinking !== "string") return undefined;
-  if (record.systemPrompt !== undefined && typeof record.systemPrompt !== "string") return undefined;
-  return { model: { provider: modelRecord.provider, model: modelRecord.model, ...(typeof record.thinking === "string" ? { thinking: record.thinking as NonNullable<WorkflowAgentSessionState["thinking"]> } : {}) }, ...(typeof record.thinking === "string" ? { thinking: record.thinking as NonNullable<WorkflowAgentSessionState["thinking"]> } : {}), tools, ...(typeof record.systemPrompt === "string" ? { systemPrompt: record.systemPrompt } : {}) };
+  if (includeSystemPrompt && record.systemPrompt !== undefined && typeof record.systemPrompt !== "string") return undefined;
+  const systemPrompt = includeSystemPrompt && typeof record.systemPrompt === "string" && record.systemPrompt.length <= SUBAGENT_SYSTEM_PROMPT_LIMIT ? record.systemPrompt : undefined;
+  return { model: { provider: modelRecord.provider, model: modelRecord.model, ...(typeof record.thinking === "string" ? { thinking: record.thinking as NonNullable<WorkflowAgentSessionState["thinking"]> } : {}) }, ...(typeof record.thinking === "string" ? { thinking: record.thinking as NonNullable<WorkflowAgentSessionState["thinking"]> } : {}), tools, ...(systemPrompt === undefined ? {} : { systemPrompt }) };
 }
 function usageValue(value: unknown): SubagentUsage | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -482,12 +639,12 @@ function usageValue(value: unknown): SubagentUsage | undefined {
   if (!finite(input) || !finite(output) || !finite(cacheRead) || !finite(cacheWrite) || !finite(total) || !finite(cost)) return undefined;
   return { tokens: { input, output, cacheRead, cacheWrite, total }, cost };
 }
-function progressValue(value: unknown): SubagentProgress | undefined {
+function progressValue(value: unknown, includeSystemPrompt = true): SubagentProgress | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const accounting = accountingValue(record.accounting);
   const toolCalls = toolCallsValue(record.toolCalls);
-  const state = record.state === undefined ? undefined : sessionStateValue(record.state);
+  const state = record.state === undefined ? undefined : sessionStateValue(record.state, includeSystemPrompt);
   if (!accounting || !toolCalls || (record.state !== undefined && state === undefined)) return undefined;
   const activity = record.activity === undefined ? undefined : activityValue(record.activity);
   if (record.activity !== undefined && activity === undefined) return undefined;
@@ -506,10 +663,12 @@ function worktreeContextValue(value: unknown): SubagentWorktreeContext | undefin
   if (!context || !context.cwd.trim() || !context.sessionId.trim() || !context.runId.trim() || !context.name.trim() || !context.owner.trim()) return undefined;
   return context;
 }
-function decodeStatus(value: unknown, id: string): PersistedSubagentStatus | undefined {
+function decodeStatus(value: unknown, id: string, includeAttemptMetadata = true): PersistedSubagentStatus | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   if (record.id !== id || !validSubagentId(id) || (record.state !== "running" && record.state !== "completed" && record.state !== "failed" && record.state !== "stopped") || typeof record.startedAt !== "number" || !Number.isSafeInteger(record.startedAt) || record.startedAt < 0) return undefined;
+  const persistedSessionId = record.sessionId;
+  if (persistedSessionId !== undefined && (typeof persistedSessionId !== "string" || !persistedSessionId.trim())) return undefined;
   const owner = record.owner === undefined ? undefined : decodeOwnerMarker(record.owner);
   if (record.owner !== undefined && owner === undefined) return undefined;
   const error = record.error === undefined ? undefined : decodeFailure(record.error);
@@ -519,7 +678,8 @@ function decodeStatus(value: unknown, id: string): PersistedSubagentStatus | und
   const worktreeContext = record.worktreeContext === undefined ? undefined : worktreeContextValue(record.worktreeContext);
   if (record.worktree !== undefined && worktree === undefined || record.worktreeContext !== undefined && worktreeContext === undefined) return undefined;
   if (worktreeContext && (worktreeContext.runId !== id || worktreeContext.owner !== structuralPath("worktree", "named", worktreeContext.name))) return undefined;
-  const progress = record.progress === undefined ? undefined : progressValue(record.progress);
+  const sessionId = persistedSessionId ?? worktreeContext?.sessionId;
+  const progress = record.progress === undefined ? undefined : progressValue(record.progress, includeAttemptMetadata);
   if (record.progress !== undefined && progress === undefined) return undefined;
   const activity = record.activity === undefined ? undefined : activityValue(record.activity);
   const toolCalls = record.toolCalls === undefined ? undefined : toolCallsValue(record.toolCalls);
@@ -527,17 +687,29 @@ function decodeStatus(value: unknown, id: string): PersistedSubagentStatus | und
   const usage = record.usage === undefined ? undefined : usageValue(record.usage);
   if ((record.activity !== undefined && activity === undefined) || (record.toolCalls !== undefined && toolCalls === undefined) || (record.accounting !== undefined && accounting === undefined) || (record.usage !== undefined && usage === undefined)) return undefined;
   if (record.lastEventAt !== undefined && (!Number.isSafeInteger(record.lastEventAt) || (record.lastEventAt as number) < 0)) return undefined;
-  return { id, state: record.state, startedAt: record.startedAt, ...(record.finishedAt === undefined ? {} : { finishedAt: record.finishedAt }), ...(owner === undefined ? {} : { owner }), ...(worktree === undefined ? {} : { worktree }), ...(worktreeContext === undefined ? {} : { worktreeContext }), ...(error === undefined ? {} : { error }), ...(progress === undefined ? {} : { progress }), ...(activity === undefined ? {} : { activity }), ...(usage === undefined ? {} : { usage }), ...(toolCalls === undefined ? {} : { toolCalls }), ...(accounting === undefined ? {} : { accounting }), ...(record.lastEventAt === undefined ? {} : { lastEventAt: record.lastEventAt as number }) };
+  const attempts = record.attempts;
+  if (attempts !== undefined && (typeof attempts !== "number" || !Number.isSafeInteger(attempts) || attempts < 1)) return undefined;
+  const attemptDetails = includeAttemptMetadata && record.attemptDetails !== undefined ? Array.isArray(record.attemptDetails) && record.attemptDetails.length <= SUBAGENT_ATTEMPT_DETAILS_LIMIT ? record.attemptDetails.map(attemptSummaryValue) : undefined : undefined;
+  if (includeAttemptMetadata && record.attemptDetails !== undefined && (!attemptDetails || attemptDetails.some((attempt): attempt is undefined => attempt === undefined))) return undefined;
+  const systemPrompt = includeAttemptMetadata && typeof record.systemPrompt === "string" ? record.systemPrompt : undefined;
+  if (includeAttemptMetadata && record.systemPrompt !== undefined && typeof record.systemPrompt !== "string") return undefined;
+  if (includeAttemptMetadata && systemPrompt !== undefined && systemPrompt.length > SUBAGENT_SYSTEM_PROMPT_LIMIT) return undefined;
+  if (includeAttemptMetadata && attempts !== undefined && attemptDetails?.some((attempt) => attempt !== undefined && attempt.attempt > attempts)) return undefined;
+  return { id, ...(sessionId === undefined ? {} : { sessionId }), state: record.state, startedAt: record.startedAt, ...(attempts === undefined ? {} : { attempts }), ...(attemptDetails === undefined ? {} : { attemptDetails: attemptDetails.filter((attempt): attempt is AgentAttemptSummary => attempt !== undefined) }), ...(systemPrompt === undefined ? {} : { systemPrompt }), ...(record.finishedAt === undefined ? {} : { finishedAt: record.finishedAt }), ...(owner === undefined ? {} : { owner }), ...(worktree === undefined ? {} : { worktree }), ...(worktreeContext === undefined ? {} : { worktreeContext }), ...(error === undefined ? {} : { error }), ...(progress === undefined ? {} : { progress }), ...(activity === undefined ? {} : { activity }), ...(usage === undefined ? {} : { usage }), ...(toolCalls === undefined ? {} : { toolCalls }), ...(accounting === undefined ? {} : { accounting }), ...(record.lastEventAt === undefined ? {} : { lastEventAt: record.lastEventAt as number }) };
 }
-function publicStatus(status: SubagentStatus): SubagentStatus {
+function publicStatus(status: SubagentStatus, includeAttemptMetadata = false): SubagentStatus {
   return {
     id: status.id,
+    ...(status.sessionId === undefined ? {} : { sessionId: status.sessionId }),
+    ...(status.attempts === undefined ? {} : { attempts: status.attempts }),
+    ...(includeAttemptMetadata && status.attemptDetails !== undefined ? { attemptDetails: structuredClone(status.attemptDetails) } : {}),
+    ...(includeAttemptMetadata && status.systemPrompt !== undefined ? { systemPrompt: status.systemPrompt } : {}),
     state: status.state,
     ...(status.startedAt === undefined ? {} : { startedAt: status.startedAt }),
     ...(status.finishedAt === undefined ? {} : { finishedAt: status.finishedAt }),
     ...(status.worktree === undefined ? {} : { worktree: { ...status.worktree } }),
     ...(status.error === undefined ? {} : { error: { ...status.error } }),
-    ...(status.progress === undefined ? {} : { progress: structuredClone(status.progress) }),
+    ...(status.progress === undefined ? {} : { progress: portableProgress(status.progress) }),
     ...(status.activity === undefined ? {} : { activity: structuredClone(status.activity) }),
     ...(status.usage === undefined ? {} : { usage: structuredClone(status.usage) }),
     ...(status.toolCalls === undefined ? {} : { toolCalls: structuredClone(status.toolCalls) }),
@@ -568,14 +740,16 @@ async function createRunStorage(root: string, id: string, request: Readonly<Suba
   }
 }
 
-async function loadPersistedStatus(root: string, id: string): Promise<PersistedSubagentStatus> {
+async function loadPersistedStatus(root: string, id: string, includeAttemptMetadata = true): Promise<PersistedSubagentStatus> {
   try {
     const value = await readJson(statusPath(runDirectory(root, id)));
-    const status = decodeStatus(value, id);
-    if (!status) throw new WorkflowError("INTERNAL_ERROR", "Persisted subagent status is invalid");
+    const status = decodeStatus(value, id, includeAttemptMetadata);
+    if (!status) throw new InvalidPersistedSubagentStatusError();
     return status;
   } catch (error) {
     if (isNodeError(error, "ENOENT")) throw new WorkflowError("RUN_NOT_FOUND", `Unknown subagent ${id}`);
+    if (error instanceof InvalidPersistedSubagentStatusError) throw error;
+    if (error instanceof SyntaxError) throw new InvalidPersistedSubagentStatusError();
     if (error instanceof WorkflowError) throw error;
     throw internalStorageError(error, `Unable to read subagent ${id} status`);
   }
@@ -686,17 +860,18 @@ async function persistReconciliationFailure(root: string, id: string, status: Pe
     // The terminal status retains the recovery failure when its detail file cannot be written.
   }
 }
-async function reconcilePersistedRuns(root: string, liveness: SubagentLiveness | undefined, cleanupWorktree?: InterruptedWorktreeCleanup): Promise<void> {
+async function reconcilePersistedRuns(root: string, liveness: SubagentLiveness | undefined, cleanupWorktree?: InterruptedWorktreeCleanup): Promise<ReadonlyMap<string, WorkflowError>> {
   await secureDirectory(root);
   const entries = await readdir(root, { withFileTypes: true });
+  const errors = new Map<string, WorkflowError>();
   for (const entry of entries) {
     if (!entry.isDirectory() || !validSubagentId(entry.name)) continue;
     let status: PersistedSubagentStatus;
     try {
-      status = await loadPersistedStatus(root, entry.name);
+      status = await loadPersistedStatus(root, entry.name, false);
     } catch (error) {
-      if (error instanceof WorkflowError && error.code === "RUN_NOT_FOUND") continue;
-      // A malformed status cannot be safely rewritten; keep other runs available.
+      if (error instanceof WorkflowError && (error.code === "RUN_NOT_FOUND" || error instanceof InvalidPersistedSubagentStatusError)) continue;
+      errors.set(entry.name, error instanceof WorkflowError ? error : internalStorageError(error, `Unable to reconcile subagent ${entry.name} status`));
       continue;
     }
     if (status.state !== "running" && status.worktreeContext === undefined && status.worktree === undefined) continue;
@@ -716,6 +891,7 @@ async function reconcilePersistedRuns(root: string, liveness: SubagentLiveness |
       await persistReconciliationFailure(root, entry.name, status, error);
     }
   }
+  return errors;
 }
 
 function enqueueWrite(run: LiveRun, operation: () => Promise<void>): Promise<void> {
@@ -736,6 +912,7 @@ class PersistentSubagentManager implements SubagentManager {
   private readonly activeRuns = new Map<string, LiveRun>();
   private activeRunCount = 0;
   private readonly terminalSummaries = new Map<string, TerminalSummary>();
+  private readonly reconciliationErrors = new Map<string, WorkflowError>();
   private readonly notificationPromises = new Set<Promise<void>>();
   private readonly initialization: Promise<void>;
   private readonly worktreeAdapter: NonNullable<SubagentManagerDependencies["worktreeAdapter"]>;
@@ -756,12 +933,13 @@ class PersistentSubagentManager implements SubagentManager {
       this.storageOwner = await acquireStorageOwner(storageDirectory(this.dependencies), owner, this.dependencies.liveness);
       if (!this.storageOwner) return;
       const cleanup = this.worktreeAdapter.cleanup?.bind(this.worktreeAdapter);
-      await reconcilePersistedRuns(storageDirectory(this.dependencies), this.dependencies.liveness, async (_root, _id, status) => {
+      const errors = await reconcilePersistedRuns(storageDirectory(this.dependencies), this.dependencies.liveness, async (_root, _id, status) => {
         const worktreeContext = status.worktreeContext;
         if (!cleanup || !worktreeContext) return false;
         await cleanup(worktreeContext);
         return true;
       });
+      for (const [id, error] of errors) this.reconciliationErrors.set(id, error);
     } catch (error: unknown) {
       this.initializationError = error instanceof WorkflowError ? error : internalStorageError(error, "Unable to reconcile subagent storage");
     }
@@ -784,13 +962,15 @@ class PersistentSubagentManager implements SubagentManager {
     if (context.signal?.aborted) throw new WorkflowError("CANCELLED", "Subagent cancelled");
     const id = randomUUID();
     const startedAt = Date.now();
+    const sessionId = context.extensionContext.sessionManager.getSessionId();
+    if (!sessionId.trim()) throw new WorkflowError("INTERNAL_ERROR", "Current Pi session identity is unavailable");
     const owner = this.runOwner;
     if (!owner) throw new WorkflowError("INTERNAL_ERROR", "Subagent storage owner identity is unavailable");
     const concurrency = effectiveConcurrency(context, this.dependencies);
     if (this.activeRunCount >= concurrency) throw new WorkflowError("AGENT_FAILED", `Subagent concurrency limit reached (${String(this.activeRunCount)}/${String(concurrency)} active runs); no queue is maintained. Retry after an active run settles.`);
     this.activeRunCount += 1;
     const controller = new AbortController();
-    const initialStatus: PersistedSubagentStatus = { id, state: "running", startedAt, owner: { ...owner } };
+    const initialStatus: PersistedSubagentStatus = { id, sessionId, state: "running", startedAt, owner: { ...owner } };
     let directory: string;
     try {
       directory = await createRunStorage(storageDirectory(this.dependencies), id, snapshot, initialStatus);
@@ -803,12 +983,12 @@ class PersistentSubagentManager implements SubagentManager {
     let resolveTerminal!: (result: ForegroundResult) => void;
     const terminal = new Promise<ForegroundResult>((resolve) => { resolveTerminal = resolve; });
     const executorOwnership = { default: true };
-    const execution = Promise.resolve().then(async () => {
+    const execution: Promise<unknown> = Promise.resolve().then(async () => {
       const live = current.run;
       if (!live || live.disposed || controller.signal.aborted) throw new WorkflowError("CANCELLED", "Subagent cancelled");
       const worktreeContext = snapshot.worktree === undefined ? undefined : {
         cwd: context.extensionContext.cwd,
-        sessionId: context.extensionContext.sessionManager.getSessionId(),
+        sessionId,
         runId: id,
         name: snapshot.worktree,
         owner: structuralPath("worktree", "named", snapshot.worktree),
@@ -836,20 +1016,56 @@ class PersistentSubagentManager implements SubagentManager {
         const run = current.run;
         if (run) this.registerSteerHandler(run, handler);
       };
-      const options = executionOptions(snapshot, (attempt) => {
+      const options = executionOptions(snapshot, async (attempt: unknown) => {
         const run = current.run;
-        if (!run || run.disposed) return;
-        if (attempt.liveSession) {
-          run.session = attempt.liveSession;
-          if (run.controller.signal.aborted) void this.cleanupSession(run, !run.executorOwnsSession).catch(() => undefined);
+        if (!run) return;
+        const record = recordValue(attempt);
+        const summary = attemptSummaryValue(attempt);
+        const liveSession = isSessionLifecycle(record?.liveSession) ? record.liveSession : undefined;
+        const prepared = isPreparedSession(record?.prepared) ? record.prepared : undefined;
+        const handoff = isLiveSessionHandoff(record?.handoff) ? record.handoff : undefined;
+        if (run.disposed) {
+          if (liveSession && !run.executorOwnsSession) void this.cleanupSession(run, true, true, liveSession).catch(() => undefined);
+          return;
         }
-        this.recordAttemptAccounting(run, attempt.accounting);
+        const attemptNumber = attemptNumberValue(attempt);
+        if (prepared) {
+          run.systemPrompt = prepared.systemPrompt;
+          if (attemptNumber !== undefined) run.systemPromptAttempt = attemptNumber;
+        } else if (attemptNumber !== undefined && run.systemPromptAttempt !== attemptNumber) {
+          run.systemPrompt = undefined;
+          run.systemPromptAttempt = attemptNumber;
+        }
+        if (liveSession) {
+          const previousSession = run.session;
+          run.activeSessions.add(liveSession);
+          run.session = liveSession;
+          run.prepared = prepared;
+          run.handoff = handoff;
+          if (previousSession && previousSession !== liveSession) {
+            if (run.executorOwnsSession) run.activeSessions.delete(previousSession);
+            else void this.cleanupSession(run, true, false, previousSession).catch(() => undefined);
+          }
+          if (run.controller.signal.aborted) void this.cleanupSession(run, !run.executorOwnsSession, true, liveSession).catch(() => undefined);
+        } else if (summary && record?.session === undefined) {
+          run.session = undefined;
+          run.prepared = undefined;
+          run.handoff = undefined;
+        }
+        this.recordAttempt(run, attempt);
+        try {
+          await enqueueWrite(run, () => atomicJson(statusPath(run.directory), persistedStatus(run)));
+        } catch {
+          // Attempt metadata remains available in memory when status storage is unavailable.
+        }
+        if (run.state !== "running") return;
+        emitUpdate(run);
       }, (progress) => this.recordProgress(current.run, progress));
       if (injectedExecutor) return injectedExecutor.execute(snapshot.prompt, options, controller.signal, setSteer);
       return new WorkflowAgentExecutor(root, transport).execute(snapshot.prompt, options, controller.signal, [], setSteer);
     });
     const onStatus = this.dependencies.onStatus;
-    const run: LiveRun = { id, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, terminal, resolveTerminal, update: snapshot.mode === "foreground" ? context.onUpdate : undefined, observe: onStatus === undefined ? undefined : (status) => { onStatus(status, snapshot); }, state: "running", error: undefined, value: undefined, cancelled: false, session: undefined, progress: undefined, accounting: undefined, usage: undefined, activity: undefined, toolCalls: undefined, lastEventAt: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, sessionAbort: undefined, sessionDispose: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, terminalResolved: false, writes: Promise.resolve() };
+    const run: LiveRun = { id, sessionId, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, terminal, resolveTerminal, update: snapshot.mode === "foreground" ? context.onUpdate : undefined, observe: onStatus === undefined ? undefined : (status) => { onStatus(status, snapshot); }, state: "running", error: undefined, value: undefined, cancelled: false, session: undefined, sessionCleanups: new WeakMap(), activeSessions: new Set(), prepared: undefined, handoff: undefined, progress: undefined, accounting: undefined, usage: undefined, activity: undefined, toolCalls: undefined, lastEventAt: undefined, attemptDetails: undefined, attempts: undefined, systemPrompt: undefined, systemPromptAttempt: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, terminalResolved: false, writes: Promise.resolve() };
     current.run = run;
     this.activeRuns.set(id, run);
     const externalSignal = context.signal;
@@ -863,14 +1079,27 @@ class PersistentSubagentManager implements SubagentManager {
     this.observe(run);
     return run;
   }
+  getAttemptActionData(id: string): Readonly<SubagentAttemptActionData> | undefined {
+    const run = this.activeRuns.get(id);
+    const attempt = run?.attemptDetails?.at(-1);
+    if (!run || run.disposed || !attempt) return undefined;
+    const liveSession = isLiveSession(run.session) ? run.session : undefined;
+    const live = run.state === "running" && liveSession && attempt.session && liveSession.reference.transport === attempt.session.transport && liveSession.reference.sessionId === attempt.session.sessionId ? liveSession : undefined;
+    return {
+      attempt: structuredClone(attempt),
+      ...(attempt.session === undefined ? {} : { session: structuredClone(attempt.session) }),
+      ...(live === undefined ? {} : { liveSession: live, ...(run.prepared === undefined ? {} : { prepared: run.prepared }), ...(run.handoff === undefined ? {} : { handoff: run.handoff }) }),
+      signal: run.controller.signal,
+    };
+  }
 
-  async inspect(request: Readonly<SubagentInspectRequest>): Promise<unknown> {
+  async inspect(request: Readonly<SubagentInspectRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown> {
     await this.ensureInitialized();
     if (request.id !== undefined) {
       const id = checkedId({ id: request.id });
       const active = this.activeRuns.get(id);
       const status = active ? persistedStatus(active) : this.terminalSummaries.get(id) ?? await loadPersistedStatus(storageDirectory(this.dependencies), id);
-      const inspection = publicStatus(status);
+      const inspection = publicStatus(status, context.includeAttemptMetadata === true);
       if (status.state === "completed") return { ...inspection, value: await loadPersistedResult(storageDirectory(this.dependencies), id) };
       if (status.state === "failed") {
         const failure = status.error ?? await loadPersistedFailure(storageDirectory(this.dependencies), id);
@@ -880,29 +1109,27 @@ class PersistentSubagentManager implements SubagentManager {
     }
     return this.inspectList();
   }
-
   private async inspectList(): Promise<unknown> {
     const root = storageDirectory(this.dependencies);
     await secureDirectory(root);
     const entries = await readdir(root, { withFileTypes: true });
-    const statuses: PersistedSubagentStatus[] = [];
+    const statuses: Array<{ readonly status: SubagentStatus; readonly startedAt: number }> = [];
     for (const entry of entries) {
       if (!entry.isDirectory() || !validSubagentId(entry.name)) continue;
+      // Keep list/reconciliation available; direct lookup still re-reads and reports the error.
+      if (this.reconciliationErrors.has(entry.name)) continue;
       try {
         const active = this.activeRuns.get(entry.name);
-        if (active) {
-          statuses.push(persistedStatus(active));
-          continue;
-        }
-        const status = await loadPersistedStatus(root, entry.name);
-        statuses.push(this.terminalSummaries.get(entry.name) ?? status);
+        const status = publicStatus(active ? persistedStatus(active) : this.terminalSummaries.get(entry.name) ?? await loadPersistedStatus(root, entry.name, false));
+        if (status.startedAt === undefined) continue;
+        statuses.push({ status, startedAt: status.startedAt });
       } catch (error) {
-        if (error instanceof WorkflowError && error.code === "RUN_NOT_FOUND") continue;
+        if (error instanceof WorkflowError && (error.code === "RUN_NOT_FOUND" || error instanceof InvalidPersistedSubagentStatusError)) continue;
         throw error;
       }
     }
-    statuses.sort((left, right) => left.startedAt - right.startedAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
-    return statuses.map(publicStatus);
+    statuses.sort((left, right) => left.startedAt - right.startedAt || (left.status.id < right.status.id ? -1 : left.status.id > right.status.id ? 1 : 0));
+    return statuses.map(({ status }) => status);
   }
 
   async steer(request: Readonly<{ id: string; message: string }>): Promise<unknown> {
@@ -948,7 +1175,9 @@ class PersistentSubagentManager implements SubagentManager {
     const active = this.activeRuns.get(id);
     const status = active ? persistedStatus(active) : this.terminalSummaries.get(id) ?? await loadPersistedStatus(storageDirectory(this.dependencies), id);
     if (status.state !== "failed" && status.state !== "stopped") throw new WorkflowError("AGENT_FAILED", `Subagent ${id} is not retryable`);
-    const run = await this.start(await loadPersistedRequest(storageDirectory(this.dependencies), id), context);
+    const requestSnapshot = await loadPersistedRequest(storageDirectory(this.dependencies), id);
+    const retryRequest = context.waitForForeground === false && requestSnapshot.mode === "foreground" ? { ...requestSnapshot, mode: "background" as const } : requestSnapshot;
+    const run = await this.start(retryRequest, context);
     emitUpdate(run);
     if (run.request.mode !== "foreground") return { id: run.id, state: "running" };
     return run.terminal;
@@ -1013,7 +1242,7 @@ class PersistentSubagentManager implements SubagentManager {
     if (run.request.mode === "foreground") run.cancelled = true;
     run.controller.abort();
     this.clearSteering(run);
-    void this.cleanupSession(run, false).catch(() => undefined);
+    void this.cleanupSessions(run, false).catch(() => undefined);
     if (run.request.mode === "foreground") void this.settleFailure(run, new WorkflowError("CANCELLED", "Subagent cancelled")).catch(() => undefined);
   }
 
@@ -1042,6 +1271,19 @@ class PersistentSubagentManager implements SubagentManager {
     await enqueueWrite(run, () => atomicJson(statusPath(run.directory), persistedStatus(run)));
   }
 
+  private recordAttempt(run: LiveRun, value: unknown): void {
+    const summary = attemptSummaryValue(value);
+    if (summary) {
+      run.attempts = Math.max(run.attempts ?? 0, summary.attempt);
+      run.attemptDetails = [...(run.attemptDetails ?? []), summary].slice(-SUBAGENT_ATTEMPT_DETAILS_LIMIT);
+      this.recordAttemptAccounting(run, summary.accounting);
+      return;
+    }
+    const record = recordValue(value);
+    if (!record) return;
+    this.recordAttemptAccounting(run, record.accounting);
+  }
+
   private recordAttemptAccounting(run: LiveRun, value: unknown): void {
     const accounting = accountingValue(value);
     if (!accounting) return;
@@ -1054,7 +1296,8 @@ class PersistentSubagentManager implements SubagentManager {
       run.state = "stopped";
       this.releaseConcurrency(run);
       run.finishedAt = Date.now();
-      const sessionCleanup = this.cleanupSession(run, disposeSession);
+      emitUpdate(run);
+      const sessionCleanup = this.cleanupSessions(run, disposeSession);
       run.controller.abort();
       this.clearSteering(run);
       this.removeExternalAbort(run);
@@ -1065,6 +1308,11 @@ class PersistentSubagentManager implements SubagentManager {
         statusError = error;
       }
       const cleanupErrors = await sessionCleanup;
+      if (disposeSession) this.clearAttemptLiveReferences(run);
+      else {
+        run.prepared = undefined;
+        run.handoff = undefined;
+      }
       let worktreeError: unknown;
       let worktreeCleaned = false;
       try {
@@ -1093,7 +1341,7 @@ class PersistentSubagentManager implements SubagentManager {
     if (disposeSession) {
       run.disposed = true;
       this.clearSteering(run);
-      await this.cleanupSession(run, true);
+      await this.cleanupSessions(run, true);
       const worktreeCleaned = await this.cleanupWorktree(run);
       if (worktreeCleaned) await enqueueWrite(run, () => atomicJson(statusPath(run.directory), persistedStatus(run)));
       this.resolveTerminal(run);
@@ -1101,21 +1349,51 @@ class PersistentSubagentManager implements SubagentManager {
     }
   }
 
-  private async cleanupSession(run: LiveRun, dispose: boolean, abort = true): Promise<unknown[]> {
-    const session = run.session;
+  private async cleanupSessions(run: LiveRun, dispose: boolean, abort = true): Promise<unknown[]> {
+    const errors: unknown[] = [];
+    for (const session of [...run.activeSessions]) errors.push(...await this.cleanupSession(run, dispose, abort, session));
+    return errors;
+  }
+
+  private async waitForSessionAborts(run: LiveRun): Promise<void> {
+    const pending: Promise<void>[] = [];
+    for (const session of run.activeSessions) {
+      const abort = run.sessionCleanups.get(session)?.abort;
+      if (abort) pending.push(abort);
+    }
+    await Promise.allSettled(pending);
+  }
+
+  private async cleanupSession(run: LiveRun, dispose: boolean, abort = true, session = run.session): Promise<unknown[]> {
     if (!session) return [];
+    run.activeSessions.add(session);
+    let cleanup = run.sessionCleanups.get(session);
+    if (!cleanup) {
+      cleanup = {};
+      run.sessionCleanups.set(session, cleanup);
+    }
     const errors: unknown[] = [];
     if (abort) {
-      if (!run.sessionAbort) run.sessionAbort = Promise.resolve().then(() => session.abort());
-      await run.sessionAbort.then(() => undefined, (error: unknown) => { errors.push(error); });
+      if (!cleanup.abort) cleanup.abort = Promise.resolve().then(() => session.abort());
+      await cleanup.abort.then(() => undefined, (error: unknown) => { errors.push(error); });
     }
     if (dispose) {
-      if (!run.sessionDispose) run.sessionDispose = Promise.resolve().then(() => session.dispose());
-      await run.sessionDispose.then(() => undefined, (error: unknown) => { errors.push(error); });
-      run.session = undefined;
+      if (!abort && cleanup.abort) await cleanup.abort.then(() => undefined, () => undefined);
+      if (!cleanup.dispose) cleanup.dispose = Promise.resolve().then(() => session.dispose());
+      await cleanup.dispose.then(() => undefined, (error: unknown) => { errors.push(error); });
+      run.activeSessions.delete(session);
+      if (run.session === session) run.session = undefined;
     }
     return errors;
   }
+
+  private clearAttemptLiveReferences(run: LiveRun): void {
+    run.session = undefined;
+    run.activeSessions.clear();
+    run.prepared = undefined;
+    run.handoff = undefined;
+  }
+
   private async cleanupWorktree(run: LiveRun): Promise<boolean> {
     const worktree = run.worktree;
     let cleanup = run.worktreeCleanup;
@@ -1145,16 +1423,16 @@ class PersistentSubagentManager implements SubagentManager {
     ).catch((error: unknown) => this.settleFailure(run, error)).catch(() => undefined);
   }
 
-  private async settleSuccess(run: LiveRun, result: AgentExecutionResult): Promise<void> {
+  private async settleSuccess(run: LiveRun, result: unknown): Promise<void> {
     if (run.disposed || run.state !== "running") {
       if (!run.disposed && run.state === "stopped") await this.finishTerminal(run);
       return;
     }
     try {
-      if (!jsonValue(result.value)) throw new WorkflowError("INTERNAL_ERROR", "Subagent result is not a JSON value");
-      const latest = [...result.attempts].reverse().find((attempt) => accountingValue(attempt.accounting));
-      if (latest) this.recordAttemptAccounting(run, latest.accounting);
-      const value = structuredClone(result.value);
+      const executionResult = executionResultValue(result);
+      if (!executionResult) throw new WorkflowError("INTERNAL_ERROR", "Subagent executor returned an invalid result");
+      for (const attempt of executionResult.attempts.slice(-MAX_PERSISTED_ATTEMPT_ARRAY_ITEMS)) this.recordAttempt(run, attempt);
+      const value = structuredClone(executionResult.value);
       await enqueueWrite(run, () => atomicJson(resultPath(run.directory), value));
       run.value = value;
       if (this.terminalOrDisposed(run)) {
@@ -1175,15 +1453,12 @@ class PersistentSubagentManager implements SubagentManager {
       if (!run.disposed && run.state === "stopped") await this.finishTerminal(run);
       return;
     }
-    const candidate = typeof error === "object" && error !== null ? (error as { attempts?: unknown }).attempts : undefined;
+    const candidate = recordValue(error)?.attempts;
     if (Array.isArray(candidate)) {
-      const attempts = candidate as unknown[];
-      const latest = [...attempts].reverse().map((attempt) => {
-        if (typeof attempt !== "object" || attempt === null) return undefined;
-        const accounting = accountingValue((attempt as { accounting?: unknown }).accounting);
-        return accounting === undefined ? undefined : { accounting };
-      }).find((attempt) => attempt !== undefined);
-      if (latest) this.recordAttemptAccounting(run, latest.accounting);
+      for (const attempt of candidate.slice(-MAX_PERSISTED_ATTEMPT_ARRAY_ITEMS)) {
+        const record = recordValue(attempt);
+        if (record) this.recordAttemptAccounting(run, record.accounting);
+      }
     }
     run.state = "failed";
     this.releaseConcurrency(run);
@@ -1217,21 +1492,23 @@ class PersistentSubagentManager implements SubagentManager {
       return;
     }
     run.finishedAt ??= Date.now();
+    emitUpdate(run);
     this.clearSteering(run);
     this.removeExternalAbort(run);
-    if (!run.executorOwnsSession) await this.cleanupSession(run, true, false);
-    else if (run.request.mode === "foreground" && run.sessionAbort) await run.sessionAbort.then(() => undefined, () => undefined);
+    if (!run.executorOwnsSession) await this.cleanupSessions(run, true, false);
+    else if (run.request.mode === "foreground") await this.waitForSessionAborts(run);
+    this.clearAttemptLiveReferences(run);
     try {
       await this.cleanupWorktree(run);
     } catch {
       // Keep the terminal result and recovery context when cleanup must be retried later.
     }
+    emitUpdate(run);
     try {
       await enqueueWrite(run, () => atomicJson(statusPath(run.directory), persistedStatus(run)));
     } catch {
       // The terminal state remains available in memory when storage becomes unavailable.
     }
-    emitUpdate(run);
     this.resolveTerminal(run);
     this.removeLiveRun(run);
     if (run.state === "completed" || run.state === "failed") this.notify(run);
@@ -1242,7 +1519,9 @@ class PersistentSubagentManager implements SubagentManager {
     const notify = this.dependencies.notify;
     if (!notify || run.notificationSent || run.disposed) return;
     run.notificationSent = true;
-    const notification: SubagentNotification = { id: run.id, state: run.state as "completed" | "failed", ...(run.error === undefined ? {} : { error: run.error }) };
+    const role = roleNameOf(run.request.role) ?? "none";
+    const label = run.request.label?.trim() || (role === "none" ? "subagent" : role);
+    const notification: SubagentNotification = { id: run.id, label, role, state: run.state as "completed" | "failed", ...(run.error === undefined ? {} : { error: run.error }) };
     const pending = Promise.resolve().then(() => notify(notification));
     this.notificationPromises.add(pending);
     void pending.then(() => { this.notificationPromises.delete(pending); }, () => { this.notificationPromises.delete(pending); });
@@ -1275,6 +1554,7 @@ export function createSubagentManager(dependencies: SubagentManagerDependencies 
   return {
     run: (request, context) => manager.run(request, context),
     inspect: (request, context) => manager.inspect(request, context),
+    getAttemptActionData: (id) => manager.getAttemptActionData?.(id),
     steer: (request, context) => manager.steer(request, context),
     stop: (request, context) => manager.stop(request, context),
     retry: (request, context) => manager.retry(request, context),

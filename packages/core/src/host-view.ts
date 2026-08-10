@@ -1,7 +1,7 @@
 import { keyHint, truncateToVisualLines, type Theme } from "@earendil-works/pi-coding-agent";
 import { type AwaitingCheckpoint, type PersistedRun, type RunStore, type WorktreeReference } from "./persistence.js";
 import { budgetUsage } from "./budget.js";
-import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, type AgentRecord, type LaunchSnapshot, type WorkflowCatalogFunction, type WorkflowCatalogIndex, type WorkflowPhaseShellActivity } from "./types.js";
+import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, type AgentAttemptAction, type AgentAttemptActionContext, type AgentRecord, type LaunchSnapshot, type StandaloneAgentAttemptActionContext, type WorkflowCatalogFunction, type WorkflowCatalogIndex, type WorkflowPhaseShellActivity } from "./types.js";
 import { object } from "./utils.js";
 import {
   buildWorkflowPhaseModel,
@@ -62,7 +62,7 @@ function agentStateGlyph(state: string, running: string): string { return state 
 type ProgressStyleKey = "success" | "error" | "warning" | "accent" | "muted";
 const PROGRESS_STATE_STYLE: Record<string, ProgressStyleKey> = { completed: "success", failed: "error", cancelled: "error", running: "accent", paused: "warning", pausing: "warning", interrupted: "warning", retrying: "accent", budget_exhausted: "warning", awaiting_input: "warning" };
 const WORKFLOW_ICON_STYLE: Record<string, ProgressStyleKey> = { completed: "success", failed: "error", stopped: "error", interrupted: "warning", budget_exhausted: "warning", awaiting_input: "warning", paused: "warning", pausing: "warning", running: "accent" };
-const PHASE_STATE_STYLE: Record<string, ProgressStyleKey> = { completed: "success", failed: "error", cancelled: "error", running: "accent", paused: "warning", pausing: "warning", interrupted: "warning", budget_exhausted: "warning" };
+const PHASE_STATE_STYLE: Record<string, ProgressStyleKey> = { completed: "success", failed: "error", cancelled: "error", stopped: "error", running: "accent", paused: "warning", pausing: "warning", interrupted: "warning", budget_exhausted: "warning" };
 function styleForState(map: Record<string, ProgressStyleKey>, state: string, styles: WorkflowProgressStyles): (text: string) => string {
   const key = map[state] ?? "muted";
   return (text) => styles[key](text);
@@ -457,17 +457,21 @@ function formatCompactBudgetStatus(run: Pick<PersistedRun, "budget" | "budgetVer
 
 const ATTENTION_ORDER: Record<string, number> = { awaiting_input: 0, budget_exhausted: 1, running: 2, pausing: 3, paused: 4, interrupted: 5, failed: 6, queued: 7, stopped: 8, completed: 9 };
 
-export function navigatorAttentionSort<T extends { loaded: { run: PersistedRun }; resolvedAt?: number | undefined }>(entries: readonly T[]): T[] {
-  return [...entries].sort((a, b) => {
-    const aResolvedAt = a.resolvedAt;
-    const bResolvedAt = b.resolvedAt;
-    if (aResolvedAt !== undefined || bResolvedAt !== undefined) {
-      if (aResolvedAt === undefined) return -1;
-      if (bResolvedAt === undefined) return 1;
-      if (aResolvedAt !== bResolvedAt) return bResolvedAt - aResolvedAt;
+export function navigatorAttentionSortByState<T>(entries: readonly T[], stateOf: (entry: T) => string, resolvedAtOf: (entry: T) => number | undefined, stateOrder: Readonly<Record<string, number>> = ATTENTION_ORDER): T[] {
+  return [...entries].sort((left, right) => {
+    const leftResolvedAt = resolvedAtOf(left);
+    const rightResolvedAt = resolvedAtOf(right);
+    if (leftResolvedAt !== undefined || rightResolvedAt !== undefined) {
+      if (leftResolvedAt === undefined) return -1;
+      if (rightResolvedAt === undefined) return 1;
+      if (leftResolvedAt !== rightResolvedAt) return rightResolvedAt - leftResolvedAt;
     }
-    return (ATTENTION_ORDER[a.loaded.run.state] ?? 9) - (ATTENTION_ORDER[b.loaded.run.state] ?? 9);
+    return (stateOrder[stateOf(left)] ?? 9) - (stateOrder[stateOf(right)] ?? 9);
   });
+}
+
+export function navigatorAttentionSort<T extends { loaded: { run: PersistedRun }; resolvedAt?: number | undefined }>(entries: readonly T[]): T[] {
+  return navigatorAttentionSortByState(entries, (entry) => entry.loaded.run.state, (entry) => entry.resolvedAt);
 }
 
 export function navigatorRunLabels(entries: readonly { store: RunStore; loaded: { run: PersistedRun } }[]): string[] {
@@ -521,11 +525,6 @@ function stalledDuration(agent: AgentRecord, now: number): number | undefined {
   const duration = now - agent.lastEventAt;
   return duration >= WORKFLOW_AGENT_STALL_THRESHOLD_MS ? duration : undefined;
 }
-function agentDuration(agent: AgentRecord, now: number): number | undefined {
-  if (agent.durationMs !== undefined && Number.isFinite(agent.durationMs)) return Math.max(0, agent.durationMs);
-  if (agent.startedAt === undefined || !Number.isFinite(agent.startedAt)) return undefined;
-  return Math.max(0, now - agent.startedAt);
-}
 function formatAgentActivity(agent: AgentRecord, spinner: string, styles: WorkflowProgressStyles = PLAIN_WORKFLOW_PROGRESS_STYLES, now = Date.now()): string {
   const label = agent.activity?.kind === "reasoning" ? "reasoning" : agent.activity?.kind === "text" ? "responding" : agent.activity?.kind === "tool" ? agent.activity.text : [...(agent.toolCalls ?? [])].reverse().find(({ state }) => state === "running")?.name ?? "";
   const activity = label ? `${styles.accent(spinner)} ${styles.dim(label)}` : "";
@@ -543,6 +542,88 @@ function formatAccounting(accounting: NonNullable<AgentRecord["accounting"]>): s
   const total = accounting.input + accounting.output + accounting.cacheRead + accounting.cacheWrite;
   return `${formatAccountingValue(total)} tok`;
 }
+export interface AgentDetailPresentation {
+  readonly state: string;
+  readonly activity?: AgentRecord["activity"];
+  readonly lastEventAt?: number;
+  readonly structuralPath?: readonly string[];
+  readonly model?: AgentRecord["model"];
+  readonly role?: string;
+  readonly tools?: readonly string[];
+  readonly attempts?: number;
+  readonly startedAt?: number;
+  readonly finishedAt?: number;
+  readonly durationMs?: number;
+  readonly accounting?: NonNullable<AgentRecord["accounting"]>;
+  readonly error?: { readonly code: string; readonly message: string };
+}
+function formatAgentError(error: NonNullable<AgentDetailPresentation["error"]>, styles: WorkflowProgressStyles = PLAIN_WORKFLOW_PROGRESS_STYLES): string {
+  return styles.error(`Error: ${error.code}: ${error.message}`);
+}
+
+export function formatAgentDetail(agent: Readonly<AgentDetailPresentation>, styles: WorkflowProgressStyles = PLAIN_WORKFLOW_PROGRESS_STYLES, now = Date.now(), options: Readonly<{ includeError?: boolean }> = {}): string[] {
+  const duration = agent.durationMs !== undefined && Number.isFinite(agent.durationMs)
+    ? Math.max(0, agent.durationMs)
+    : agent.startedAt === undefined || !Number.isFinite(agent.startedAt)
+      ? undefined
+      : Math.max(0, (agent.finishedAt ?? now) - agent.startedAt);
+  const stalled = agent.state === "running" && agent.lastEventAt !== undefined && Number.isFinite(agent.lastEventAt) && now - agent.lastEventAt >= WORKFLOW_AGENT_STALL_THRESHOLD_MS
+    ? Math.max(0, now - agent.lastEventAt)
+    : undefined;
+  const state = phaseStyleForState(agent.state, styles);
+  const model = agent.model === undefined ? undefined : `${agent.model.provider}/${agent.model.model}${agent.model.thinking ? `:${agent.model.thinking}` : ""}`;
+  const tools = agent.tools?.join(", ") || "(none)";
+  const lines = [
+    ...(agent.activity ? [`Activity: ${agent.activity.text}`] : []),
+    ...(stalled === undefined ? [] : [styles.warning(`stalled? ${formatStalledDuration(stalled)}`)]),
+    `State: ${state(agent.state)}`,
+    ...(agent.structuralPath?.length ? [`Structural path: ${agent.structuralPath.join(" > ")}`] : []),
+    ...(model === undefined ? [] : [`Model: ${model}`]),
+    `Role: ${agent.role ?? "(none)"}`,
+    `Tools: ${tools}`,
+    ...(agent.attempts !== undefined && Number.isFinite(agent.attempts) && agent.attempts > 1 ? [`Attempts: ${String(agent.attempts)}`] : []),
+    ...(duration === undefined ? [] : [`Duration: ${formatWorkflowRuntime(duration)}`]),
+    ...(agent.accounting ? formatAgentAccounting(agent.accounting) : []),
+  ];
+  if (agent.error && options.includeError !== false) lines.push(formatAgentError(agent.error, styles));
+  return lines;
+}
+
+export interface AgentActionPresentation {
+  readonly extensionLabels: readonly string[];
+  readonly hasWorktree: boolean;
+  readonly openPrompt: boolean;
+  readonly openSystemPrompt: boolean;
+  readonly openResult: boolean;
+  readonly standaloneState?: "running" | "completed" | "failed" | "stopped";
+}
+
+export function agentActionLabels(options: Readonly<AgentActionPresentation>): string[] {
+  return [
+    ...options.extensionLabels,
+    ...(options.hasWorktree ? ["Copy branch", "Copy worktree path"] : []),
+    ...(options.openPrompt ? ["Open prompt in editor"] : []),
+    ...(options.openSystemPrompt ? ["Open system prompt in editor"] : []),
+    ...(options.openResult ? ["Open result in editor"] : []),
+    ...(options.standaloneState === "running" ? ["Steer", "Stop"] : []),
+    ...(options.standaloneState === "failed" || options.standaloneState === "stopped" ? ["Retry"] : []),
+    "Copy agent ID",
+    "Back",
+  ];
+}
+
+export function visibleAgentAttemptActions(actions: Readonly<Record<string, AgentAttemptAction>>, context: Readonly<AgentAttemptActionContext>): readonly [string, AgentAttemptAction][] {
+  return Object.entries(actions).filter(([, action]) => {
+    try { return action.visible(context); } catch { return false; }
+  });
+}
+
+export function visibleStandaloneAgentAttemptActions(actions: Readonly<Record<string, AgentAttemptAction>>, context: Readonly<StandaloneAgentAttemptActionContext>): readonly [string, AgentAttemptAction][] {
+  return Object.entries(actions).filter(([, action]) => {
+    try { return action.visibleStandalone?.(context) === true; } catch { return false; }
+  });
+}
+
 
 function formatAgentAccounting(accounting: NonNullable<AgentRecord["accounting"]>): string[] {
   const total = accounting.input + accounting.output + accounting.cacheRead + accounting.cacheWrite;
@@ -684,12 +765,10 @@ export function formatWorkflowPhaseDashboard(run: PersistedRun, snapshot: Readon
     }
     const agent = node.agent;
     if (!agent) return [styles.muted("Agent details are unavailable")];
-    const duration = agentDuration(agent, now);
-    const stalled = stalledDuration(agent, now);
-    const result = [...(agent.activity ? [`Activity: ${agent.activity.text}`] : []), ...(stalled === undefined ? [] : [styles.warning(`stalled? ${formatStalledDuration(stalled)}`)]), `State: ${phaseStyle(agent.state)(agent.state)}`, ...(agent.structuralPath?.length ? [`Structural path: ${agent.structuralPath.join(" > ")}`] : []), `Model: ${agent.model.provider}/${agent.model.model}${agent.model.thinking ? `:${agent.model.thinking}` : ""}`, `Role: ${agent.role ?? "(none)"}`, `Tools: ${agent.tools.join(", ") || "(none)"}`, ...(agent.attempts > 1 ? [`Attempts: ${String(agent.attempts)}`] : []), ...(duration === undefined ? [] : [`Duration: ${formatWorkflowRuntime(duration)}`]), ...(agent.accounting ? formatAgentAccounting(agent.accounting) : []), ...(selection.actions ? [] : [styles.muted("enter agent actions")])];
-    const error = agent.attemptDetails?.at(-1)?.error;
-    if (error) result.push(styles.error(`Error: ${error.code}: ${error.message}`));
-    return result;
+    const attemptError = agent.attemptDetails?.at(-1)?.error;
+    const detail = formatAgentDetail(attemptError === undefined ? agent : { ...agent, error: attemptError }, styles, now, { includeError: false });
+    const errorLine = attemptError === undefined ? undefined : formatAgentError(attemptError, styles);
+    return [...detail, ...(selection.actions ? [] : [styles.muted("enter agent actions")]), ...(errorLine === undefined ? [] : [errorLine])];
   };
   const stateNames: readonly WorkflowPhaseState[] = ["not started", "running", "completed", "failed", "cancelled", "interrupted", "budget_exhausted"];
   const statusSummary = stateNames.filter((state) => (model.counts[state] ?? 0) > 0).map((state) => `${String(model.counts[state])} ${state}`).join(" · ") || "0 phases";

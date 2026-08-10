@@ -200,7 +200,7 @@ export default function extension() {
 | `functions` | Named host functions with JSON schemas and `run(input, context)`. |
 | `modelAliases` | Named dynamic resolvers with `resolve(context)`. |
 | `agentSetupHooks` | Named trusted setup hooks with optional finite `priority`. |
-| `agentAttemptActions` | Named `/workflow` actions with `label`, synchronous `visible(context)`, and `run(context)`. |
+| `agentAttemptActions` | Named `/workflow` actions, optionally shared with `/subagents` through paired `visibleStandalone(context)` and `runStandalone(context)`, alongside `label`, synchronous `visible(context)`, and `run(context)`. |
 | `roleDirectories` | Absolute filesystem paths or `file:` URLs containing packaged `<name>.md` roles. |
 
 Unknown top-level extension keys are rejected. Function names must be identifier-shaped, globally unique, and must not be reserved globals such as `agent`, `args`, `JSON`, `extensions`, or `workflow_catalog`. Model alias names must match `[A-Za-z][A-Za-z0-9_-]*`. Hook and action names must be identifier-shaped and globally unique.

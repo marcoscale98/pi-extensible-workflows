@@ -229,7 +229,7 @@
   <span class="tok-punctuation">}</span><span class="tok-punctuation">,</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">)</span><span class="tok-punctuation">;</span></code></pre>
         <p>Unknown JSON-compatible agent options are preserved for setup hooks and the selected transport, but are not inherited by child agents. Persisted attempts use transport-neutral references in <code>agentSessions</code>; they do not require a transcript path. The workflow session contract requires state, synchronous stats, progress subscriptions, prompt/steer/abort, and awaited idempotent disposal. Cold recovery replays the journal and never reconnects a persisted session reference.</p>
-        <p>Extensions can also register <code>agentAttemptActions</code>. The navigator evaluates their synchronous visibility for the latest attempt only and supplies a narrow UI facade plus the exact live session while that attempt is active. Action errors are reported and the dashboard is refreshed after completion.</p>
+        <p>Extensions can also register <code>agentAttemptActions</code> for <code>/workflow</code> and, when both <code>visibleStandalone</code> and <code>runStandalone</code> are supplied, for standalone <code>/subagents</code> runs. Workflow actions receive workflow snapshots; standalone actions receive a standalone agent snapshot and the real attempt/session/setup/handoff data without a fabricated workflow record. Action errors are reported and the relevant navigator is refreshed after completion.</p>
       </section>
       <section id="lifecycle">
         <h2>Lifecycle, checkpoints, and worktrees</h2>

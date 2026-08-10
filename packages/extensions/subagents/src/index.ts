@@ -175,9 +175,12 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
   ];
 }
 
-function notificationContent(notification: { id: string; state: "completed" | "failed"; error?: { code: string; message: string } }): string {
-  if (notification.state === "completed") return `Subagent ${notification.id} completed. Inspect it with subagents_inspect({ id: "${notification.id}" }).`;
-  return `Subagent ${notification.id} failed: ${notification.error?.message ?? "unknown error"}. Inspect it with subagents_inspect({ id: "${notification.id}" }).`;
+function notificationContent(notification: SubagentNotification): string {
+  const label = notification.label?.trim();
+  const role = notification.role?.trim() || "none";
+  const identity = label ? `${label} role=${role} (${notification.id})` : `${notification.id} role=${role}`;
+  if (notification.state === "completed") return `Subagent ${identity} completed. Inspect it with subagents_inspect({ id: "${notification.id}" }).`;
+  return `Subagent ${identity} failed: ${notification.error?.message ?? "unknown error"}. Inspect it with subagents_inspect({ id: "${notification.id}" }).`;
 }
 function managerDependencies(options: SubagentsExtensionOptions, activeTools: (() => readonly string[]) | undefined, notify: ((notification: SubagentNotification) => void | Promise<void>) | undefined, onStatus: ((status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>) => void) | undefined): SubagentsExtensionOptions["managerDependencies"] {
   const dependencies = options.managerDependencies;
@@ -214,7 +217,7 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
   const widget = createSubagentBackgroundWidget();
   const extension = createSubagentsExtension(options, activeTools, notify, (status, request) => { widget.update(status, request); });
   for (const tool of extension.tools) pi.registerTool(tool);
-  if (pi.registerCommand !== undefined) registerSubagentNavigator(pi.registerCommand.bind(pi), extension.manager, storageDirectory(options));
+  if (pi.registerCommand !== undefined) registerSubagentNavigator(pi.registerCommand.bind(pi), extension.manager, storageDirectory(options), options.clipboard);
   if (pi.on !== undefined) {
     pi.on("session_start", (_event, context) => { widget.start(context); });
     pi.on("session_shutdown", async () => {

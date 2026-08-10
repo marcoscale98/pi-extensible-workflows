@@ -6,6 +6,8 @@ export * from "./registry.js";
 export * from "./execution.js";
 export * from "./host.js";
 export * from "./workflow-artifacts.js";
+export { agentActionLabels, formatAgentDetail, navigatorAttentionSortByState, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions } from "./host-view.js";
+export type { AgentDetailPresentation, WorkflowProgressStyles } from "./host-view.js";
 export { default } from "./host.js";
 export { acquireSessionLease, hasLiveSessionLease, listPersistedSessionIds, projectSessionsDirectory, projectStorageKey, RunStore, runsDirectory, SessionLease, structuralPath } from "./persistence.js";
 export type { AwaitingCheckpoint, CompletedOperation, PendingWorkflowDecision, PersistedOwnershipNode, PersistedRun, RunSummary, RunSummaryAgent, RunSummaryArtifacts, WorktreeReference } from "./persistence.js";

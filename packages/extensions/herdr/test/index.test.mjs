@@ -71,6 +71,27 @@ void test("registers session and live actions when enabled", () => {
   assert.equal(fullyInspectable.agentAttemptActions.openLiveSession.visible(context), false);
   assert.equal(fullyInspectable.agentAttemptActions.openSession.visible({ ...context, liveSession: undefined }), true);
 });
+void test("runs Herdr session action from a standalone attempt context", async () => {
+  const calls = [];
+  const extension = createHerdrExtension({ agentDir: mkdtempSync(join(tmpdir(), "herdr-extension-standalone-")), env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "pane" }, runner: async (args) => {
+    calls.push([...args]);
+    if (args[1] === "layout") return JSON.stringify({ result: { layout: { panes: [{ pane_id: "pane", rect: { width: 80, height: 20 } }] } } });
+    if (args[1] === "split") return JSON.stringify({ result: { pane: { pane_id: "new-pane" } } });
+    return "";
+  } });
+  const session = { sessionId: "session", locator: { sessionFile: "/tmp/standalone-session.jsonl" } };
+  const context = {
+    agent: { id: "standalone-id", name: "reviewer", label: "reviewer", state: "completed" },
+    attempt: { attempt: 1, transport: "local", session: { transport: "local", ...session }, setup: { cwd: process.cwd() }, accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    session,
+    signal: new AbortController().signal,
+    ui: {},
+  };
+  assert.equal(extension.agentAttemptActions.openSession.visibleStandalone(context), true);
+  await extension.agentAttemptActions.openSession.runStandalone(context);
+  assert.equal(calls.filter(([command, subcommand]) => command === "pane" && subcommand === "run").length, 1);
+  assert.match(calls.at(-1)?.[3] ?? "", /standalone-session\.jsonl/);
+});
 void test("rejects live handoff without a transferable session file", async () => {
   const calls = [];
   const extension = createHerdrExtension({ agentDir: mkdtempSync(join(tmpdir(), "herdr-extension-no-file-")), env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "pane" }, runner: async (args) => { calls.push([...args]); return ""; } });
