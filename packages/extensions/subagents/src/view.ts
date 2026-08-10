@@ -21,18 +21,33 @@ function textBlock(text: string) {
   };
 }
 
+function roleName(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim() || undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const name = (value as Record<string, unknown>).name;
+  return typeof name === "string" ? name.trim() || undefined : undefined;
+}
+
+function modeName(value: unknown): "background" | "foreground" | undefined {
+  return value === "background" || value === "foreground" ? value : undefined;
+}
+
+function requestMetadata(args: SubagentRenderArgs, metadataAvailable: boolean): string {
+  const mode = modeName(args.mode) ?? (metadataAvailable ? "background" : undefined);
+  const role = metadataAvailable ? roleName(args.role) ?? "none" : undefined;
+  return [mode === undefined ? undefined : `mode=${mode}`, role === undefined ? undefined : `role=${role}`].filter((value): value is string => value !== undefined).join(" ");
+}
+
 function label(args: SubagentRenderArgs): string {
   if (typeof args.label === "string" && args.label.trim()) return args.label.trim();
-  const role: unknown = args.role;
-  if (typeof role === "string" && role.trim()) return role.trim();
-  if (role && typeof role === "object" && "name" in role && typeof role.name === "string" && role.name.trim()) return role.name.trim();
+  const role = roleName(args.role);
+  if (role) return role;
   if (typeof args.id === "string" && args.id) return args.id.slice(0, 8);
   return "subagent";
 }
 
 export function formatSubagentPreview(args: Partial<SubagentRunRequest>): string {
-  const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
-  return [`subagent ${label(args)}`, prompt].filter(Boolean).join("\n");
+  return `subagent ${label(args)} ${requestMetadata(args, true)}`;
 }
 
 export function renderSubagentCall(args: Partial<SubagentRunRequest>) { return textBlock(formatSubagentPreview(args)); }
@@ -81,11 +96,12 @@ function accounting(status: SubagentStatus): string | undefined {
   return `tokens=${String(total)} cost=$${value.cost.toFixed(2)}`;
 }
 
-function formatSubagentProgress(status: SubagentStatus, args: Partial<SubagentRunRequest>, theme: Theme, spinner: string, now: number, expanded: boolean): string {
+function formatSubagentProgress(status: SubagentStatus, args: SubagentRenderArgs, theme: Theme, spinner: string, now: number, expanded: boolean): string {
   const color = stateColor(status.state);
   const elapsed = runtime(status.startedAt, status.finishedAt, now);
+  const metadata = requestMetadata(args, args.id === undefined);
   const lines = [
-    `${theme.fg(color, stateGlyph(status.state, spinner))} ${theme.bold(theme.fg("accent", `Subagent: ${label({ ...args, id: status.id })}`))} ${theme.fg(color, `[${status.state}]`)}${elapsed ? ` runtime=${elapsed}` : ""}`,
+    `${theme.fg(color, stateGlyph(status.state, spinner))} ${theme.bold(theme.fg("accent", `Subagent: ${label({ ...args, id: status.id })}`))} ${theme.fg(color, `[${status.state}]`)}${metadata ? ` ${theme.fg("dim", metadata)}` : ""}${elapsed ? ` runtime=${elapsed}` : ""}`,
   ];
   const current = activity(status);
   if (current) lines.push(`  ${theme.fg("accent", spinner)} ${theme.fg("dim", current)}`);
@@ -101,7 +117,7 @@ function formatSubagentProgress(status: SubagentStatus, args: Partial<SubagentRu
   return lines.join("\n");
 }
 
-export function subagentProgressBlock(status: SubagentStatus, args: Partial<SubagentRunRequest>, theme: Theme, freezeAt?: number) {
+export function subagentProgressBlock(status: SubagentStatus, args: SubagentRenderArgs, theme: Theme, freezeAt?: number) {
   let current = status;
   let currentTheme = theme;
   let expanded = false;
@@ -235,7 +251,7 @@ export function renderSubagentInspectCall(args: { id?: string }, theme: Theme) {
 export function renderSubagentInspectResult(result: AgentToolResult<unknown>, options: { expanded: boolean }, theme: Theme, args: { id?: string }) {
   const status = statusValue(result.details);
   if (status) {
-    const component = subagentProgressBlock(status, args.id === undefined ? {} : { label: args.id.slice(0, 8) }, theme, Date.now());
+    const component = subagentProgressBlock(status, { id: args.id ?? status.id }, theme, Date.now());
     component.setExpanded(options.expanded);
     return component;
   }

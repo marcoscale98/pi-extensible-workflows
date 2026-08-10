@@ -60,9 +60,14 @@ test("renders subagent calls and background or foreground progress consistently"
   assert.ok(run?.renderCall && run.renderResult);
   assert.ok(tools.every(({ renderCall, renderResult }) => renderCall && renderResult));
   const theme = { fg: (_color, text) => text, bold: (text) => text };
-  const args = { prompt: "Check docs drift", label: "scout", mode: "foreground" };
-  assert.equal(run.renderCall(args, theme, {}).render(80).join("\n"), "subagent scout\nCheck docs drift");
-  assert.equal(run.renderCall({ prompt: "partial", role: null }, theme, {}).render(80).join("\n"), "subagent subagent\npartial");
+  const args = { prompt: "Check docs drift", label: "scout", mode: "foreground", role: "reviewer" };
+  const call = run.renderCall(args, theme, {}).render(80).join("\n");
+  assert.equal(call, "subagent scout mode=foreground role=reviewer");
+  assert.doesNotMatch(call, /Check docs drift/);
+  assert.equal(run.renderCall({ prompt: "partial", label: "scout", role: null }, theme, {}).render(80).join("\n"), "subagent scout mode=background role=none");
+  const narrowCall = run.renderCall({ prompt: "a long prompt", label: "a very long label", mode: "foreground", role: "reviewer" }, theme, {}).render(12);
+  assert.equal(narrowCall.length, 1);
+  assert.match(narrowCall[0], /…/);
 
   const backgroundState = {};
   const background = run.renderResult(
@@ -71,7 +76,7 @@ test("renders subagent calls and background or foreground progress consistently"
     theme,
     { args: { ...args, mode: "background" }, state: backgroundState, invalidate() {} },
   ).render(80).join("\n");
-  assert.match(background, /Subagent: scout.*\[running\]/);
+  assert.match(background, /Subagent: scout.*\[running\].*mode=background role=reviewer/);
   assert.equal(backgroundState.subagentSpinner, undefined);
 
   const foregroundState = {};
@@ -82,7 +87,7 @@ test("renders subagent calls and background or foreground progress consistently"
     theme,
     context,
   ).render(80).join("\n");
-  assert.match(partial, /Subagent: scout.*\[running\].*runtime=1s/);
+  assert.match(partial, /Subagent: scout.*\[running\].*mode=foreground role=reviewer.*runtime=1s/);
   assert.match(partial, /reasoning/);
   assert.ok(foregroundState.subagentSpinner);
 
@@ -108,6 +113,7 @@ test("renders subagent calls and background or foreground progress consistently"
     retryContext,
   ).render(80).join("\n");
   assert.match(retryPartial, /Subagent: retried.*\[running\]/);
+  assert.doesNotMatch(retryPartial, /role=/);
   assert.match(retryPartial, /read/);
   assert.ok(retryState.subagentSpinner);
   retry.renderResult(
@@ -117,6 +123,16 @@ test("renders subagent calls and background or foreground progress consistently"
     retryContext,
   );
   assert.equal(retryState.subagentSpinner, undefined);
+
+  const inspect = tools.find(({ name }) => name === "subagents_inspect");
+  assert.ok(inspect?.renderResult);
+  const inspected = inspect.renderResult(
+    { content: [], details: { id: "inspected", state: "running" } },
+    { expanded: false, isPartial: false },
+    theme,
+    { args: { id: "inspected" }, state: {}, invalidate() {} },
+  ).render(80).join("\n");
+  assert.doesNotMatch(inspected, /role=/);
 });
 
 test("pins live background subagents below the editor until they settle", async () => {
@@ -167,7 +183,7 @@ test("pins live background subagents below the editor until they settle", async 
     await started.promise;
     assert.equal(launch.details.state, "running");
     assert.deepEqual(widgetCalls[0].options, { placement: "belowEditor" });
-    assert.match(widgetComponent.render(80).join("\n"), /Subagents \(1 running\).*Subagent: scout.*\[running\]/s);
+    assert.match(widgetComponent.render(80).join("\n"), /Subagents \(1 running\).*Subagent: scout.*\[running\].*mode=background role=none/s);
 
     await executionOptions.onProgress({ accounting: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: "read" }, lastEventAt: Date.now(), persist: false });
     assert.match(widgetComponent.render(80).join("\n"), /read/);
