@@ -8,6 +8,7 @@ import test from "node:test";
 import { testExtensionApi } from "./support.js";
 import workflowExtension, { createLaunchSnapshot, loadAgentDefinitions, registerWorkflowExtension, RunStore, runWorkflow, structuralPath, WorkflowError, WorkflowRegistry, type JsonValue, type WorkflowFunctionContext } from "../src/index.js";
 import { loadingRegistry } from "../src/registry.js";
+import { withWorkflowFunctions, workflowRunContext } from "../src/host-runtime.js";
 import type { SessionInput } from "../src/agent-execution.js";
 import { listRunIds } from "../src/persistence.js";
 import { testTransport, type TestPiSession } from "./test-transport.js";
@@ -277,6 +278,29 @@ void test("registered function context.invoke validates nested calls and replays
   assert.deepEqual(saved.get("function/nested/leaf/1"), { value: "leaf:one" });
   await assert.rejects(context.invoke("leaf", { value: 1 }), (error: unknown) => error instanceof WorkflowError && error.code === "RESULT_INVALID");
   await assert.rejects(context.invoke("missing", {}), (error: unknown) => error instanceof WorkflowError && error.code === "MISSING_WORKFLOW");
+});
+void test("host composes occurrence-aware nested function breadcrumbs", async () => {
+  const registry = new WorkflowRegistry();
+  registry.register({
+    version: "1.0.0", headline: "Nested occurrence labels",
+    functions: {
+      inner: { description: "Inner", input: { type: "object", additionalProperties: false }, output: { type: "object", additionalProperties: false }, async run(_input, context) { await context.agent("inner"); return {}; } },
+      outer: { description: "Outer", input: { type: "object", additionalProperties: false }, output: { type: "object", additionalProperties: false }, async run(_input, context) { await context.invoke("inner", {}); await context.invoke("inner", {}); return {}; } },
+    },
+  });
+  const completed = new Map<string, JsonValue>();
+  const store = {
+    replay: async (path: string) => { const value = completed.get(path); return value === undefined ? undefined : { path, value }; },
+    complete: async (path: string, value: JsonValue) => { completed.set(path, value); },
+  } as unknown as RunStore;
+  const breadcrumbs: string[] = [];
+  const controller = new AbortController();
+  const bridge = { agent: async (_prompt: string, _options: Readonly<Record<string, JsonValue>>, _signal: AbortSignal, identity: import("../src/types.js").AgentIdentity) => { breadcrumbs.push(identity.parentBreadcrumb ?? ""); return null; } };
+  const wrapped = withWorkflowFunctions(bridge, store, workflowRunContext("/repo", "session", "run", { name: "nested" }, null, controller.signal), registry);
+  if (!wrapped.function) throw new Error("Missing function bridge");
+  await wrapped.function("outer", {}, controller.signal, { path: "function/outer/1", structuralPath: [], occurrence: 1 });
+  await wrapped.function("outer", {}, controller.signal, { path: "function/outer/2", structuralPath: [], occurrence: 2 });
+  assert.deepEqual(breadcrumbs, ["outer > inner", "outer > inner #2", "outer #2 > inner", "outer #2 > inner #2"]);
 });
 void test("freezes registries and produces a deterministic flat catalog", () => {
   const registry = new WorkflowRegistry();

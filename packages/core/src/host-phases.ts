@@ -112,7 +112,7 @@ function workflowPhaseTreeAggregateState(states: readonly AgentRecord["state"][]
 }
 export function buildWorkflowPhaseTree(model: WorkflowPhaseModel): WorkflowPhaseTree {
   type Draft = Omit<WorkflowPhaseTreeNode, "children"> & { children: string[] };
-  type AgentEntry = { agent: AgentRecord; node?: Draft; path: readonly string[]; defaultParentId: string };
+  type AgentEntry = { agent: AgentRecord; node?: Draft; structuralPath: readonly string[]; operationPath: readonly string[]; defaultParentId: string };
   const drafts = new Map<string, Draft>();
   const roots: string[] = [];
   const add = (node: Omit<Draft, "children">, parentId?: string): Draft => {
@@ -128,7 +128,10 @@ export function buildWorkflowPhaseTree(model: WorkflowPhaseModel): WorkflowPhase
     const phaseNode = add({ id: workflowPhaseTreePath("phase", phaseId, []), kind: "phase", label, depth: 0, phaseId, operationPath: [], state: phase?.state ?? workflowPhaseTreeAggregateState(agents.map((agent) => agent.state)), ...(phase ? { phase } : {}) }, workflowNode.id);
     if (phase?.shellActivity) add({ id: workflowPhaseTreePath("shell", phaseId, []), kind: "shell", label: `shell [running] (${String(phase.shellActivity.active)} active)`, depth: 0, phaseId, operationPath: [], state: "running", phase, shellActivity: phase.shellActivity }, phaseNode.id);
     const operationNodes = new Map<string, Draft>();
-    const entries: AgentEntry[] = agents.map((agent) => ({ agent, path: [...(agent.structuralPath ?? [])], defaultParentId: phaseNode.id }));
+    const entries: AgentEntry[] = agents.map((agent) => {
+      const structuralPath = [...(agent.structuralPath ?? [])];
+      return { agent, structuralPath, operationPath: [...structuralPath, ...(agent.parentBreadcrumb ? [agent.parentBreadcrumb] : [])], defaultParentId: phaseNode.id };
+    });
     const agentEntries = new Map(entries.map((entry) => [entry.agent.id, entry]));
     const acceptedParents = new Map<string, string>();
     const wouldCycle = (childId: string, parentId: string): boolean => {
@@ -161,10 +164,10 @@ export function buildWorkflowPhaseTree(model: WorkflowPhaseModel): WorkflowPhase
       return parent;
     };
     for (const entry of entries) {
-      if (!acceptedParents.has(entry.agent.id)) entry.defaultParentId = operationChain(entry.path, phaseNode).id;
+      if (!acceptedParents.has(entry.agent.id)) entry.defaultParentId = operationChain(entry.operationPath, phaseNode).id;
     }
     for (const entry of entries) {
-      entry.node = add({ id: workflowPhaseTreePath("agent", phaseId, entry.path, entry.agent.id), kind: "agent", label: entry.agent.label ?? entry.agent.name, depth: 0, phaseId, operationPath: entry.path, state: entry.agent.state, agentId: entry.agent.id, agent: entry.agent }, phaseNode.id);
+      entry.node = add({ id: workflowPhaseTreePath("agent", phaseId, entry.structuralPath, entry.agent.id), kind: "agent", label: entry.agent.label ?? entry.agent.name, depth: 0, phaseId, operationPath: entry.structuralPath, state: entry.agent.state, agentId: entry.agent.id, agent: entry.agent }, phaseNode.id);
     }
     const attach = (node: Draft, parentId: string): void => {
       const previous = node.parentId ? drafts.get(node.parentId) : undefined;
@@ -180,11 +183,11 @@ export function buildWorkflowPhaseTree(model: WorkflowPhaseModel): WorkflowPhase
       const parent = parentId ? agentEntries.get(parentId) : undefined;
       const parentNode = parent?.node;
       if (parent && parentNode) {
-        if (samePath(entry.path, parent.path)) entry.defaultParentId = parentNode.id;
+        if (samePath(entry.operationPath, parent.operationPath)) entry.defaultParentId = parentNode.id;
         else {
-          const commonLength = entry.path.findIndex((part, index) => parent.path[index] !== part);
-          const startIndex = commonLength < 0 ? Math.min(entry.path.length, parent.path.length) : commonLength;
-          entry.defaultParentId = operationChain(entry.path, parentNode, startIndex).id;
+          const commonLength = entry.operationPath.findIndex((part, index) => parent.operationPath[index] !== part);
+          const startIndex = commonLength < 0 ? Math.min(entry.operationPath.length, parent.operationPath.length) : commonLength;
+          entry.defaultParentId = operationChain(entry.operationPath, parentNode, startIndex).id;
         }
       }
       attach(node, entry.defaultParentId);

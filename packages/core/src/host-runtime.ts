@@ -4,7 +4,7 @@ import { type PersistedRun, type RunStore, type WorktreeReference } from "./pers
 import { fail, deepFreeze, errorCode, jsonValue, object } from "./utils.js";
 import { validateAgentOptions, validateShellOptions, workflowPrompt } from "./validation.js";
 import { type WorkflowRegistryApi } from "./registry.js";
-import { ERROR_CODES, WORKFLOW_AGENT_STATE_CHANGED_EVENT, WORKFLOW_BUDGET_EVENT, WORKFLOW_CHECKPOINT_STATE_CHANGED_EVENT, WORKFLOW_PHASE_CHANGED_EVENT, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WORKFLOW_RUN_STATE_CHANGED_EVENT, WORKFLOW_WORKTREE_CREATED_EVENT, WorkflowError, type AgentOptions, type AgentRecord, type BudgetEvent, type JsonValue, type ModelSpec, type ParallelResult, type ParallelTasks, type RunState, type WorkflowBridge, type WorkflowCheckpointState, type WorkflowErrorCode, type WorkflowErrorShape, type WorkflowEventBase, type WorkflowExecution, type WorkflowFunctionContext, type WorkflowMetadata, type WorkflowRunContext, type WorkflowWorktreeCallback, type WorkflowWorktreeReference } from "./types.js";
+import { ERROR_CODES, WORKFLOW_AGENT_STATE_CHANGED_EVENT, WORKFLOW_BUDGET_EVENT, WORKFLOW_CHECKPOINT_STATE_CHANGED_EVENT, WORKFLOW_PHASE_CHANGED_EVENT, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WORKFLOW_RUN_STATE_CHANGED_EVENT, WORKFLOW_WORKTREE_CREATED_EVENT, WorkflowError, type AgentOptions, type AgentRecord, type BudgetEvent, type FunctionIdentity, type JsonValue, type ModelSpec, type ParallelResult, type ParallelTasks, type RunState, type WorkflowBridge, type WorkflowCheckpointState, type WorkflowErrorCode, type WorkflowErrorShape, type WorkflowEventBase, type WorkflowExecution, type WorkflowFunctionContext, type WorkflowMetadata, type WorkflowRunContext, type WorkflowWorktreeCallback, type WorkflowWorktreeReference } from "./types.js";
 import { structuralPath as operationPath } from "./persistence.js";
 
 const HARD_TERMINAL_RUN_STATES: ReadonlySet<string> = new Set(["completed", "failed", "stopped"]);
@@ -266,15 +266,20 @@ export function nextNamedOccurrence(counters: Map<string, number>, label: string
   return count === 1 ? label : `${label}#${String(count)}`;
 }
 
+function functionBreadcrumb(name: string, occurrence: number): string { return occurrence === 1 ? name : `${name} #${String(occurrence)}`; }
+
 export function withWorkflowFunctions(bridge: WorkflowBridge, store: RunStore, runContext: Readonly<WorkflowRunContext>, registry: WorkflowRegistryApi): WorkflowBridge {
   const functionAgentOccurrences = new Map<string, number>();
   const functionShellOccurrences = new Map<string, number>();
   const functionInvokeOccurrences = new Map<string, number>();
-  const invokeFunction = async (name: string, input: Readonly<Record<string, JsonValue>>, path: string, signal: AbortSignal, worktreeOwner?: string, structuralPath: readonly string[] = [], breadcrumb?: string): Promise<JsonValue> => {
+  const invokeFunction = async (name: string, input: Readonly<Record<string, JsonValue>>, signal: AbortSignal, identity: FunctionIdentity, breadcrumb?: string): Promise<JsonValue> => {
+    const path = identity.path;
+    const structuralPath = identity.structuralPath;
+    const worktreeOwner = identity.worktreeOwner;
     const replayed = await store.replay(path);
     let stored: JsonValue | undefined;
     const sideEffects: Promise<void>[] = [];
-    const functionBreadcrumb = breadcrumb ?? name;
+    const parentBreadcrumb = breadcrumb ?? functionBreadcrumb(name, identity.occurrence);
     const context: WorkflowFunctionContext = {
       run: runContext,
       invoke: async (targetName, targetInput) => {
@@ -284,7 +289,8 @@ export function withWorkflowFunctions(bridge: WorkflowBridge, store: RunStore, r
         const occurrence = (functionInvokeOccurrences.get(key) ?? 0) + 1;
         functionInvokeOccurrences.set(key, occurrence);
         const nestedPath = operationPath("function", "nested", path, ...inherited, targetName, `occurrence:${String(occurrence)}`);
-        return invokeFunction(targetName, targetInput, nestedPath, signal, scopedWorktreeOwner, inherited, `${functionBreadcrumb} > ${targetName}`);
+        const nestedIdentity: FunctionIdentity = { path: nestedPath, structuralPath: [...inherited], occurrence, ...(scopedWorktreeOwner ? { worktreeOwner: scopedWorktreeOwner } : {}) };
+        return invokeFunction(targetName, targetInput, signal, nestedIdentity, `${parentBreadcrumb} > ${functionBreadcrumb(targetName, occurrence)}`);
       },
       agent: async (prompt: string, options?: Readonly<AgentOptions>) => {
         if (!bridge.agent || typeof prompt !== "string") fail("AGENT_FAILED", "No agent bridge is available");
@@ -294,7 +300,7 @@ export function withWorkflowFunctions(bridge: WorkflowBridge, store: RunStore, r
         const key = `${path}\0${JSON.stringify(inherited)}`;
         const occurrence = (functionAgentOccurrences.get(key) ?? 0) + 1;
         functionAgentOccurrences.set(key, occurrence);
-        return bridge.agent(prompt, validatedOptions, signal, { structuralPath: [...inherited], callSite: `function:${path}`, occurrence, parentBreadcrumb: functionBreadcrumb, ...(scopedWorktreeOwner ? { worktreeOwner: scopedWorktreeOwner } : {}) });
+        return bridge.agent(prompt, validatedOptions, signal, { structuralPath: [...inherited], callSite: `function:${path}`, occurrence, parentBreadcrumb, ...(scopedWorktreeOwner ? { worktreeOwner: scopedWorktreeOwner } : {}) });
       },
       shell: async (...args: readonly unknown[]) => {
         if (!bridge.shell) fail("SHELL_FAILED", "No shell bridge is available");
@@ -323,5 +329,9 @@ export function withWorkflowFunctions(bridge: WorkflowBridge, store: RunStore, r
     if (!replayed) await store.complete(path, stored ?? result);
     return result;
   };
-  return { ...bridge, functions: registry.globals(), function: invokeFunction };
+  return { ...bridge, functions: registry.globals(), function: (name, input, signal, identity) => {
+    const expectedPath = operationPath("function", ...identity.structuralPath, name, String(identity.occurrence));
+    if (identity.path !== expectedPath) fail("INTERNAL_ERROR", "Workflow function identity path is inconsistent");
+    return invokeFunction(name, input, signal, identity);
+  }};
 }

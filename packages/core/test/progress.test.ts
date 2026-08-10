@@ -522,6 +522,17 @@ void test("workflow cards group structural scopes with stable creation order", (
   assert.ok(progress.indexOf("#3") < progress.indexOf("#2"));
   assert.match(progress, /#4 ◇ child/);
 });
+void test("workflow cards separate repeated function invocations", () => {
+  const run = makeRun({ workflowName: "repeated", agents: [
+    makeAgent({ id: "run:1", name: "developer", path: "run:1", state: "completed", parentBreadcrumb: "developUntilApproved" }),
+    makeAgent({ id: "run:2", name: "reviewer", path: "run:2", state: "running", parentBreadcrumb: "developUntilApproved #2" }),
+  ] });
+  const progress = formatWorkflowProgress(run);
+  const dashboard = formatNavigatorDashboard(run, [], []);
+  assert.match(progress, /developUntilApproved\n {4}#1/);
+  assert.match(progress, /developUntilApproved #2\n {4}#2/);
+  assert.match(dashboard, /developUntilApproved[\s\S]*developUntilApproved #2/);
+});
 void test("workflow progress keeps top-level agents separate from review-loop groups", () => {
   const run = makeRun({ workflowName: "mixed", agents: [
     makeAgent({ id: "run:1", name: "scout", path: "run:1", state: "completed", structuralPath: [] }),

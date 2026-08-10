@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { RunStore, structuralPath as operationPath } from "./persistence.js";
 import type { AgentAttempt } from "./agent-execution.js";
-import type { AgentIdentity, AgentAttemptSummary, JsonValue, ShellIdentity, ShellOptions, ShellResult, WorkflowAgentSessionReference, WorkflowBridge, WorkflowErrorCode, WorkflowExecution } from "./types.js";
+import type { AgentIdentity, AgentAttemptSummary, FunctionIdentity, JsonValue, ShellIdentity, ShellOptions, ShellResult, WorkflowAgentSessionReference, WorkflowBridge, WorkflowErrorCode, WorkflowExecution } from "./types.js";
 import { ERROR_CODES, WorkflowError, roleNameOf } from "./types.js";
 import { asWorkflowError, errorText, fail, isWorkflowAuthored, jsonValue, markWorkflowAuthored, object, positiveInteger } from "./utils.js";
 import { instrumentWorkflow, validateAgentOptions, validateShellCommand, validateShellOptions } from "./validation.js";
@@ -224,17 +224,18 @@ const checkpoint = input => rpc("checkpoint", [input]).then(unwrap);
 const phase = name => rpc("phase", [name]);
 const log = message => rpc("log", [message]);
 const functionOccurrences = new Map();
-const functionPath = name => {
-  const inherited = inheritedAgentPath.getStore() || [];
-  const key = JSON.stringify([inherited, name]);
+const functionIdentity = name => {
+  const structuralPath = inheritedAgentPath.getStore() || [];
+  const key = JSON.stringify([structuralPath, name]);
   const occurrence = (functionOccurrences.get(key) || 0) + 1;
   functionOccurrences.set(key, occurrence);
-  return path("function", ...inherited, name, String(occurrence));
+  const worktreeOwner = worktreeOwners.getStore();
+  return { path: path("function", ...structuralPath, name, String(occurrence)), structuralPath: [...structuralPath], occurrence, ...(worktreeOwner ? { worktreeOwner } : {}) };
 };
 const functions = Object.freeze(Object.fromEntries(Object.entries(config.functions || {}).map(([local, target]) => [local, (...values) => {
   if (values.length !== 1 || !values[0] || typeof values[0] !== "object" || Array.isArray(values[0])) throw workError("RESULT_INVALID", local + " requires exactly one JSON object argument");
-  const inherited = inheritedAgentPath.getStore() || [];
-  const result = rpc("function", [target.name, values[0], functionPath(target.name), worktreeOwners.getStore() || null, inherited]).then(unwrap);
+  const identity = functionIdentity(target.name);
+  const result = rpc("function", [target.name, values[0], identity]).then(unwrap);
   Object.defineProperty(result, "toJSON", { value() { throw workError("INVALID_METADATA", "Workflow function result is a Promise; await it before serialization"); } });
   return result;
 }])));
@@ -327,6 +328,15 @@ function readAgentIdentity(value: unknown): AgentIdentity {
   const parentBreadcrumb = value.parentBreadcrumb;
   if (!Array.isArray(structuralPath) || !structuralPath.every((part): part is string => typeof part === "string" && Boolean(part.trim())) || typeof callSite !== "string" || !callSite || !positiveInteger(occurrence) || parentBreadcrumb !== undefined && (typeof parentBreadcrumb !== "string" || !parentBreadcrumb.trim()) || worktreeOwner !== undefined && (typeof worktreeOwner !== "string" || !worktreeOwner)) fail("INTERNAL_ERROR", "Invalid workflow agent identity");
   return { structuralPath: [...structuralPath], callSite, occurrence, ...(typeof parentBreadcrumb === "string" ? { parentBreadcrumb } : {}), ...(typeof worktreeOwner === "string" ? { worktreeOwner } : {}) };
+}
+function readFunctionIdentity(value: unknown): FunctionIdentity {
+  if (!object(value)) fail("INTERNAL_ERROR", "Invalid workflow function identity");
+  const path = value.path;
+  const structuralPath = value.structuralPath;
+  const occurrence = value.occurrence;
+  const worktreeOwner = value.worktreeOwner;
+  if (typeof path !== "string" || !path || !Array.isArray(structuralPath) || !structuralPath.every((part): part is string => typeof part === "string" && Boolean(part.trim())) || !positiveInteger(occurrence) || worktreeOwner !== undefined && (typeof worktreeOwner !== "string" || !worktreeOwner)) fail("INTERNAL_ERROR", "Invalid workflow function identity");
+  return { path, structuralPath: [...structuralPath], occurrence, ...(typeof worktreeOwner === "string" ? { worktreeOwner } : {}) };
 }
 function readShellIdentity(value: unknown): ShellIdentity {
   const identity = readAgentIdentity(value);
@@ -519,13 +529,13 @@ export function runWorkflow(script: string, args: JsonValue = null, bridge: Work
           value = branded({ name, ok: false, failedAt: name, error: { code: typed.code, message: typed.message, ...(isWorkflowAuthored(typed) ? { authored: true } : {}) } });
         }
       } else if (method === "function") {
-        const worktreeOwner = values[3] === undefined || values[3] === null ? undefined : typeof values[3] === "string" && values[3] ? values[3] : fail("INTERNAL_ERROR", "function worktree scope is invalid");
-        const structuralPath = values[4] === undefined ? [] : values[4];
-        if (!Array.isArray(structuralPath) || !structuralPath.every((part): part is string => typeof part === "string" && Boolean(part.trim()))) fail("INTERNAL_ERROR", "function structural scope is invalid");
-        if (!bridge.function || typeof values[0] !== "string" || !object(values[1]) || typeof values[2] !== "string") fail("INTERNAL_ERROR", "function requires an available bridge, name, object input, and path");
+        if (!bridge.function || typeof values[0] !== "string" || !object(values[1])) fail("INTERNAL_ERROR", "function requires an available bridge, name, and object input");
+        const identity = readFunctionIdentity(values[2]);
         const name = values[0];
+        const expectedPath = operationPath("function", ...identity.structuralPath, name, String(identity.occurrence));
+        if (identity.path !== expectedPath) fail("INTERNAL_ERROR", "Workflow function identity path is inconsistent");
         try {
-          const result = await bridge.function(values[0], values[1], values[2], controller.signal, worktreeOwner, structuralPath);
+          const result = await bridge.function(values[0], values[1], controller.signal, identity);
           value = branded({ name, ok: true, value: result ?? null });
         } catch (error) {
           const typed = asWorkflowError(error);
@@ -586,5 +596,4 @@ export async function persistAgentAttempts(store: RunStore, id: string, attempts
     return { ...run, agents: run.agents.map((candidate) => candidate.id === id ? { ...candidate, attempts: attempts.length, attemptDetails, accounting: total } : candidate), agentSessions: [...run.agentSessions.filter(({ transport, sessionId }) => !sessionKeys.has(`${transport}:${sessionId}`)), ...sessions] };
   });
 }
-
-export type { AgentIdentity, ShellIdentity, WorkflowBridge, WorkflowExecution } from "./types.js";
+export type { AgentIdentity, FunctionIdentity, ShellIdentity, WorkflowBridge, WorkflowExecution } from "./types.js";

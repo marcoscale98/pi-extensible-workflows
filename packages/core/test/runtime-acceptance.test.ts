@@ -601,6 +601,21 @@ void test("worker rejects concurrent same-callsite agents but permits sequential
   const scoped = await runWorkflow(`const launch = () => agent("same"); return parallel("batch", { one: () => launch(), two: () => launch() });`, null, { agent: async (prompt) => prompt }).result;
   assert.deepEqual(scoped, { one: "same", two: "same" });
 });
+void test("registered function bridge carries explicit occurrences", async () => {
+  const identities: unknown[] = [];
+  await runWorkflow(`for (const value of ["one", "two", "three"]) await repeated({ value });`, null, {
+    functions: { repeated: { name: "repeated" } },
+    function: async (_name, _input, _signal, identity) => { identities.push(identity); return null; },
+  }).result;
+  assert.deepEqual(identities.map((value) => {
+    const identity = value as { path?: unknown; structuralPath?: unknown; occurrence?: unknown };
+    return { path: identity.path, structuralPath: identity.structuralPath, occurrence: identity.occurrence };
+  }), [
+    { path: "function/repeated/1", structuralPath: [], occurrence: 1 },
+    { path: "function/repeated/2", structuralPath: [], occurrence: 2 },
+    { path: "function/repeated/3", structuralPath: [], occurrence: 3 },
+  ]);
+});
 
 void test("terminal failed attempts remain persisted", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-attempts-"));
@@ -640,7 +655,8 @@ void test("registered extension agents persist structural scope for late sibling
   const issue66 = loaded.run.agents.filter((agent) => JSON.stringify(agent.structuralPath) === JSON.stringify(["issues", "issue-66"]));
   assert.equal(issue65.length, 2);
   assert.equal(issue66.length, 1);
-  assert.ok(loaded.run.agents.every((agent) => agent.parentBreadcrumb === "review"));
+  assert.deepEqual(issue65.map((agent) => agent.parentBreadcrumb).sort(), ["review", "review #2"]);
+  assert.deepEqual(issue66.map((agent) => agent.parentBreadcrumb), ["review"]);
   assert.ok(loaded.run.agents.every((agent) => !agent.worktreeOwner));
   const rendered = formatNavigatorDashboard(loaded.run, [], []);
   assert.match(rendered, /issues > issue-65 > review/);

@@ -273,6 +273,7 @@ void test("TUI navigator exposes agent-scoped worktree actions without transcrip
           component.handleInput?.("j");
           component.handleInput?.("j");
           component.handleInput?.("j");
+          component.handleInput?.("j");
           component.handleInput?.("tui.select.confirm");
           const withActions = component.render(80).join("\n");
           assert.match(withActions, /Agent actions/);

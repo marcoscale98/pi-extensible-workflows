@@ -235,6 +235,16 @@ void test("phase tree groups structural paths and preserves stable node selectio
   assert.match(rendered, /→.*ui/);
 });
 
+void test("phase tree exposes function breadcrumbs as presentation scopes", () => {
+  const first = { ...agent("first"), parentBreadcrumb: "reviewLoop" };
+  const second = { ...agent("second"), parentBreadcrumb: "reviewLoop #2" };
+  const current = run("running", [first, second], [{ phase: "review", afterAgent: 0 }]);
+  const tree = buildWorkflowPhaseTree(buildWorkflowPhaseModel(current, ["review"]));
+  const operations = tree.nodes.filter((node) => node.kind === "operation");
+  assert.deepEqual(operations.map(({ label }) => label), ["reviewLoop", "reviewLoop #2"]);
+  assert.deepEqual(current.agents.map(({ structuralPath }) => structuralPath), [undefined, undefined]);
+  assert.deepEqual(tree.nodes.filter((node) => node.kind === "agent").map(({ operationPath }) => operationPath), [[], []]);
+});
 void test("agent actions render inside the details column beside the tree", () => {
   const current = run("running", [{ ...agent("api", "completed"), structuralPath: ["reviewers", "api"] }], [{ phase: "review", afterAgent: 0 }]);
   const model = buildWorkflowPhaseModel(current, ["review"]);
