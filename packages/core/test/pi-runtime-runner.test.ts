@@ -163,6 +163,29 @@ void test("Pi runtime runner maps a neutral result schema to a Pi result tool", 
   const result = await runner.run(requestFor(controller.signal, { resultSchema: { type: "object", properties: { answer: { type: "number" } } } }));
   assert.deepEqual(result.value, { answer: 11 });
 });
+void test("Pi runtime runner ignores an empty provider error after accepting workflow_result", async () => {
+  let preparedWithResult: PreparedAgentSession | undefined;
+  let prompts = 0;
+  let aborts = 0;
+  let providerErrors = 0;
+  const providerAbort: WorkflowAgentMessage = { role: "assistant", content: [], stopReason: "error", errorMessage: "This operation was aborted" };
+  const session = sessionFor(async () => {
+    prompts += 1;
+    if (prompts > 1) return { assistant: { role: "assistant", content: [{ type: "text", text: "continued" }] } };
+    const tool = preparedWithResult?.resultTool;
+    if (!tool) throw new Error("result tool is missing");
+    await tool.execute("result", { answer: 7 }, undefined, undefined, testExtensionContext);
+    return { assistant: providerAbort };
+  }, { abort: async () => { aborts += 1; } });
+  const transport: AgentTransport = { id: "local", async createSession(prepared) { preparedWithResult = prepared; return session; } };
+  const { runner, controller } = runnerFor(session, undefined, transport);
+  const result = await runner.run(requestFor(controller.signal, {
+    resultSchema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"], additionalProperties: false },
+    onProviderError: async () => { providerErrors += 1; return "retry"; },
+  }));
+  assert.deepEqual(result.value, { answer: 7 });
+  assert.deepEqual({ prompts, aborts, providerErrors }, { prompts: 1, aborts: 1, providerErrors: 0 });
+});
 void test("Pi runtime runner leaves retry ownership with its caller", async () => {
   let sessions = 0;
   let prompts = 0;

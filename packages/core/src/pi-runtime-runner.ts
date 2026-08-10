@@ -314,6 +314,7 @@ export class PiRuntimeAgentRunner implements RuntimeAgentRunner {
       const recoverTerminal = async (): Promise<boolean> => {
         let continued = false;
         for (;;) {
+          if (hasResult()) return continued;
           const failure = providerFailure(session as WorkflowAgentSession, lastAssistant);
           if (!failure) return continued;
           if (!request.onProviderError) throw new RuntimeAgentProviderError(failure, undefined, false);
