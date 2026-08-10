@@ -1,25 +1,32 @@
 # `@piewf/subagents`
 
-Run Pi subagents as durable standalone jobs. Launch independent work in the background, wait for a foreground result, or inspect and control a run later by ID.
+Single-shot agents for Pi: each run launches one independent agent session from one task, without writing a workflow script. Single-shot describes the orchestration shape, not one model turn; the agent can use tools and accept steering while it runs.
+
+Use `@piewf/subagents` for focused, independent tasks. Use `pi-extensible-workflows` when work needs dependency batches, parallel or pipeline stages, checkpoints, approvals, or resumable orchestration.
+
+## Subagents vs workflows
+
+| `@piewf/subagents` | `pi-extensible-workflows` |
+| --- | --- |
+| One independently launched agent per run | A deterministic script orchestrating one or more agents |
+| One task with a durable ID and lifecycle controls | Multi-stage coordination, dependencies, approvals, replay, and resume |
+| Start in the background or wait in the foreground | Run a named workflow in the background or foreground |
 
 ## Highlights
 
 - Five focused tools: run, inspect, steer, stop, and retry.
 - Background fan-out with one durable ID per run, or foreground execution with an inline terminal result.
+- Reuses workflow roles, role overrides, model aliases, settings, and agent options: `label`, `model`, `thinking`, `tools`, `worktree`, `outputSchema`, `retries`, and `timeoutMs`.
 - Repeatable inspection of progress, usage, tool calls, results, failures, and worktrees.
-- Shared roles, model aliases, settings, concurrency limits, and worktree support from `pi-extensible-workflows`.
 - Optional `singleAgent` workflow function for inline composition without a standalone lifecycle.
 
 ## Install
 
-Install the core workflow package and the subagents extension:
-
 ```sh
-pi install npm:pi-extensible-workflows
 pi install npm:@piewf/subagents
 ```
 
-If the core package is already installed, only the second command is needed. Both packages are trusted Pi extensions with the same filesystem and process access as Pi.
+No separate `pi-extensible-workflows` installation is required for the standalone subagent tools. The package is trusted Pi host code with the same filesystem and process access as Pi.
 
 ## Quick start
 
@@ -94,9 +101,9 @@ Inspection is repeatable. Use the list form for ordered summaries and the ID for
 
 Set `worktree` on `subagents_run` to create a named isolated Git worktree for that run. The default adapter uses the core `RunStore`; the executor runs in the worktree and inspection exposes its path and branch while materialized. Cleanup runs when the agent settles, stops, or the manager reconciles an interrupted record. After successful cleanup, the public and persisted worktree path, branch, and cleanup context are removed; if cleanup fails, all of that metadata is retained for a later retry. A run ID keeps concurrent worktrees separate even when their names are the same.
 
-## Roles and settings
+## Agent options, roles, and settings
 
-The extension does not create a second settings or role system. It reuses `pi-extensible-workflows` settings, model aliases, disabled-resource policy, and role discovery:
+`subagents_run` accepts the same execution options as a workflow `agent(...)`: model, thinking level, tools, named roles or inline role overrides, worktrees, structured output, retries, and timeout. The extension also reuses workflow model aliases, settings, disabled-resource policy, and role discovery:
 
 - global roles: `<agentDir>/pi-extensible-workflows/roles/<name>.md`, normally `~/.pi/agent/pi-extensible-workflows/roles/`;
 - trusted project roles: `<cwd>/.pi/pi-extensible-workflows/roles/<name>.md`;
@@ -159,7 +166,7 @@ The v5.4 release removes the seven-tool surface's redundant `subagents_list`, `s
 | `subagents_stop({ id })` | unchanged |
 | `subagents_retry({ id })` | unchanged; the original launch mode is preserved |
 
-For the old `@tintinweb/pi-subagents` package, install this package alongside the core workflow extension instead:
+To migrate from the old `@tintinweb/pi-subagents` package, replace it directly:
 
 ```sh
 pi remove npm:@tintinweb/pi-subagents
