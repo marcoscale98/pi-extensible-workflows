@@ -17,6 +17,16 @@ pi install npm:pi-extensible-workflows
 ```
 
 For source installs and local development, see the [installation guide](https://vekexasia.github.io/pi-extensible-workflows/developers.html#installation).
+
+## Companion extensions
+
+The core workflow package works on its own. Install either companion package when you need its integration:
+
+| Package | Install | What it adds |
+| --- | --- | --- |
+| [`@piewf/subagents`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/extensions/subagents) | `pi install npm:@piewf/subagents` | Five durable `subagents_*` tools for background or foreground agents, inspection, steering, stopping, and retries, plus the optional `singleAgent` workflow function. |
+| [`@piewf/herdr`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/extensions/herdr) | `pi install npm:@piewf/herdr` | `/workflow` actions for opening live and completed agent sessions in Herdr panes, with an optional fully inspectable mode. |
+
 The repository is an npm-workspaces monorepo. The public package is maintained in `packages/core`; the private root keeps the existing `npm run build`, `npm run lint`, `npm test`, and `npm run check` commands working from the repository root. See [releasing](https://github.com/vekexasia/pi-extensible-workflows/blob/main/RELEASING.md) for the fixed-version policy.
 
 ## Capabilities

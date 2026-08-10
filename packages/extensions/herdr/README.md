@@ -1,6 +1,17 @@
-# Herdr workflow extension
+# `@piewf/herdr`
 
-This repo-local extension is enabled when Pi is running in a Herdr-managed pane. It adds `/workflow` agent actions for opening a live session or a completed agent session in a Herdr pane.
+Connect workflow agents to Herdr panes. When Pi runs in a Herdr-managed pane, this extension adds `/workflow` actions for opening a live agent session or revisiting a completed one in Herdr.
+
+## Install
+
+```sh
+pi install npm:pi-extensible-workflows
+pi install npm:@piewf/herdr
+```
+
+If the core package is already installed, only the second command is needed. The integration is active only inside a Herdr-managed pane.
+
+## Fully inspectable mode
 
 Set fully inspectable mode in the global workflow settings file (`~/.pi/agent/pi-extensible-workflows/settings.json`):
 

@@ -1,25 +1,44 @@
 # `@piewf/subagents`
 
-A Pi extension that exposes five durable, namespaced subagent tools. It can launch several independent background agents at once or wait for one standalone foreground run. It also registers one optional workflow-catalog function for inline composition.
+Run Pi subagents as durable standalone jobs. Launch independent work in the background, wait for a foreground result, or inspect and control a run later by ID.
 
-## Install and load
+## Highlights
+
+- Five focused tools: run, inspect, steer, stop, and retry.
+- Background fan-out with one durable ID per run, or foreground execution with an inline terminal result.
+- Repeatable inspection of progress, usage, tool calls, results, failures, and worktrees.
+- Shared roles, model aliases, settings, concurrency limits, and worktree support from `pi-extensible-workflows`.
+- Optional `singleAgent` workflow function for inline composition without a standalone lifecycle.
+
+## Install
+
+Install the core workflow package and the subagents extension:
 
 ```sh
+pi install npm:pi-extensible-workflows
 pi install npm:@piewf/subagents
 ```
 
-Pi discovers the package through its `pi.extensions` manifest. The compiled entry point is `dist/index.js`. The package is trusted host code and runs with the same filesystem and process access as Pi.
+If the core package is already installed, only the second command is needed. Both packages are trusted Pi extensions with the same filesystem and process access as Pi.
 
-The following host-integration sketch is pseudocode; Pi supplies `pi` and a host may supply the optional manager:
+## Quick start
 
-```ts
-import extension, { type SubagentManager } from "@piewf/subagents";
+Start work in the background and inspect it later:
 
-const manager: SubagentManager = /* host implementation, or omit this option */;
-extension(pi, { manager });
+```text
+subagents_run({ prompt: "Review the current changes.", label: "review" })
+# => { "id": "...", "state": "running" }
+
+subagents_inspect({ id: "..." })
+# => progress while running, then the terminal value or error
 ```
 
-The default export registers the five tools and the optional `singleAgent` workflow function. `createSubagentManager()` and `createSubagentTools()` are also exported for hosts that need explicit lifecycle or dependency injection. Standalone tools do not call or require the catalog function or any other extension.
+Use foreground mode when the result must return in the same tool call:
+
+```text
+subagents_run({ prompt: "Summarize README.md.", mode: "foreground" })
+# => { "id": "...", "state": "completed", "value": ... }
+```
 
 ## Tools
 
@@ -84,6 +103,19 @@ The extension does not create a second settings or role system. It reuses `pi-ex
 - global and trusted project settings: the normal workflow settings path under the agent directory and `<cwd>/.pi/pi-extensible-workflows/settings.json`.
 
 The current Pi model, thinking level, active tools, project trust, session ID, role definitions, aliases, and resource policy are captured from the extension context for each run. Internal workflow and subagent control tools are not exposed to the child agent.
+
+## Programmatic host integration
+
+Pi discovers the package through its `pi.extensions` manifest. The compiled entry point is `dist/index.js`. The following host-integration sketch is pseudocode; Pi supplies `pi` and a host may supply the optional manager:
+
+```ts
+import extension, { type SubagentManager } from "@piewf/subagents";
+
+const manager: SubagentManager = /* host implementation, or omit this option */;
+extension(pi, { manager });
+```
+
+The default export registers the five tools and the optional `singleAgent` workflow function. `createSubagentManager()` and `createSubagentTools()` are also exported for hosts that need explicit lifecycle or dependency injection. Standalone tools do not call or require the catalog function or any other extension.
 
 ## Workflow catalog integration
 
