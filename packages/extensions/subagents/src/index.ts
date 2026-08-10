@@ -2,8 +2,9 @@ import { defineTool, type AgentToolResult, type ExtensionAPI, type ExtensionCont
 import { Type } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
 import { loadingRegistry, registerWorkflowExtension, WorkflowError, type AgentOptions, type JsonSchema, type WorkflowExtension } from "pi-extensible-workflows";
-import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentSteerRequest } from "./contracts.js";
+import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentStatus, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
+import { createSubagentBackgroundWidget, renderSubagentCall, renderSubagentControlCall, renderSubagentControlResult, renderSubagentInspectCall, renderSubagentInspectResult, renderSubagentResult } from "./view.js";
 import {
   normalizeSingleAgentRequest,
   normalizeSubagentRunRequest,
@@ -122,6 +123,8 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.run(validateSubagentRunRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
       },
+      renderCall(args) { return renderSubagentCall(args); },
+      renderResult(result, options, theme, context) { return renderSubagentResult(result, options, theme, context); },
     }),
     defineTool({
       name: "subagents_inspect",
@@ -131,6 +134,8 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.inspect(validateSubagentInspectRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
       },
+      renderCall(args, theme) { return renderSubagentInspectCall(args, theme); },
+      renderResult(result, options, theme, context) { return renderSubagentInspectResult(result, options, theme, context.args); },
     }),
     defineTool({
       name: "subagents_steer",
@@ -140,6 +145,8 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.steer(validateSubagentSteerRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
       },
+      renderCall(args, theme) { return renderSubagentControlCall("subagents_steer", args, theme); },
+      renderResult(result, _options, theme) { return renderSubagentControlResult(result, theme); },
     }),
     defineTool({
       name: "subagents_stop",
@@ -149,6 +156,8 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.stop(validateSubagentIdRequest(params, "subagents_stop"), managerContext(toolCallId, signal, onUpdate, context)));
       },
+      renderCall(args, theme) { return renderSubagentControlCall("subagents_stop", args, theme); },
+      renderResult(result, _options, theme) { return renderSubagentControlResult(result, theme); },
     }),
     defineTool({
       name: "subagents_retry",
@@ -158,6 +167,8 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.retry(validateSubagentIdRequest(params, "subagents_retry"), managerContext(toolCallId, signal, onUpdate, context)));
       },
+      renderCall(args, theme) { return renderSubagentControlCall("subagents_retry", args, theme); },
+      renderResult(result, options, theme, context) { return renderSubagentResult(result, options, theme, context); },
     }),
   ];
 }
@@ -166,18 +177,19 @@ function notificationContent(notification: { id: string; state: "completed" | "f
   if (notification.state === "completed") return `Subagent ${notification.id} completed. Inspect it with subagents_inspect({ id: "${notification.id}" }).`;
   return `Subagent ${notification.id} failed: ${notification.error?.message ?? "unknown error"}. Inspect it with subagents_inspect({ id: "${notification.id}" }).`;
 }
-function managerDependencies(options: SubagentsExtensionOptions, activeTools: (() => readonly string[]) | undefined, notify: ((notification: SubagentNotification) => void | Promise<void>) | undefined): SubagentsExtensionOptions["managerDependencies"] {
+function managerDependencies(options: SubagentsExtensionOptions, activeTools: (() => readonly string[]) | undefined, notify: ((notification: SubagentNotification) => void | Promise<void>) | undefined, onStatus: ((status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>) => void) | undefined): SubagentsExtensionOptions["managerDependencies"] {
   const dependencies = options.managerDependencies;
   const next = {
     ...(dependencies ?? {}),
     ...(activeTools !== undefined && dependencies?.getActiveTools === undefined ? { getActiveTools: activeTools } : {}),
     ...(notify !== undefined && dependencies?.notify === undefined ? { notify } : {}),
+    ...(onStatus !== undefined && dependencies?.onStatus === undefined ? { onStatus } : {}),
   };
   return Object.keys(next).length === 0 ? dependencies : next;
 }
 
-export function createSubagentsExtension(options: SubagentsExtensionOptions = {}, activeTools?: () => readonly string[], notify?: (notification: SubagentNotification) => void | Promise<void>): SubagentsExtension {
-  const manager = options.manager ?? createSubagentManager(managerDependencies(options, activeTools, notify));
+export function createSubagentsExtension(options: SubagentsExtensionOptions = {}, activeTools?: () => readonly string[], notify?: (notification: SubagentNotification) => void | Promise<void>, onStatus?: (status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>) => void): SubagentsExtension {
+  const manager = options.manager ?? createSubagentManager(managerDependencies(options, activeTools, notify, onStatus));
   return { manager, tools: createSubagentTools(manager) };
 }
 
@@ -193,9 +205,16 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
   const notify = sendMessage === undefined ? undefined : (notification: SubagentNotification): void => {
     sendMessage.call(pi, { customType: "subagents", content: notificationContent(notification), display: true, details: notification }, { deliverAs: "followUp", triggerTurn: true });
   };
-  const extension = createSubagentsExtension(options, activeTools, notify);
+  const widget = createSubagentBackgroundWidget();
+  const extension = createSubagentsExtension(options, activeTools, notify, (status, request) => { widget.update(status, request); });
   for (const tool of extension.tools) pi.registerTool(tool);
-  if (pi.on !== undefined) pi.on("session_shutdown", async () => { await extension.manager.dispose?.(); });
+  if (pi.on !== undefined) {
+    pi.on("session_start", (_event, context) => { widget.start(context); });
+    pi.on("session_shutdown", async () => {
+      widget.dispose();
+      await extension.manager.dispose?.();
+    });
+  }
   return extension;
 }
 

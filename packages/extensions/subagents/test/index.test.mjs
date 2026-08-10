@@ -53,6 +53,134 @@ test("registers five namespaced subagent tools and delegates to an injected mana
   assert.deepEqual(calls[0], ["run", { prompt: "inspect", mode: "background" }]);
 });
 
+test("renders subagent calls and background or foreground progress consistently", () => {
+  const manager = { async run() {}, async inspect() {}, async steer() {}, async stop() {}, async retry() {} };
+  const tools = createSubagentTools(manager);
+  const run = tools.find(({ name }) => name === "subagents_run");
+  assert.ok(run?.renderCall && run.renderResult);
+  assert.ok(tools.every(({ renderCall, renderResult }) => renderCall && renderResult));
+  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const args = { prompt: "Check docs drift", label: "scout", mode: "foreground" };
+  assert.equal(run.renderCall(args, theme, {}).render(80).join("\n"), "subagent scout\nCheck docs drift");
+  assert.equal(run.renderCall({ prompt: "partial", role: null }, theme, {}).render(80).join("\n"), "subagent subagent\npartial");
+
+  const backgroundState = {};
+  const background = run.renderResult(
+    { content: [{ type: "text", text: '{"id":"background","state":"running"}' }], details: { id: "background", state: "running" } },
+    { expanded: false, isPartial: false },
+    theme,
+    { args: { ...args, mode: "background" }, state: backgroundState, invalidate() {} },
+  ).render(80).join("\n");
+  assert.match(background, /Subagent: scout.*\[running\]/);
+  assert.equal(backgroundState.subagentSpinner, undefined);
+
+  const foregroundState = {};
+  const context = { args, state: foregroundState, invalidate() {} };
+  const partial = run.renderResult(
+    { content: [], details: { id: "foreground", state: "running", startedAt: Date.now() - 1000, activity: { kind: "reasoning", text: "thinking" }, accounting: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.25 } } },
+    { expanded: false, isPartial: true },
+    theme,
+    context,
+  ).render(80).join("\n");
+  assert.match(partial, /Subagent: scout.*\[running\].*runtime=1s/);
+  assert.match(partial, /reasoning/);
+  assert.ok(foregroundState.subagentSpinner);
+
+  const completed = run.renderResult(
+    { content: [{ type: "text", text: '{"id":"foreground","state":"completed","value":"done"}' }], details: { id: "foreground", state: "completed", value: "done" } },
+    { expanded: true, isPartial: false },
+    theme,
+    context,
+  ).render(80).join("\n");
+  assert.match(completed, /Subagent: scout.*\[completed\]/);
+  assert.match(completed, /id=foreground/);
+  assert.match(completed, /tokens=14 cost=\$0\.25/);
+  assert.equal(foregroundState.subagentSpinner, undefined);
+
+  const retry = tools.find(({ name }) => name === "subagents_retry");
+  assert.ok(retry?.renderResult);
+  const retryState = {};
+  const retryContext = { args: { id: "source-subagent-id" }, state: retryState, invalidate() {} };
+  const retryPartial = retry.renderResult(
+    { content: [], details: { id: "retried", state: "running", activity: { kind: "tool", text: "read" } } },
+    { expanded: false, isPartial: true },
+    theme,
+    retryContext,
+  ).render(80).join("\n");
+  assert.match(retryPartial, /Subagent: retried.*\[running\]/);
+  assert.match(retryPartial, /read/);
+  assert.ok(retryState.subagentSpinner);
+  retry.renderResult(
+    { content: [{ type: "text", text: '{"id":"retried","state":"completed","value":"done"}' }], details: { id: "retried", state: "completed", value: "done" } },
+    { expanded: false, isPartial: false },
+    theme,
+    retryContext,
+  );
+  assert.equal(retryState.subagentSpinner, undefined);
+});
+
+test("pins live background subagents below the editor until they settle", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-widget-"));
+  const pending = deferred();
+  const started = deferred();
+  let executionOptions;
+  const tools = [];
+  const handlers = new Map();
+  const widgetCalls = [];
+  let widgetComponent;
+  let renders = 0;
+  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const pi = {
+    registerTool(tool) { tools.push(tool); },
+    on(name, handler) { handlers.set(name, handler); },
+  };
+  registerSubagentsExtension(pi, {
+    managerDependencies: {
+      storageDir: join(cwd, "subagents-storage"),
+      createExecutor() {
+        return {
+          async execute(_prompt, options) {
+            executionOptions = options;
+            started.resolve();
+            return pending.promise;
+          },
+        };
+      },
+    },
+  });
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      setWidget(key, value, options) {
+        widgetCalls.push({ key, value, options });
+        widgetComponent = typeof value === "function" ? value({ requestRender() { renders += 1; } }, theme) : undefined;
+      },
+    },
+  };
+
+  try {
+    handlers.get("session_start")({}, context);
+    const run = tools.find(({ name }) => name === "subagents_run");
+    const launch = await run.execute("widget-call", { prompt: "watch", label: "scout", mode: "background" }, undefined, undefined, context);
+    await started.promise;
+    assert.equal(launch.details.state, "running");
+    assert.deepEqual(widgetCalls[0].options, { placement: "belowEditor" });
+    assert.match(widgetComponent.render(80).join("\n"), /Subagents \(1 running\).*Subagent: scout.*\[running\]/s);
+
+    await executionOptions.onProgress({ accounting: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: "read" }, lastEventAt: Date.now(), persist: false });
+    assert.match(widgetComponent.render(80).join("\n"), /read/);
+    assert.ok(renders > 0);
+
+    pending.resolve({ value: "done", attempts: [], cwd });
+    await waitFor(() => widgetCalls.at(-1)?.value === undefined);
+  } finally {
+    await handlers.get("session_shutdown")({}, context);
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("exposes closed tool schemas and minimal prompt guidance", () => {
   assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "mode", "label", "model", "thinking", "tools", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
   assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.required, ["prompt"]);
@@ -297,6 +425,7 @@ test("returns foreground terminal envelopes, preserves mode for retry, and suppr
   const cwd = await mkdtemp(join(tmpdir(), "subagents-foreground-terminal-"));
   const storageDir = join(cwd, "subagents-storage");
   const notifications = [];
+  const updates = [];
   let failed = false;
   const manager = createSubagentManager({
     storageDir,
@@ -314,6 +443,7 @@ test("returns foreground terminal envelopes, preserves mode for retry, and suppr
     },
   });
   const context = await managerContext(cwd);
+  context.onUpdate = (status) => { updates.push(status); };
   try {
     const success = await manager.run({ prompt: "success", mode: "foreground" }, context);
     assert.equal(success.state, "completed");
@@ -329,6 +459,9 @@ test("returns foreground terminal envelopes, preserves mode for retry, and suppr
     assert.deepEqual(retry.value, { prompt: "failure" });
     assert.notEqual(retry.id, failure.id);
     assert.deepEqual(JSON.parse(await readFile(join(storageDir, retry.id, "request.json"), "utf8")), { prompt: "failure", mode: "foreground" });
+    assert.deepEqual(updates.filter(({ id }) => id === success.id).map(({ state }) => state), ["running", "completed"]);
+    assert.deepEqual(updates.filter(({ id }) => id === failure.id).map(({ state }) => state), ["running", "failed"]);
+    assert.deepEqual(updates.filter(({ id }) => id === retry.id).map(({ state }) => state), ["running", "completed"]);
     assert.deepEqual(notifications, []);
     await assert.rejects(manager.inspect({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }, context), (error) => error?.code === "RUN_NOT_FOUND");
   } finally {

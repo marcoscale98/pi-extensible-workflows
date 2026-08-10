@@ -90,6 +90,8 @@ type LiveRun = {
   readonly promise: Promise<AgentExecutionResult>;
   readonly terminal: Promise<ForegroundResult>;
   readonly resolveTerminal: (result: ForegroundResult) => void;
+  readonly update: ((status: SubagentStatus) => void) | undefined;
+  readonly observe: ((status: SubagentStatus) => void) | undefined;
   state: SubagentState;
   finishedAt?: number;
   error: SubagentFailure | undefined;
@@ -543,6 +545,11 @@ function publicStatus(status: SubagentStatus): SubagentStatus {
     ...(status.lastEventAt === undefined ? {} : { lastEventAt: status.lastEventAt }),
   };
 }
+function emitUpdate(run: LiveRun): void {
+  const status = publicStatus(persistedStatus(run));
+  try { run.update?.(status); } catch { /* Rendering must not affect execution. */ }
+  try { run.observe?.(status); } catch { /* A widget failure is display-only. */ }
+}
 
 async function createRunStorage(root: string, id: string, request: Readonly<SubagentRunRequest>, status: PersistedSubagentStatus): Promise<string> {
   await secureDirectory(root);
@@ -766,7 +773,9 @@ class PersistentSubagentManager implements SubagentManager {
   }
   async run(request: Readonly<SubagentRunRequest>, context: Readonly<SubagentManagerContext>): Promise<unknown> {
     const run = await this.start(checkedRequest(request), context);
-    return run.request.mode === "foreground" ? run.terminal : { id: run.id, state: "running" };
+    emitUpdate(run);
+    if (run.request.mode !== "foreground") return { id: run.id, state: "running" };
+    return run.terminal;
   }
 
   private async start(snapshot: SubagentRunRequest, context: Readonly<SubagentManagerContext>): Promise<LiveRun> {
@@ -839,7 +848,8 @@ class PersistentSubagentManager implements SubagentManager {
       if (injectedExecutor) return injectedExecutor.execute(snapshot.prompt, options, controller.signal, setSteer);
       return new WorkflowAgentExecutor(root, transport).execute(snapshot.prompt, options, controller.signal, [], setSteer);
     });
-    const run: LiveRun = { id, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, terminal, resolveTerminal, state: "running", error: undefined, value: undefined, cancelled: false, session: undefined, progress: undefined, accounting: undefined, usage: undefined, activity: undefined, toolCalls: undefined, lastEventAt: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, sessionAbort: undefined, sessionDispose: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, terminalResolved: false, writes: Promise.resolve() };
+    const onStatus = this.dependencies.onStatus;
+    const run: LiveRun = { id, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, terminal, resolveTerminal, update: snapshot.mode === "foreground" ? context.onUpdate : undefined, observe: onStatus === undefined ? undefined : (status) => { onStatus(status, snapshot); }, state: "running", error: undefined, value: undefined, cancelled: false, session: undefined, progress: undefined, accounting: undefined, usage: undefined, activity: undefined, toolCalls: undefined, lastEventAt: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, sessionAbort: undefined, sessionDispose: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, terminalResolved: false, writes: Promise.resolve() };
     current.run = run;
     this.activeRuns.set(id, run);
     const externalSignal = context.signal;
@@ -939,7 +949,9 @@ class PersistentSubagentManager implements SubagentManager {
     const status = active ? persistedStatus(active) : this.terminalSummaries.get(id) ?? await loadPersistedStatus(storageDirectory(this.dependencies), id);
     if (status.state !== "failed" && status.state !== "stopped") throw new WorkflowError("AGENT_FAILED", `Subagent ${id} is not retryable`);
     const run = await this.start(await loadPersistedRequest(storageDirectory(this.dependencies), id), context);
-    return run.request.mode === "foreground" ? run.terminal : { id: run.id, state: "running" };
+    emitUpdate(run);
+    if (run.request.mode !== "foreground") return { id: run.id, state: "running" };
+    return run.terminal;
   }
 
   private releaseConcurrency(run: LiveRun): void {
@@ -1025,6 +1037,7 @@ class PersistentSubagentManager implements SubagentManager {
     run.activity = progress.activity === undefined ? undefined : structuredClone(progress.activity);
     run.toolCalls = structuredClone(progress.toolCalls);
     run.lastEventAt = progress.lastEventAt;
+    emitUpdate(run);
     if (!progress.persist) return;
     await enqueueWrite(run, () => atomicJson(statusPath(run.directory), persistedStatus(run)));
   }
@@ -1066,6 +1079,7 @@ class PersistentSubagentManager implements SubagentManager {
           statusError ??= error;
         }
       }
+      emitUpdate(run);
       this.resolveTerminal(run);
       if (disposeSession) {
         run.disposed = true;
@@ -1217,6 +1231,7 @@ class PersistentSubagentManager implements SubagentManager {
     } catch {
       // The terminal state remains available in memory when storage becomes unavailable.
     }
+    emitUpdate(run);
     this.resolveTerminal(run);
     this.removeLiveRun(run);
     if (run.state === "completed" || run.state === "failed") this.notify(run);
