@@ -32,7 +32,7 @@
     "dist"
   ],
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.82.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
     "@types/node": "24.12.4",
     "typescript": "5.9.3"
   }
