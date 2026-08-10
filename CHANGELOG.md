@@ -33,7 +33,6 @@
 ### Packaging and migration
 
 - Added first-class npm discovery, package release checks, publish ordering, shared-version validation, and documentation for `@piewf/subagents`.
-- Documented migration from `@tintinweb/pi-subagents`, including the unsupported cross-session native-session restoration path.
 - Added `@earendil-works/pi-tui` as a peer dependency of the core and CLI packages for the built-in widget; install it alongside these packages.
 
 ## [5.2.0] - 2026-08-06

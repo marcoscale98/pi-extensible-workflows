@@ -166,21 +166,4 @@ The v5.4 release removes the seven-tool surface's redundant `subagents_list`, `s
 | `subagents_stop({ id })` | unchanged |
 | `subagents_retry({ id })` | unchanged; the original launch mode is preserved |
 
-To migrate from the old `@tintinweb/pi-subagents` package, replace it directly:
-
-```sh
-pi remove npm:@tintinweb/pi-subagents
-pi install npm:@piewf/subagents
-```
-
-| Old API or feature | `@piewf/subagents` equivalent |
-| --- | --- |
-| `Agent({ prompt, description, subagent_type, run_in_background: true })` | `subagents_run({ prompt, label, role })`; runs are background by default, or use `mode: "foreground"` for an inline terminal envelope |
-| `get_subagent_result({ agent_id })` | `subagents_inspect({ id })` |
-| `steer_subagent({ agent_id, message })` | `subagents_steer({ id, message })` |
-| UI or abort-based stopping | `subagents_stop({ id })` |
-| `resume` or native session continuation | Not supported across sessions; use `subagents_retry({ id })` for a fresh run with a new ID |
-| `.pi/agents` custom agent types | Workflow role files under `pi-extensible-workflows/roles/`, or per-call `role` and role overrides |
-| old subagent settings, FleetView, schedules, memory, event-bus RPC, and output transcripts | Not part of this extension's API. Use core workflow settings, core lifecycle APIs, or a separate extension where applicable. |
-
 The standalone manager deliberately keeps durable run IDs, repeatable inspection, bounded steering, named worktree cleanup, and workflow role/settings reuse. The optional `singleAgent` function is separate inline composition: it returns a value directly and does not require or create a standalone background or foreground lifecycle.
