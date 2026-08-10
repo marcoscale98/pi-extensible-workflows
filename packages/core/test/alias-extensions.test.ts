@@ -302,6 +302,43 @@ void test("host composes occurrence-aware nested function breadcrumbs", async ()
   await wrapped.function("outer", {}, controller.signal, { path: "function/outer/2", structuralPath: [], occurrence: 2 });
   assert.deepEqual(breadcrumbs, ["outer > inner", "outer > inner #2", "outer #2 > inner", "outer #2 > inner #2"]);
 });
+void test("registered function resume keeps occurrence breadcrumbs deterministic", async () => {
+  const registry = new WorkflowRegistry();
+  let interrupt = true;
+  registry.register({ version: "1.0.0", headline: "Resume occurrence labels", functions: {
+    review: { description: "Review", input: { type: "object", additionalProperties: false }, output: { type: "string" }, async run(_input, context) {
+      const result = await context.agent("developer");
+      if (interrupt) { interrupt = false; throw new WorkflowError("AGENT_FAILED", "interrupt"); }
+      return result;
+    } },
+  } });
+  const journal = new Map<string, JsonValue>();
+  const completedAgents = new Map<string, JsonValue>();
+  const store = {
+    replay: async (path: string) => { const value = journal.get(path); return value === undefined ? undefined : { path, value }; },
+    complete: async (path: string, value: JsonValue) => { journal.set(path, value); },
+  } as unknown as RunStore;
+  const createdBreadcrumbs: string[] = [];
+  const bridge = { agent: async (_prompt: string, _options: Readonly<Record<string, JsonValue>>, _signal: AbortSignal, identity: import("../src/types.js").AgentIdentity) => {
+    const key = JSON.stringify([identity.structuralPath, identity.callSite, identity.occurrence]);
+    const replayed = completedAgents.get(key);
+    if (replayed !== undefined) return replayed;
+    completedAgents.set(key, "done");
+    createdBreadcrumbs.push(identity.parentBreadcrumb ?? "");
+    return "done";
+  } };
+  const controller = new AbortController();
+  const run = workflowRunContext("/repo", "session", "run", { name: "resume" }, null, controller.signal);
+  const first = withWorkflowFunctions(bridge, store, run, registry);
+  if (!first.function) throw new Error("Missing function bridge");
+  const identity = { path: "function/review/1", structuralPath: [], occurrence: 1 } as const;
+  await assert.rejects(first.function("review", {}, controller.signal, identity), (error: unknown) => error instanceof WorkflowError && error.code === "AGENT_FAILED");
+  const resumed = withWorkflowFunctions(bridge, store, run, registry);
+  if (!resumed.function) throw new Error("Missing function bridge");
+  await resumed.function("review", {}, controller.signal, identity);
+  await resumed.function("review", {}, controller.signal, { path: "function/review/2", structuralPath: [], occurrence: 2 });
+  assert.deepEqual(createdBreadcrumbs, ["review", "review #2"]);
+});
 void test("freezes registries and produces a deterministic flat catalog", () => {
   const registry = new WorkflowRegistry();
   const second = new WorkflowRegistry();
