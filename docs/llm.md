@@ -1,20 +1,35 @@
 # pi-extensible-workflows
 
-> Trusted Pi extension for configuring agent roles and registering reusable workflow capabilities.
+> Trusted Pi packages for deterministic workflows, standalone subagents, Herdr integration, reusable roles, and extension capabilities.
 
-This file is the compact authoring and configuration reference for an LLM working with `pi-extensible-workflows`. It is intentionally not a workflow-language guide. Do not invent workflow scripts, orchestration patterns, or recovery procedures from this file. For workflow authoring, use the bundled skill at `packages/core/skills/pi-extensible-workflows/SKILL.md`.
+This file is the compact package-selection, configuration, extension-authoring, and role-authoring reference for an LLM. It is intentionally not a workflow-language guide. Do not invent workflow scripts, orchestration patterns, or recovery procedures from this file. For workflow authoring, use the bundled skill at `packages/core/skills/pi-extensible-workflows/SKILL.md`.
 ## Install and trust
 
 Requirements:
 
 - Node.js 22.19 or newer.
-- A trusted Pi installation and trusted project. The package is trusted code with the same filesystem and process access as Pi.
+- A trusted Pi installation and trusted project. These packages are trusted code with the same filesystem and process access as Pi.
 
-Install the published extension:
+Install the core workflow extension for deterministic orchestration:
 
 ```sh
 pi install npm:pi-extensible-workflows
 ```
+
+Install companion packages only for the capability you need:
+
+```sh
+pi install npm:@piewf/subagents
+pi install npm:@piewf/herdr
+pi install npm:@piewf/cli
+```
+
+| Package | Select it when |
+| --- | --- |
+| `pi-extensible-workflows` | The task needs a deterministic script, multiple agents or stages, approvals, budgets, worktrees, replay, or resume. |
+| `@piewf/subagents` | The task needs one independent agent run with a durable ID and lifecycle controls, without a workflow script. It works standalone. |
+| `@piewf/herdr` | Core workflow agents need live handoff, completed-session inspection, or fully inspectable execution in Herdr. Core must also be loaded. |
+| `@piewf/cli` | A terminal needs doctor, inspection, headless registered-function execution, export, or bundle commands. |
 
 For local development:
 
@@ -76,7 +91,7 @@ Supported settings shape:
 }
 ```
 
-The supported top-level settings are exactly `concurrency`, `backgroundWidget`, `modelAliases`, `disabledAgentResources`, and `extensions`. `backgroundWidget` is accepted only in the global settings file and disables the live background workflow widget and durable background receipts when false. The currently supported extension settings are exactly `extensions.herdr.enableFullyInspectableMode` as a boolean. Adding a new settings namespace requires a core validation and type change; do not silently add arbitrary keys.
+The supported top-level settings are exactly `concurrency`, `backgroundWidget`, `modelAliases`, `disabledAgentResources`, and `extensions`. `backgroundWidget` is accepted only in the global settings file and disables the live background workflow widget and durable background receipts when false. The currently supported extension setting is exactly `extensions.herdr.enableFullyInspectableMode` as a boolean; Herdr reads it from global settings only. Adding a new settings namespace requires a core validation and type change; do not silently add arbitrary keys.
 
 ### Concurrency
 
@@ -103,6 +118,37 @@ Dynamic model aliases are resolved once per launch or resume, then captured for 
 ### Resource exclusions
 
 `disabledAgentResources.skills` contains skill-name minimatch selectors. `disabledAgentResources.extensions` contains normalized extension-path selectors. Selectors are evaluated in declaration order; the last match wins, and a leading `!` re-enables a match. `~` expands to the home directory. These exclusions affect workflow agents, not the parent Pi session.
+
+## Standalone Subagents
+
+Use `@piewf/subagents` for one independently launched agent session per task. Single-shot means one agent run rather than a workflow graph; the agent may use tools, take multiple turns, and accept steering.
+
+The model-facing surface is exactly:
+
+| Tool | Contract |
+| --- | --- |
+| `subagents_run` | Start one run. `prompt` is required; `mode` defaults to `background` and may be `foreground`. |
+| `subagents_inspect` | Omit `id` for summaries or provide it for detailed progress and terminal output. |
+| `subagents_steer` | Send one message to a running ID. |
+| `subagents_stop` | Stop one run and clean its worktree. |
+| `subagents_retry` | Start a fresh run from a failed or stopped request, with a new ID and the original mode. |
+
+`subagents_run` accepts the same `label`, `model`, `thinking`, `tools`, `role`, `worktree`, `outputSchema`, `retries`, and `timeoutMs` options as workflow agents. It discovers the same settings, aliases, and role files. Do not combine `role` with top-level `model`, `thinking`, or `tools`; put those overrides inside the role object.
+
+Background calls return an ID immediately. Foreground calls return a terminal envelope and do not produce a background completion follow-up. Do not poll a running ID; call `subagents_inspect({ id })` only when current state or output is needed. Cross-session retry starts fresh and does not restore the old native conversation.
+
+The optional `singleAgent` registered function is workflow composition, not the standalone lifecycle: it returns a bare value and has no `mode`, standalone ID, follow-up, or restoration point. See the [Subagents guide](subagents.html) for the full contract.
+
+## Herdr integration
+
+`@piewf/herdr` requires the core workflow extension and a Herdr-managed pane. It registers workflow attempt actions and a transport setup hook, not model-facing tools.
+
+- The live action hands a transferable running session to Herdr and later returns ownership to the local SDK.
+- The completed action opens a persisted completed, failed, or cancelled attempt for inspection.
+- Global `extensions.herdr.enableFullyInspectableMode: true` launches every workflow agent in a dedicated Herdr workspace and hides manual live handoff.
+- `PI_CODING_AGENT_DIR` controls where Herdr reads workflow settings.
+
+See the [Herdr guide](herdr.html) for handoff ownership, interruption behavior, and limitations.
 
 ## Create an extension
 

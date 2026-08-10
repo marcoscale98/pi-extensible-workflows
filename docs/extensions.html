@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Extension authoring documentation for pi-extensible-workflows.">
-  <title>Extension authoring | pi-extensible-workflows</title>
+  <meta name="description" content="Shipped companion extensions and extension authoring documentation for pi-extensible-workflows.">
+  <title>Extensions | pi-extensible-workflows</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,6 +15,8 @@
         <a href="developers.html">Developers</a>
         <a href="roles.html">Roles</a>
         <a class="active" href="extensions.html">Extensions</a>
+        <a href="subagents.html">Subagents</a>
+        <a href="herdr.html">Herdr</a>
         <a href="https://github.com/vekexasia/pi-extensible-workflows">Repository</a>
       </nav>
     </div>
@@ -22,7 +24,8 @@
   <main class="container docs-layout">
     <aside class="toc" aria-label="On this page">
       <p class="toc-title">Extensions</p>
-      <a href="#start-here">Start here</a>
+      <a href="#shipped">Shipped extensions</a>
+      <a href="#start-here">Authoring start</a>
       <a href="#registration">Registration contract</a>
       <a href="#functions">Registered functions</a>
       <a href="#hooks">Agent setup hooks</a>
@@ -33,9 +36,20 @@
       <a href="#best-practices">Best practices</a>
     </aside>
     <article class="prose">
-      <p class="eyebrow">Extension author path</p>
-      <h1>Build trusted workflow extensions</h1>
-      <p class="lead">Use this page to register reusable workflow functions, dynamic model aliases, and trusted per-agent setup hooks. It is the canonical authoring reference for the shipped extension API.</p>
+      <p class="eyebrow">Extension paths</p>
+      <h1>Use and build trusted workflow extensions</h1>
+      <p class="lead">Install the shipped Subagents and Herdr integrations, or author reusable workflow functions, dynamic model aliases, setup hooks, attempt actions, and packaged roles.</p>
+      <section id="shipped">
+        <h2>Shipped companion extensions</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Package</th><th>Use</th><th>Install</th></tr></thead>
+          <tbody>
+            <tr><td><a href="subagents.html"><code>@piewf/subagents</code></a></td><td>Standalone single-shot agents with five durable lifecycle tools and the same roles and options as workflows.</td><td><code>pi install npm:@piewf/subagents</code></td></tr>
+            <tr><td><a href="herdr.html"><code>@piewf/herdr</code></a></td><td>Live handoff, completed-session inspection, and fully inspectable workflow agents in Herdr.</td><td><code>pi install npm:@piewf/herdr</code></td></tr>
+          </tbody>
+        </table></div>
+        <p>Subagents works as a standalone Pi extension. Herdr complements the core workflow extension and activates only in a Herdr-managed pane. Each package has a dedicated guide linked above and a detailed package README in <code>packages/extensions/</code>.</p>
+      </section>
       <section id="start-here">
         <h2>Start here</h2>
         <p>A workflow extension is trusted TypeScript or JavaScript loaded by Pi. Use one when a workflow capability should be named, discoverable, schema-validated, and reusable across launches. Put the file in a Pi extension location such as <code>~/.pi/agent/extensions/review-loop.ts</code>, then load it through Pi. The package import is <code>pi-extensible-workflows</code>.</p>

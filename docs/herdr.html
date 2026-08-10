@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Herdr workflow extension installation, live handoff, completed-session inspection, and fully inspectable mode.">
+  <title>Herdr | pi-extensible-workflows</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="index.html">pi-extensible-workflows</a>
+      <nav aria-label="Primary navigation">
+        <a href="developers.html">Developers</a>
+        <a href="roles.html">Roles</a>
+        <a href="extensions.html">Extensions</a>
+        <a href="subagents.html">Subagents</a>
+        <a class="active" href="herdr.html">Herdr</a>
+        <a href="https://github.com/vekexasia/pi-extensible-workflows">Repository</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container docs-layout">
+    <aside class="toc" aria-label="On this page">
+      <p class="toc-title">Herdr</p>
+      <a href="#overview">Overview</a>
+      <a href="#installation">Installation</a>
+      <a href="#actions">Workflow actions</a>
+      <a href="#inspectable">Fully inspectable mode</a>
+      <a href="#handoff">Handoff and ownership</a>
+      <a href="#preserved">Preserved context</a>
+      <a href="#limitations">Limitations</a>
+    </aside>
+    <article class="prose">
+      <p class="eyebrow">Herdr integration path</p>
+      <h1>Open workflow-agent sessions in Herdr</h1>
+      <p class="lead"><code>@piewf/herdr</code> adds contextual <code>/workflow</code> actions for live handoff and completed-session inspection, plus an optional mode that runs every workflow agent in a dedicated Herdr workspace.</p>
+      <section id="overview">
+        <h2>Overview</h2>
+        <p>The extension complements <code>pi-extensible-workflows</code>. It registers trusted workflow attempt actions and a transport setup hook. It does not register model-facing tools.</p>
+        <p>The integration activates only when Pi is running in a valid Herdr-managed pane. Outside Herdr, package loading is inert.</p>
+      </section>
+      <section id="installation">
+        <h2>Installation and requirements</h2>
+        <p>Use Node.js 22.19 or newer. Both packages are trusted Pi host code and run with the same filesystem and process access as Pi.</p>
+        <pre><code class="language-shell"><span class="tok-command">pi</span> install npm:pi-extensible-workflows
+<span class="tok-command">pi</span> install npm:@piewf/herdr</code></pre>
+        <p>Requirements:</p>
+        <ul>
+          <li>The core workflow extension is loaded.</li>
+          <li>Pi is running inside a Herdr-managed pane with Herdr available.</li>
+          <li>The project and package code are trusted.</li>
+          <li>A live handoff has a transferable session file and an available originating Pi runtime.</li>
+        </ul>
+        <p>Set <code>PI_CODING_AGENT_DIR</code> when the Pi agent directory is not <code>~/.pi/agent</code>. Herdr reads workflow settings from that directory.</p>
+      </section>
+      <section id="actions">
+        <h2>Available `/workflow` actions</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Action</th><th>Available when</th><th>Behavior</th></tr></thead>
+          <tbody>
+            <tr><td>Open live session in Herdr pane</td><td>The latest attempt has a transferable live session, prepared launch context, handoff support, and fully inspectable mode is off.</td><td>Suspends local ownership, opens the same session in Herdr, then returns ownership after handback.</td></tr>
+            <tr><td>Open session in Herdr pane</td><td>The latest attempt is completed, failed, or cancelled and has a persisted session reference plus a usable cwd.</td><td>Opens the existing session in a separate Herdr pane for inspection without taking workflow ownership.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Open <code>/workflow</code>, select a run, and select the agent attempt. Only actions valid for the latest attempt are shown.</p>
+      </section>
+      <section id="inspectable">
+        <h2>Fully inspectable mode</h2>
+        <p>Enable fully inspectable mode in the global workflow settings file, normally <code>~/.pi/agent/pi-extensible-workflows/settings.json</code>:</p>
+        <pre><code class="language-json"><span class="tok-punctuation">{</span>
+  <span class="tok-property">"extensions"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
+    <span class="tok-property">"herdr"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
+      <span class="tok-property">"enableFullyInspectableMode"</span><span class="tok-punctuation">:</span> <span class="tok-boolean">true</span>
+    <span class="tok-punctuation">}</span>
+  <span class="tok-punctuation">}</span>
+<span class="tok-punctuation">}</span></code></pre>
+        <p>The setting is global-only. When enabled, every workflow agent launches in a dedicated labeled Herdr workspace and uses the Herdr transport. The manual live-session action is hidden because the session is already in Herdr. Completed-session inspection remains available.</p>
+      </section>
+      <section id="handoff">
+        <h2>Live handoff and ownership</h2>
+        <p>Live handoff pauses the local SDK at a turn boundary while the Herdr pane owns the task. The originating Pi TUI reports the handed-off agent as working, then idle or completed before handback.</p>
+        <p>Ownership returns when the pane exits, the user runs <code>/quit</code>, or Herdr observes a pane return to idle after it has been working. The local SDK then resumes the same session. If the last assistant message was aborted or ended on a tool call without the expected result, the workflow asks the local session to continue.</p>
+        <p>Stopping or disposing the workflow closes active Herdr panes, bridges, and owned workspaces before the underlying local session is disposed.</p>
+      </section>
+      <section id="preserved">
+        <h2>What the handoff preserves</h2>
+        <ul>
+          <li>The originating Pi executable and entrypoint.</li>
+          <li>The native session file and selected model and thinking level.</li>
+          <li>Allowed built-in tools, custom tools, and structured-result tools.</li>
+          <li>System prompt, appended prompt, selected context files, skills, extensions, and project trust policy.</li>
+          <li>Workflow identity, labels, worktree cwd, and lifecycle reporting.</li>
+        </ul>
+        <p>Custom tools are bridged back to the owning process. Transferable inline extension factories are materialized as temporary explicit extensions. Temporary bridge files use private permissions; command, prompt, extension, and socket artifacts are cleaned after the pane closes.</p>
+      </section>
+      <section id="limitations">
+        <h2>Interruption behavior and limitations</h2>
+        <ul>
+          <li>Herdr's Pi screen detection cannot distinguish an aborted turn from a completed turn.</li>
+          <li>In Pi's default keybindings, use double-<code>Escape</code> to abort a turn.</li>
+          <li>A single <code>Ctrl-C</code> clears the editor and double-<code>Ctrl-C</code> exits Pi, so <code>Ctrl-C</code> is not a handback signal.</li>
+          <li>Lifecycle reports from this extension are advisory when Herdr's built-in Pi integration has authority.</li>
+          <li>Completed-session opening is inspection only and uses a restricted tool set.</li>
+        </ul>
+      </section>
+      <section class="callout">
+        <h2>Detailed package reference</h2>
+        <p>See the <a href="https://github.com/vekexasia/pi-extensible-workflows/blob/main/packages/extensions/herdr/README.md">Herdr package README</a> and the <a href="developers.html#operations">workflow operations guide</a>.</p>
+      </section>
+      <p class="back-link"><a href="index.html">&lt; Back to documentation home</a></p>
+    </article>
+  </main>
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>pi-extensible-workflows</span>
+      <a href="https://github.com/vekexasia/pi-extensible-workflows">GitHub repository</a>
+    </div>
+  </footer>
+</body>
+</html>

@@ -15,6 +15,8 @@
         <a class="active" href="developers.html">Developers</a>
         <a href="roles.html">Roles</a>
         <a href="extensions.html">Extensions</a>
+        <a href="subagents.html">Subagents</a>
+        <a href="herdr.html">Herdr</a>
         <a href="https://github.com/vekexasia/pi-extensible-workflows">Repository</a>
       </nav>
     </div>
@@ -39,7 +41,10 @@
       <p class="lead">This page describes the package contract from the host tool boundary through the sandboxed workflow worker and its durable run store.</p>
       <section id="installation">
         <h2>Installation and trust</h2>
-        <p>Use Node.js 22.19 or newer. pi-extensible-workflows is a trusted Pi extension: installing the core package gives the extension the same filesystem and process access as Pi. Install @piewf/cli separately when you need the piewf command. Only install these packages from a source you trust, and open and trust the project in Pi before running <code>piewf doctor</code>.</p>
+        <p>Use Node.js 22.19 or newer. Every package is trusted Pi host code with the same filesystem and process access as Pi. Install only packages you trust, and trust the project before running workflows or <code>piewf doctor</code>.</p>
+        <pre><code class="language-shell"><span class="tok-command">pi</span> install npm:pi-extensible-workflows
+<span class="tok-command">pi</span> install npm:@piewf/cli</code></pre>
+        <p>The core package is sufficient for workflow orchestration. Add <code>@piewf/cli</code> only when you need the <code>piewf</code> command. Install <a href="subagents.html"><code>@piewf/subagents</code></a> separately for standalone single-shot agents, or <a href="herdr.html"><code>@piewf/herdr</code></a> alongside core for Herdr session actions and transport integration.</p>
         <p>For source installation and local development, clone the repository and change into its directory first:</p>
         <pre><code class="language-shell"><span class="tok-command">git</span> clone https://github.com/vekexasia/pi-extensible-workflows.git
 <span class="tok-command">cd</span> pi-extensible-workflows
@@ -48,7 +53,7 @@
 <span class="tok-command">pi</span> install "$PWD/packages/core"</code></pre>
         <p>For a one-session trial without changing Pi settings:</p>
         <pre><code class="language-shell"><span class="tok-command">pi</span> --no-extensions --extension "$PWD/packages/core/src/index.ts"</code></pre>
-        <p>The package declares Pi AI, Pi coding agent, Pi TUI, and TypeBox as peer dependencies. The repository development setup currently pins the Pi packages to 0.82.1. The repository is an npm-workspaces monorepo: <code>packages/core</code> is the public <code>pi-extensible-workflows</code> package and <code>packages/cli</code> publishes the <code>@piewf/cli</code> CLI. <code>packages/extensions/*</code> holds repo-local extension packages such as <code>@piewf/herdr</code>. The private root orchestrates checks.</p>
+        <p>The public packages declare Pi runtime packages as peers. Repository development pins Pi packages to 0.84.1. This npm-workspaces monorepo publishes <code>pi-extensible-workflows</code> from <code>packages/core</code>, <code>@piewf/cli</code> from <code>packages/cli</code>, and <code>@piewf/subagents</code> and <code>@piewf/herdr</code> from <code>packages/extensions/*</code>. The private root orchestrates repository-wide checks.</p>
       </section>
       <section id="settings">
         <h2>Global and project settings</h2>
@@ -64,9 +69,15 @@
   <span class="tok-property">"disabledAgentResources"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
     <span class="tok-property">"skills"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"learning-opportunities"</span><span class="tok-punctuation">],</span>
     <span class="tok-property">"extensions"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"~/.pi/agent/extensions/review-loop.ts"</span><span class="tok-punctuation">]</span>
+  <span class="tok-punctuation">},</span>
+  <span class="tok-property">"extensions"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
+    <span class="tok-property">"herdr"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
+      <span class="tok-property">"enableFullyInspectableMode"</span><span class="tok-punctuation">:</span> <span class="tok-boolean">true</span>
+    <span class="tok-punctuation">}</span>
   <span class="tok-punctuation">}</span>
 <span class="tok-punctuation">}</span></code></pre>
         <p><code>concurrency</code> defaults to 8 and accepts integers from 1 through 16. Effective settings use <code>defaults &lt; global settings &lt; trusted project settings &lt; per-run options</code>; a workflow call's <code>concurrency</code> field is highest precedence.</p>
+        <p><code>extensions.herdr.enableFullyInspectableMode</code> is a global-only boolean consumed by <a href="herdr.html#inspectable"><code>@piewf/herdr</code></a>. The <code>extensions</code> object is strict; unsupported extension names or fields fail validation.</p>
         <h3 id="background-widget">Background workflow widget</h3>
         <p><code>backgroundWidget</code> is a global boolean that defaults to <code>true</code>. Set it to <code>false</code> to disable the live background-run tree and durable background-run transcript receipts. Foreground workflow rendering is unchanged. The setting is accepted only in the global workflow settings file; it is not a trusted-project override. Non-interactive and headless hosts do not draw the widget or append receipts.</p>
         <h3 id="model-aliases">Model aliases</h3>

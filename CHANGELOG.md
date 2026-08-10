@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### Documentation
+
+- Reworked the main README as the canonical product and package overview, added dedicated Subagents and Herdr HTML guides, and connected package selection, roles, settings, installation, and extension references across the documentation site.
+
 ## [5.4.0] - 2026-08-10
 
 ### Subagents

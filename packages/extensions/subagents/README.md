@@ -2,6 +2,8 @@
 
 Single-shot agents for Pi: each run launches one independent agent session from one task, without writing a workflow script. Single-shot describes the orchestration shape, not one model turn; the agent can use tools and accept steering while it runs.
 
+[Full Subagents documentation](https://vekexasia.github.io/pi-extensible-workflows/subagents.html) | [Main package](https://github.com/vekexasia/pi-extensible-workflows#readme) | [Roles](https://vekexasia.github.io/pi-extensible-workflows/roles.html) | [Settings](https://vekexasia.github.io/pi-extensible-workflows/developers.html#settings)
+
 Use `@piewf/subagents` for focused, independent tasks. Use `pi-extensible-workflows` when work needs dependency batches, parallel or pipeline stages, checkpoints, approvals, or resumable orchestration.
 
 ## Subagents vs workflows
@@ -26,7 +28,7 @@ Use `@piewf/subagents` for focused, independent tasks. Use `pi-extensible-workfl
 pi install npm:@piewf/subagents
 ```
 
-No separate `pi-extensible-workflows` installation is required for the standalone subagent tools. The package is trusted Pi host code with the same filesystem and process access as Pi.
+Use Node.js 22.19 or newer. No separate `pi-extensible-workflows` installation is required for the standalone subagent tools. The package is trusted Pi host code with the same filesystem and process access as Pi.
 
 ## Quick start
 
@@ -159,7 +161,7 @@ The v5.4 release removes the seven-tool surface's redundant `subagents_list`, `s
 
 | v5.3 call | v5.4 call |
 | --- | --- |
-| `subagents_run({ prompt, ... })` | `subagents_run({ prompt, mode: "background", ... })`; background remains the default |
+| `subagents_run({ prompt, ... })` | unchanged for background runs; `mode: "foreground"` is new |
 | `subagents_list({})` | `subagents_inspect({})` |
 | `subagents_status({ id })` followed by `subagents_result({ id })` | `subagents_inspect({ id })` |
 | `subagents_steer({ id, message })` | unchanged |

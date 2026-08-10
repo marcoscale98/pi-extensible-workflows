@@ -15,6 +15,8 @@
         <a href="developers.html">Developers</a>
         <a class="active" href="roles.html">Roles</a>
         <a href="extensions.html">Extensions</a>
+        <a href="subagents.html">Subagents</a>
+        <a href="herdr.html">Herdr</a>
         <a href="https://github.com/vekexasia/pi-extensible-workflows">Repository</a>
       </nav>
     </div>
@@ -44,6 +46,7 @@
   <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span> <span class="tok-property">name</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span> <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model"</span><span class="tok-punctuation">,</span> <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[]</span> <span class="tok-punctuation">}</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span></code></pre>
         <p>Top-level <code>model</code>, <code>thinking</code>, and <code>tools</code> cannot be combined with either role form. Put per-call changes inside the role object.</p>
+        <p><a href="subagents.html"><code>@piewf/subagents</code></a> discovers these same role files and applies the same role-name, override, model, thinking, tool, context, and resource-policy validation to standalone agent runs.</p>
       </section>
       <section id="files">
         <h2>Role files</h2>

@@ -4,7 +4,7 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const docsDir = fileURLToPath(new URL("../docs/", import.meta.url));
-const requiredFiles = ["index.html", "developers.html", "roles.html", "extensions.html", "llm.md", "styles.css"];
+const requiredFiles = ["index.html", "developers.html", "roles.html", "extensions.html", "subagents.html", "herdr.html", "llm.md", "styles.css"];
 const errors = [];
 const files = new Set(readdirSync(docsDir));
 
@@ -38,12 +38,12 @@ for (const file of htmlFiles) {
 }
 
 const landing = readFileSync(resolve(docsDir, "index.html"), "utf8");
-for (const link of ["developers.html", "roles.html", "extensions.html"]) {
+for (const link of ["developers.html", "roles.html", "extensions.html", "subagents.html", "herdr.html"]) {
   if (!landing.includes(`href="${link}"`)) errors.push(`landing page does not link to ${link}`);
 }
 for (const file of htmlFiles) {
   const source = readFileSync(resolve(docsDir, file), "utf8");
-  for (const headerLink of ["roles.html", "extensions.html"]) if (!source.includes(`href="${headerLink}"`)) errors.push(`${file}: header does not link to ${headerLink}`);
+  for (const headerLink of ["developers.html", "roles.html", "extensions.html", "subagents.html", "herdr.html"]) if (!source.includes(`href="${headerLink}"`)) errors.push(`${file}: header does not link to ${headerLink}`);
 }
 for (const file of htmlFiles) {
   const source = readFileSync(resolve(docsDir, file), "utf8");
