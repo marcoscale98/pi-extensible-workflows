@@ -32,6 +32,9 @@ const WIDTH = 78;
 // eslint-disable-next-line no-control-regex
 const plain = (line) => line.replace(/\x1b\[[0-9;]*m/g, "");
 
+/** Normalizes live animation and elapsed time so repeated row comparisons stay stable. */
+const stableLine = (line) => plain(line).replace(/[⣷⣯⣟⡿⢿⣽⣻]/g, "⣷").replace(/\b\d{2}:\d{2}\b/g, "00:00");
+
 function writeRun(directory, state) {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, "state.json"), JSON.stringify(state));
@@ -1210,7 +1213,7 @@ void test("scrolling reaches the last row and stops there, with nothing banked p
   // moves the screen.
   __navigationForTests.enabled = true;
   const host = tallTree();
-  const draw = () => host.widgets.at(-1)(host.tui, theme).render(WIDTH).map(plain);
+  const draw = () => host.widgets.at(-1)(host.tui, theme).render(WIDTH).map(stableLine);
   [...host.shortcuts.values()][0].handler();
 
   for (let press = 0; press < 40; press += 1) host.key("\u001b[1;1:1B");
@@ -1230,7 +1233,7 @@ void test("entering scroll mode shows the top of the tree, not the resting selec
   // like a jump: the reader is not moving a window, they are swapping views.
   __navigationForTests.enabled = true;
   const host = tallTree();
-  const draw = () => host.widgets.at(-1)(host.tui, theme).render(WIDTH).map(plain);
+  const draw = () => host.widgets.at(-1)(host.tui, theme).render(WIDTH).map(stableLine);
 
   // Contiguity is the point: the resting view drops rows silently, so a window
   // that merely starts at the top is not enough — the rows after it must be
@@ -1283,7 +1286,7 @@ void test("the scrollbar thumb tracks the window it describes", () => {
   // check is that the thumb is still moving where the window still moves:
   // rewind to the top, then step down watching both.
   for (let press = 0; press < 60; press += 1) host.key("\u001b[1;1:1A");
-  const body = () => host.widgets.at(-1)(host.tui, theme).render(WIDTH).map(plain).slice(1, -1).join("\n");
+  const body = () => host.widgets.at(-1)(host.tui, theme).render(WIDTH).map(stableLine).slice(1, -1).join("\n");
   let previousBody = body();
   let previousThumb = thumb();
   let contentMovedAfterThumbStopped = false;

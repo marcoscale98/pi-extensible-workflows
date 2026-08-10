@@ -391,6 +391,190 @@ test("runs simultaneous background subagents and settles them independently", as
   }
 });
 
+test("bounds standalone launches by effective workflow concurrency without a queue", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-concurrency-bound-"));
+  const agentDir = join(cwd, "agent");
+  const storageDir = join(cwd, "subagents-storage");
+  await mkdir(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ concurrency: 1 }));
+  const pending = new Map();
+  const started = [];
+  const cleanupStarted = deferred();
+  const releaseCleanup = deferred();
+  const manager = createSubagentManager({
+    agentDir,
+    storageDir,
+    worktreeAdapter: {
+      async create(input) {
+        return { path: join(cwd, `worktree-${input.runId}`), branch: `subagent/${input.runId}`, cwd, runStore: {}, async cleanup() { cleanupStarted.resolve(); await releaseCleanup.promise; } };
+      },
+    },
+    createExecutor() {
+      return {
+        async execute(prompt) {
+          started.push(prompt);
+          return new Promise((resolve, reject) => { pending.set(prompt, { resolve, reject }); });
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const results = await Promise.allSettled([
+      manager.run({ prompt: "first", worktree: "first" }, context),
+      manager.run({ prompt: "second" }, context),
+    ]);
+    assert.equal(results[0].status, "fulfilled");
+    assert.equal(results[1].status, "rejected");
+    assert.ok(results[1].reason instanceof WorkflowError);
+    assert.equal(results[1].reason.code, "AGENT_FAILED");
+    assert.match(results[1].reason.message, /concurrency|no queue|settles/i);
+    await waitFor(() => started.length === 1);
+
+    const first = results[0].value;
+    pending.get("first").resolve({ value: "first", attempts: [], cwd });
+    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "completed");
+    await cleanupStarted.promise;
+
+    const second = await manager.run({ prompt: "second" }, context);
+    await waitFor(() => started.length === 2);
+    pending.get("second").resolve({ value: "second", attempts: [], cwd });
+    await waitFor(async () => (await manager.status({ id: second.id }, context)).state === "completed");
+    releaseCleanup.resolve();
+  } finally {
+    releaseCleanup.resolve();
+    for (const run of pending.values()) run.reject(new Error("test cleanup"));
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("releases a stopped subagent concurrency slot before worktree cleanup settles", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-concurrency-stop-"));
+  const agentDir = join(cwd, "agent");
+  const storageDir = join(cwd, "subagents-storage");
+  await mkdir(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ concurrency: 1 }));
+  const pending = new Map();
+  const cleanupStarted = deferred();
+  const releaseCleanup = deferred();
+  let creates = 0;
+  const manager = createSubagentManager({
+    agentDir,
+    storageDir,
+    worktreeAdapter: {
+      async create(input) {
+        const cleanup = creates++ === 0 ? async () => { cleanupStarted.resolve(); await releaseCleanup.promise; } : async () => {};
+        return {
+          path: join(cwd, `worktree-${input.runId}`),
+          branch: `subagent/${input.runId}`,
+          cwd,
+          runStore: {},
+          cleanup,
+        };
+      },
+    },
+    createExecutor() {
+      return {
+        execute(prompt, _options, signal) {
+          return new Promise((resolve, reject) => {
+            pending.set(prompt, { resolve, reject });
+            signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  let stopping;
+  try {
+    const first = await manager.run({ prompt: "first", worktree: "first" }, context);
+    await waitFor(() => pending.has("first"));
+    stopping = manager.stop({ id: first.id }, context);
+    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "stopped");
+    await cleanupStarted.promise;
+
+    const second = await manager.run({ prompt: "second" }, context);
+    assert.equal(second.state, "running");
+    await waitFor(() => pending.has("second"));
+    await assert.rejects(manager.run({ prompt: "third" }, context), (error) => error instanceof WorkflowError && error.code === "AGENT_FAILED");
+
+    releaseCleanup.resolve();
+    await stopping;
+    const persisted = JSON.parse(await readFile(join(storageDir, first.id, "status.json"), "utf8"));
+    assert.equal(persisted.worktree, undefined);
+    assert.equal(persisted.worktreeContext, undefined);
+    pending.get("second").resolve({ value: "second", attempts: [], cwd });
+    await waitFor(async () => (await manager.status({ id: second.id }, context)).state === "completed");
+  } finally {
+    releaseCleanup.resolve();
+    for (const run of pending.values()) run.reject(new Error("test cleanup"));
+    await stopping?.catch(() => undefined);
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("bounds failed and retried standalone launches before failed worktree cleanup settles", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-concurrency-failure-"));
+  const agentDir = join(cwd, "agent");
+  const storageDir = join(cwd, "subagents-storage");
+  await mkdir(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ concurrency: 1 }));
+  const pending = new Map();
+  const cleanupStarted = deferred();
+  const releaseCleanup = deferred();
+  let creates = 0;
+  let executions = 0;
+  const manager = createSubagentManager({
+    agentDir,
+    storageDir,
+    worktreeAdapter: {
+      async create(input) {
+        const cleanup = creates++ === 0 ? async () => { cleanupStarted.resolve(); await releaseCleanup.promise; throw new Error("cleanup failed"); } : async () => {};
+        return {
+          path: join(cwd, `worktree-${input.runId}`),
+          branch: `subagent/${input.runId}`,
+          cwd,
+          runStore: {},
+          cleanup,
+        };
+      },
+    },
+    createExecutor() {
+      return {
+        async execute(prompt) {
+          executions += 1;
+          if (executions === 1) throw new Error("first attempt failed");
+          return new Promise((resolve, reject) => { pending.set(prompt, { resolve, reject }); });
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const first = await manager.run({ prompt: "retry", worktree: "retry" }, context);
+    await waitFor(async () => (await manager.status({ id: first.id }, context)).state === "failed");
+    await cleanupStarted.promise;
+    const retried = await manager.retry({ id: first.id }, context);
+    await waitFor(() => pending.has("retry"));
+    await assert.rejects(manager.run({ prompt: "third" }, context), (error) => error instanceof WorkflowError && error.code === "AGENT_FAILED");
+
+    releaseCleanup.resolve();
+    await waitFor(async () => {
+      const persisted = JSON.parse(await readFile(join(storageDir, first.id, "status.json"), "utf8"));
+      return persisted.state === "failed" && persisted.worktree !== undefined && persisted.worktreeContext !== undefined;
+    });
+    pending.get("retry").resolve({ value: "retried", attempts: [], cwd });
+    await waitFor(async () => (await manager.status({ id: retried.id }, context)).state === "completed");
+  } finally {
+    releaseCleanup.resolve();
+    for (const run of pending.values()) run.reject(new Error("test cleanup"));
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("stopping one background subagent leaves another running", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-background-stop-"));
   const pending = new Map();
@@ -823,12 +1007,14 @@ test("creates and cleans an injected named worktree for a subagent", async () =>
     const launched = await manager.run({ prompt: "work", worktree: "review" }, context);
     await waitFor(async () => (await manager.status({ id: launched.id }, context)).state === "completed");
     await waitFor(async () => JSON.parse(await readFile(join(storageDir, launched.id, "status.json"), "utf8")).worktreeContext === undefined);
-    assert.equal(JSON.parse(await readFile(join(storageDir, launched.id, "status.json"), "utf8")).worktreeContext, undefined);
+    const persisted = JSON.parse(await readFile(join(storageDir, launched.id, "status.json"), "utf8"));
+    assert.equal(persisted.worktreeContext, undefined);
+    assert.equal(persisted.worktree, undefined);
     assert.equal(created.length, 1);
     assert.deepEqual(created[0], { cwd, sessionId: "session-1", runId: launched.id, name: "review", owner: "worktree/named/review" });
     assert.equal(capturedOptions.worktreeOwner, "worktree/named/review");
     assert.ok(capturedRoot.runStore);
-    assert.deepEqual((await manager.status({ id: launched.id }, context)).worktree, { path: join(cwd, "worktree"), branch: "subagent/review" });
+    assert.equal((await manager.status({ id: launched.id }, context)).worktree, undefined);
     assert.equal(cleaned, 1);
   } finally {
     await manager.dispose();
@@ -972,14 +1158,36 @@ test("retries an interrupted persisted subagent as a new run", async () => {
     await rm(cwd, { recursive: true, force: true });
   }
 });
+test("removes legacy persisted worktree metadata without cleanup context", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-legacy-worktree-metadata-"));
+  const storageDir = join(cwd, "storage");
+  const id = "99999999-9999-4999-8999-999999999999";
+  const worktree = { path: join(cwd, "legacy-worktree"), branch: "legacy-branch" };
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "legacy" }));
+  await writeFile(join(storageDir, id, "status.json"), JSON.stringify({ id, state: "stopped", startedAt: Date.now() - 10, finishedAt: Date.now(), worktree }));
+  const manager = createSubagentManager({ storageDir });
+  const context = await managerContext(cwd);
+  try {
+    assert.deepEqual(await manager.status({ id }, context), { id, state: "stopped" });
+    const persisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
+    assert.equal(persisted.worktree, undefined);
+    assert.equal(persisted.worktreeContext, undefined);
+  } finally {
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("cleans a stopped persisted worktree during manager restart", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-stopped-worktree-recovery-"));
   const storageDir = join(cwd, "storage");
   const id = "66666666-6666-4666-8666-666666666666";
   const worktreeContext = { cwd, sessionId: "session-1", runId: id, name: "stopped", owner: "worktree/named/stopped" };
+  const worktree = { path: join(cwd, "stale-worktree"), branch: "stale-branch" };
   await mkdir(join(storageDir, id), { recursive: true });
   await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "stopped", worktree: "stopped" }));
-  await writeFile(join(storageDir, id, "status.json"), JSON.stringify({ id, state: "stopped", startedAt: Date.now() - 10, finishedAt: Date.now(), worktreeContext }));
+  await writeFile(join(storageDir, id, "status.json"), JSON.stringify({ id, state: "stopped", startedAt: Date.now() - 10, finishedAt: Date.now(), worktree, worktreeContext }));
   const cleanupCalls = [];
   const manager = createSubagentManager({
     storageDir,
@@ -992,6 +1200,9 @@ test("cleans a stopped persisted worktree during manager restart", async () => {
   try {
     assert.equal((await manager.status({ id }, context)).state, "stopped");
     assert.deepEqual(cleanupCalls, [worktreeContext]);
+    const persisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
+    assert.equal(persisted.worktree, undefined);
+    assert.equal(persisted.worktreeContext, undefined);
   } finally {
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
@@ -1052,7 +1263,8 @@ test("preserves completed results when persisted worktree cleanup fails", async 
   const storageDir = join(cwd, "storage");
   const id = "77777777-7777-4777-8777-777777777777";
   const worktreeContext = { cwd, sessionId: "session-1", runId: id, name: "completed", owner: "worktree/named/completed" };
-  const status = { id, state: "completed", startedAt: Date.now() - 100, finishedAt: Date.now(), worktreeContext };
+  const worktree = { path: join(cwd, "completed-worktree"), branch: "completed-branch" };
+  const status = { id, state: "completed", startedAt: Date.now() - 100, finishedAt: Date.now(), worktree, worktreeContext };
   const value = { preserved: true };
   await mkdir(join(storageDir, id), { recursive: true });
   await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "completed" }));
@@ -1061,7 +1273,7 @@ test("preserves completed results when persisted worktree cleanup fails", async 
   const manager = createSubagentManager({ storageDir, worktreeAdapter: { async create() { throw new Error("unused"); }, async cleanup() { throw new Error("cleanup failed"); } } });
   const context = await managerContext(cwd);
   try {
-    assert.deepEqual(await manager.status({ id }, context), { id, state: "completed" });
+    assert.deepEqual(await manager.status({ id }, context), { id, state: "completed", worktree });
     assert.deepEqual(await manager.result({ id }, context), { id, value });
     assert.deepEqual(JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8")), status);
     assert.deepEqual(JSON.parse(await readFile(join(storageDir, id, "result.json"), "utf8")), value);
@@ -1077,7 +1289,8 @@ test("reconciles a running persisted result before throwing worktree cleanup", a
   const storageDir = join(cwd, "storage");
   const id = "12121212-1212-4121-8121-121212121212";
   const worktreeContext = { cwd, sessionId: "session-1", runId: id, name: "running-result", owner: "worktree/named/running-result" };
-  const status = { id, state: "running", startedAt: Date.now() - 100, worktreeContext };
+  const worktree = { path: join(cwd, "running-result-worktree"), branch: "running-result-branch" };
+  const status = { id, state: "running", startedAt: Date.now() - 100, worktree, worktreeContext };
   const value = { preserved: true };
   await mkdir(join(storageDir, id), { recursive: true });
   await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "running-result", worktree: "running-result" }));
@@ -1086,10 +1299,11 @@ test("reconciles a running persisted result before throwing worktree cleanup", a
   const manager = createSubagentManager({ storageDir, liveness: { isLive: () => false }, worktreeAdapter: { async create() { throw new Error("unused"); }, async cleanup() { throw new Error("cleanup failed"); } } });
   const context = await managerContext(cwd);
   try {
-    assert.deepEqual(await manager.status({ id }, context), { id, state: "completed" });
+    assert.deepEqual(await manager.status({ id }, context), { id, state: "completed", worktree });
     assert.deepEqual(await manager.result({ id }, context), { id, value });
     const persisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
     assert.equal(persisted.state, "completed");
+    assert.deepEqual(persisted.worktree, worktree);
     assert.deepEqual(persisted.worktreeContext, worktreeContext);
     await assert.rejects(stat(join(storageDir, id, "failure.json")));
   } finally {
@@ -1098,13 +1312,14 @@ test("reconciles a running persisted result before throwing worktree cleanup", a
   }
 });
 
-test("clears persisted worktree context after cleanup and retries failed cleanup", async () => {
+test("clears persisted worktree metadata after cleanup and retries failed cleanup", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-reconcile-context-"));
   const storageDir = join(cwd, "storage");
   const id = "88888888-8888-4888-8888-888888888888";
   const worktreeContext = { cwd, sessionId: "session-1", runId: id, name: "retry-cleanup", owner: "worktree/named/retry-cleanup" };
+  const worktree = { path: join(cwd, "retry-worktree"), branch: "retry-branch" };
   const owner = { pid: 123, processStart: 1, sessionId: "live-session", token: "live-token", acquiredAt: Date.now() };
-  const status = { id, state: "stopped", startedAt: Date.now() - 100, finishedAt: Date.now(), owner, worktreeContext };
+  const status = { id, state: "stopped", startedAt: Date.now() - 100, finishedAt: Date.now(), owner, worktree, worktreeContext };
   await mkdir(join(storageDir, id), { recursive: true });
   await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "retry-cleanup", worktree: "retry-cleanup" }));
   await writeFile(join(storageDir, id, "status.json"), JSON.stringify(status));
@@ -1117,14 +1332,18 @@ test("clears persisted worktree context after cleanup and retries failed cleanup
   const first = createSubagentManager({ storageDir, liveness: { isLive: () => true }, worktreeAdapter: adapter });
   try {
     assert.equal((await first.status({ id }, context)).state, "stopped");
-    assert.deepEqual(JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8")).worktreeContext, worktreeContext);
+    const firstPersisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
+    assert.deepEqual(firstPersisted.worktree, worktree);
+    assert.deepEqual(firstPersisted.worktreeContext, worktreeContext);
   } finally {
     await first.dispose();
   }
   const second = createSubagentManager({ storageDir, liveness: { isLive: () => true }, worktreeAdapter: adapter });
   try {
     assert.equal((await second.status({ id }, context)).state, "stopped");
-    assert.equal(JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8")).worktreeContext, undefined);
+    const secondPersisted = JSON.parse(await readFile(join(storageDir, id, "status.json"), "utf8"));
+    assert.equal(secondPersisted.worktree, undefined);
+    assert.equal(secondPersisted.worktreeContext, undefined);
     assert.equal(cleanupCalls, 2);
   } finally {
     await second.dispose();

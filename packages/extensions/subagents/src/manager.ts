@@ -105,6 +105,7 @@ type LiveRun = {
   sessionDispose: Promise<void> | undefined;
   executorOwnsSession: boolean;
   disposed: boolean;
+  concurrencyReleased: boolean;
   notificationSent: boolean;
   writes: Promise<void>;
 };
@@ -192,6 +193,10 @@ function executionOptions(request: Readonly<SubagentRunRequest>, onAttempt: NonN
     onAttempt,
     onProgress,
   };
+}
+
+function effectiveConcurrency(context: Readonly<SubagentManagerContext>, dependencies: Readonly<SubagentManagerDependencies>): number {
+  return resolveWorkflowSettings(context.extensionContext.cwd, context.extensionContext.isProjectTrusted(), workflowSettingsPath(dependencies.agentDir ?? getAgentDir())).effective.concurrency;
 }
 
 function storageDirectory(dependencies: Readonly<SubagentManagerDependencies>): string {
@@ -610,8 +615,9 @@ function reconciledStatus(status: PersistedSubagentStatus, state: Exclude<Subage
   return withoutOwner(next);
 }
 
-function withoutWorktreeContext(status: PersistedSubagentStatus): PersistedSubagentStatus {
+function withoutWorktree(status: PersistedSubagentStatus): PersistedSubagentStatus {
   const next = { ...status };
+  delete next.worktree;
   delete next.worktreeContext;
   return next;
 }
@@ -674,7 +680,7 @@ async function reconcilePersistedRuns(root: string, liveness: SubagentLiveness |
       // A malformed status cannot be safely rewritten; keep other runs available.
       continue;
     }
-    if (status.state !== "running" && status.worktreeContext === undefined) continue;
+    if (status.state !== "running" && status.worktreeContext === undefined && status.worktree === undefined) continue;
     if (status.state === "running" && status.owner !== undefined && await ownerIsLive(status.owner, liveness)) continue;
     try {
       if (status.state === "running") status = await reconcilePersistedResult(root, entry.name, status);
@@ -683,8 +689,8 @@ async function reconcilePersistedRuns(root: string, liveness: SubagentLiveness |
         cleaned = await cleanupWorktree(root, entry.name, status);
       }
       if (status.state === "running") status = await reconcilePersistedRun(root, entry.name, status);
-      if (cleaned && status.worktreeContext !== undefined) {
-        status = withoutOwner(withoutWorktreeContext(status));
+      if (cleaned || (status.worktreeContext === undefined && status.worktree !== undefined)) {
+        status = withoutOwner(withoutWorktree(status));
         await atomicJson(statusPath(runDirectory(root, entry.name)), status);
       }
     } catch (error) {
@@ -709,6 +715,7 @@ function unavailable(operation: string): { ok: false; error: { code: "SUBAGENTS_
 
 class PersistentSubagentManager implements SubagentManager {
   private readonly activeRuns = new Map<string, LiveRun>();
+  private activeRunCount = 0;
   private readonly terminalSummaries = new Map<string, TerminalSummary>();
   private readonly notificationPromises = new Set<Promise<void>>();
   private readonly initialization: Promise<void>;
@@ -757,12 +764,16 @@ class PersistentSubagentManager implements SubagentManager {
     const startedAt = Date.now();
     const owner = this.runOwner;
     if (!owner) throw new WorkflowError("INTERNAL_ERROR", "Subagent storage owner identity is unavailable");
+    const concurrency = effectiveConcurrency(context, this.dependencies);
+    if (this.activeRunCount >= concurrency) throw new WorkflowError("AGENT_FAILED", `Subagent concurrency limit reached (${String(this.activeRunCount)}/${String(concurrency)} active runs); no queue is maintained. Retry after an active run settles.`);
+    this.activeRunCount += 1;
     const controller = new AbortController();
     const initialStatus: PersistedSubagentStatus = { id, state: "running", startedAt, owner: { ...owner } };
     let directory: string;
     try {
       directory = await createRunStorage(storageDirectory(this.dependencies), id, snapshot, initialStatus);
     } catch (error) {
+      this.activeRunCount -= 1;
       if (error instanceof WorkflowError) throw error;
       throw internalStorageError(error, `Unable to start subagent ${id}`);
     }
@@ -813,7 +824,7 @@ class PersistentSubagentManager implements SubagentManager {
       if (injectedExecutor) return injectedExecutor.execute(snapshot.prompt, options, controller.signal, setSteer);
       return new WorkflowAgentExecutor(root, transport).execute(snapshot.prompt, options, controller.signal, [], setSteer);
     });
-    const run: LiveRun = { id, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, state: "running", error: undefined, session: undefined, progress: undefined, accounting: undefined, usage: undefined, activity: undefined, toolCalls: undefined, lastEventAt: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, sessionAbort: undefined, sessionDispose: undefined, executorOwnsSession: executorOwnership.default, disposed: false, notificationSent: false, writes: Promise.resolve() };
+    const run: LiveRun = { id, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, state: "running", error: undefined, session: undefined, progress: undefined, accounting: undefined, usage: undefined, activity: undefined, toolCalls: undefined, lastEventAt: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, sessionAbort: undefined, sessionDispose: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, writes: Promise.resolve() };
     current.run = run;
     this.activeRuns.set(id, run);
     const externalSignal = context.signal;
@@ -923,6 +934,12 @@ class PersistentSubagentManager implements SubagentManager {
     return this.start(await loadPersistedRequest(storageDirectory(this.dependencies), id), context);
   }
 
+  private releaseConcurrency(run: LiveRun): void {
+    if (run.concurrencyReleased) return;
+    run.concurrencyReleased = true;
+    this.activeRunCount -= 1;
+  }
+
   private canSteer(run: LiveRun): boolean {
     return !run.disposed && run.state === "running" && !run.controller.signal.aborted;
   }
@@ -1012,6 +1029,7 @@ class PersistentSubagentManager implements SubagentManager {
   private async stopRun(run: LiveRun, disposeSession: boolean): Promise<void> {
     if (run.state === "running") {
       run.state = "stopped";
+      this.releaseConcurrency(run);
       run.finishedAt = Date.now();
       const sessionCleanup = this.cleanupSession(run, disposeSession);
       run.controller.abort();
@@ -1074,9 +1092,14 @@ class PersistentSubagentManager implements SubagentManager {
   }
   private async cleanupWorktree(run: LiveRun): Promise<boolean> {
     const worktree = run.worktree;
-    if (!worktree || run.worktreeContext === undefined) return false;
-    if (!run.worktreeCleanup) run.worktreeCleanup = Promise.resolve().then(() => worktree.cleanup());
-    await run.worktreeCleanup;
+    let cleanup = run.worktreeCleanup;
+    if (cleanup === undefined) {
+      if (!worktree || run.worktreeContext === undefined) return false;
+      cleanup = Promise.resolve().then(() => worktree.cleanup());
+      run.worktreeCleanup = cleanup;
+    }
+    await cleanup;
+    run.worktree = undefined;
     run.worktreeContext = undefined;
     return true;
   }
@@ -1112,6 +1135,7 @@ class PersistentSubagentManager implements SubagentManager {
         return;
       }
       run.state = "completed";
+      this.releaseConcurrency(run);
       run.finishedAt = Date.now();
       await this.finishTerminal(run);
     } catch (error) {
@@ -1135,6 +1159,7 @@ class PersistentSubagentManager implements SubagentManager {
       if (latest) this.recordAttemptAccounting(run, latest.accounting);
     }
     run.state = "failed";
+    this.releaseConcurrency(run);
     run.error = failureFrom(error);
     run.finishedAt = Date.now();
     try {

@@ -45,7 +45,7 @@ Every tool schema is a closed object. Unknown properties are rejected.
 {"id":"01900000-0000-4000-8000-000000000000","state":"running"}
 ```
 
-The ID is a generated UUID. Each call owns an independent run, so multiple calls can execute concurrently and settle independently; there is no foreground wait mode or shared manager queue. A host can use `subagents_list` to inspect all records it can access. Completed and failed runs can also produce one follow-up message when the host supplies `sendMessage`; the message points to the ID rather than embedding the full result.
+The ID is a generated UUID. Each call owns an independent run, so calls can execute concurrently and settle independently up to the effective workflow `concurrency` setting for the launch context (an integer from 1 through 16, default 8). When the limit is reached, `subagents_run` and `subagents_retry` reject with `AGENT_FAILED`; no queue is maintained, so retry after an active run settles. A host can use `subagents_list` to inspect all records it can access. Completed and failed runs can also produce one follow-up message when the host supplies `sendMessage`; the message points to the ID rather than embedding the full result.
 
 ## IDs, status, and results
 
@@ -74,7 +74,7 @@ A failed record retains its failure file for later status and result reads. `sub
 
 ## Worktrees
 
-Set `worktree` on `subagents_run` to create a named isolated Git worktree for that run. The default adapter uses the core `RunStore`; the executor runs in the worktree and status exposes its path and branch while materialized. Cleanup runs when the agent settles, stops, or the manager reconciles an interrupted record. A run ID keeps concurrent worktrees separate even when their names are the same.
+Set `worktree` on `subagents_run` to create a named isolated Git worktree for that run. The default adapter uses the core `RunStore`; the executor runs in the worktree and status exposes its path and branch while materialized. Cleanup runs when the agent settles, stops, or the manager reconciles an interrupted record. After successful cleanup, the public and persisted worktree path, branch, and cleanup context are removed; if cleanup fails, all of that metadata is retained for a later retry. A run ID keeps concurrent worktrees separate even when their names are the same.
 
 ## Roles and settings
 
@@ -111,7 +111,7 @@ return await singleAgent({
 
 ## Shutdown and restoration
 
-The default extension subscribes to `session_shutdown`. Disposal aborts active runs, disposes owned agent sessions and listeners, cleans active worktrees, waits for pending completion notifications, releases the storage owner, and is idempotent. Terminal records and results remain on disk. Terminal worktree cleanup context is retained when cleanup fails and retried on a later manager startup; successful cleanup clears the persisted context.
+The default extension subscribes to `session_shutdown`. Disposal aborts active runs, disposes owned agent sessions and listeners, cleans active worktrees, waits for pending completion notifications, releases the storage owner, and is idempotent. Terminal records and results remain on disk. Terminal worktree path, branch, and cleanup context are removed after successful cleanup; failed cleanup retains all three for retry on a later manager startup.
 
 **Cross-session restoration of a live native subagent session is unsupported.** On a new manager, a persisted `running` record is reconciled to `failed` with an interruption error unless a result or failure was already persisted. Use `subagents_retry` to start a new run; it does not restore conversation context or reuse the old native session. Persisted completed and failed records remain readable, subject to the storage owner and filesystem being available.
 

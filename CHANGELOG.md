@@ -1,19 +1,32 @@
 # Changelog
 ## Unreleased
 
+## [5.3.0] - 2026-08-09
+
 ### New capabilities
 
-- Added the `@piewf/subagents` extension with concurrent background `subagents_*` controls, durable IDs and results, steering, stopping, retries, named worktrees, progress/accounting, and session-shutdown cleanup.
+- Added a built-in background workflow widget with live phase/agent status and durable transcript receipts; resumable runs remain visible, receipts are written only from stable terminal state, and both can be disabled globally with `backgroundWidget: false` ([#197](https://github.com/vekexasia/pi-extensible-workflows/issues/197)).
+- Added the `@piewf/subagents` extension with background `subagents_*` controls, durable IDs/results, steering, stopping, retries, named worktrees, progress/accounting, session-shutdown cleanup, and bounded effective workflow concurrency with no launch queue.
 - Added the optional `singleAgent` workflow-catalog function for one inline `context.agent` call with the same request normalization; a process-global name collision leaves the standalone tools available.
+
+### Reliability
+
+- Added bounded completion descriptors for results that do not fit, preserved foreground/background completion envelopes, and kept worktree metadata failures from blocking delivery ([#195](https://github.com/vekexasia/pi-extensible-workflows/issues/195)).
+- Cleared subagent worktree path, branch, and cleanup metadata from status after successful cleanup while retaining it when cleanup fails.
 
 ### Fixes
 
-- Stopped inline workflow and navigator refresh polling after terminal runs and froze terminal snapshots ([#196](https://github.com/vekexasia/pi-extensible-workflows/issues/196)).
+- Stopped inline workflow and navigator refresh polling after terminal runs and froze terminal snapshots ([#196](https://github.com/vekexasia/pi-extensible-workflows/issues/196)); scroll hints now appear only for overflowing views.
+
+### Herdr
+
+- Propagated provider-recovery blocked state to Herdr lifecycle reporting.
 
 ### Packaging and migration
 
 - Added first-class npm discovery, package release checks, publish ordering, shared-version validation, and documentation for `@piewf/subagents`.
 - Documented migration from `@tintinweb/pi-subagents`, including the unsupported cross-session native-session restoration path.
+- Added `@earendil-works/pi-tui` as a peer dependency of the core and CLI packages for the built-in widget; install it alongside these packages.
 
 ## [5.2.0] - 2026-08-06
 
