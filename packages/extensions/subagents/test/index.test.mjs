@@ -197,6 +197,77 @@ test("pins live background subagents below the editor until they settle", async 
   }
 });
 
+test("opens the /subagents picker and inspects durable status without an agent call", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-command-"));
+  const storageDir = join(cwd, "subagents-storage");
+  const firstId = "run-1";
+  const secondId = "run-2";
+  await mkdir(join(storageDir, firstId), { recursive: true });
+  await mkdir(join(storageDir, secondId), { recursive: true });
+  await writeFile(join(storageDir, firstId, "request.json"), JSON.stringify({ prompt: "review", label: "reviewer", role: "critic", mode: "background" }));
+  await writeFile(join(storageDir, secondId, "request.json"), JSON.stringify({ prompt: "summarize", mode: "background" }));
+  const inspectCalls = [];
+  const manager = {
+    async run() { throw new Error("/subagents must not launch a run"); },
+    async inspect(params, context) {
+      inspectCalls.push({ params, context });
+      if (params.id === secondId) return { id: secondId, state: "completed", startedAt: 10, finishedAt: 20, value: "done" };
+      if (params.id === firstId) return { id: firstId, state: "running", startedAt: 10, activity: { kind: "tool", text: "read" } };
+      return [
+        { id: firstId, state: "running", startedAt: 10 },
+        { id: secondId, state: "completed", startedAt: 20, finishedAt: 30 },
+      ];
+    },
+    async steer() {},
+    async stop() {},
+    async retry() {},
+  };
+  const commands = [];
+  const pickerOptions = [];
+  const detailScreens = [];
+  let pickerCount = 0;
+  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const pi = {
+    registerTool() {},
+    registerCommand(name, options) { commands.push({ name, options }); },
+  };
+  registerSubagentsExtension(pi, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      select(title, options) {
+        assert.match(title, /Subagents/);
+        pickerOptions.push([...options]);
+        pickerCount += 1;
+        return Promise.resolve(pickerCount === 1 ? options[1] : "Close");
+      },
+      async custom(factory) {
+        const component = factory({ terminal: { rows: 20 }, requestRender() {} }, theme, { matches(data, binding) { return data === "escape" && binding === "tui.select.cancel"; } }, () => undefined);
+        detailScreens.push(component.render(120).join("\n"));
+      },
+      notify() {},
+    },
+  };
+  try {
+    await command.options.handler("", context);
+    assert.ok(inspectCalls.length >= 2);
+    assert.equal(inspectCalls[0].params.id, undefined);
+    assert.equal(inspectCalls[1].params.id, secondId);
+    assert.equal(inspectCalls.every(({ context: callContext }) => callContext.extensionContext === context), true);
+    assert.match(pickerOptions[0].join("\n"), /label=reviewer.*role=critic/);
+    assert.match(pickerOptions[0].join("\n"), /label=none.*role=none/);
+    assert.match(detailScreens[0], /label=none/);
+    assert.match(detailScreens[0], /role=none/);
+    assert.match(detailScreens[0], /done/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("exposes closed tool schemas and minimal prompt guidance", () => {
   assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "mode", "label", "model", "thinking", "tools", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
   assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.required, ["prompt"]);

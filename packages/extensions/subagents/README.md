@@ -49,6 +49,10 @@ subagents_run({ prompt: "Summarize README.md.", mode: "foreground" })
 # => { "id": "...", "state": "completed", "value": ... }
 ```
 
+## Interactive inspection
+
+In Pi's TUI, `/subagents` opens a picker of durable standalone runs. Select a run to inspect its current or terminal status, including persisted label and role data; requests without a role are shown as `role=none`. The command is read-only, does not invoke the LLM, and refreshes only when you return to the picker.
+
 ## Tools
 
 Every tool schema is a closed object. Unknown properties are rejected. The model-visible standalone surface contains exactly these five names:

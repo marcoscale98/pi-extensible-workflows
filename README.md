@@ -67,7 +67,7 @@ Launches require a non-empty `name` and exactly one of inline `script` or review
 | Agent policy | Roles, model aliases, tool allow-lists, structured output, retries, timeouts, and resource exclusions share one validated configuration model. |
 | Bounded execution | Per-run concurrency and optional aggregate token, cost, duration, and agent-launch budgets constrain work. |
 | Recovery | Failed runs can retry from their completed journal; budget-exhausted runs can resume after an approved budget change. |
-| Operations | `/workflow`, the background widget, durable receipts, status tools, and `piewf` expose live and persisted state. |
+| Operations | `/workflow` and `/subagents`, the background widget, durable receipts, status tools, and `piewf` expose live and persisted state. |
 | Extensibility | Trusted extensions can register reusable workflow functions, dynamic aliases, setup hooks, attempt actions, and role directories. |
 
 ## Execution and recovery

@@ -72,6 +72,8 @@
             <tr><td><code>subagents_retry</code></td><td>Start a fresh run from a failed or stopped request. The new run gets a new ID and preserves the original launch mode.</td></tr>
           </tbody>
         </table></div>
+        <h3>Interactive inspection</h3>
+        <p>In Pi's TUI, <code>/subagents</code> opens a picker of durable standalone runs. Select a run to inspect its current or terminal status without invoking the LLM; persisted labels and roles are shown, with <code>role=none</code> when no role was requested.</p>
         <h3>Background example</h3>
         <pre><code class="language-javascript"><span class="tok-function">subagents_run</span><span class="tok-punctuation">({</span>
   <span class="tok-property">prompt</span><span class="tok-punctuation">:</span> <span class="tok-string">"Review the current changes."</span><span class="tok-punctuation">,</span>

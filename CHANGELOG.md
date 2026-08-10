@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### Subagents
+
+- Added the read-only `/subagents` TUI picker for durable standalone run status, including persisted labels and roles.
+
 ### Documentation
 
 - Reworked the main README as the canonical product and package overview, added dedicated Subagents and Herdr HTML guides, and connected package selection, roles, settings, installation, and extension references across the documentation site.

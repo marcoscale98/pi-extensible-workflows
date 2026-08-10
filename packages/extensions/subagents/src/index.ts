@@ -1,9 +1,11 @@
-import { defineTool, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { defineTool, getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
 import { loadingRegistry, registerWorkflowExtension, WorkflowError, type AgentOptions, type JsonSchema, type WorkflowExtension } from "pi-extensible-workflows";
 import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentStatus, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
+import { registerSubagentNavigator } from "./navigator.js";
 import { createSubagentBackgroundWidget, renderSubagentCall, renderSubagentControlCall, renderSubagentControlResult, renderSubagentInspectCall, renderSubagentInspectResult, renderSubagentResult } from "./view.js";
 import {
   normalizeSingleAgentRequest,
@@ -22,7 +24,7 @@ export { createSubagentManager, createUnavailableSubagentManager } from "./manag
 export { createRunStoreWorktreeAdapter, defaultWorktreeHome } from "./worktree.js";
 export type { SubagentWorktreeAdapter, SubagentWorktreeContext, SubagentWorktreeHandle, SubagentWorktreeRunStore } from "./worktree.js";
 
-type SubagentsExtensionAPI = Pick<ExtensionAPI, "registerTool"> & Partial<Pick<ExtensionAPI, "getActiveTools" | "on" | "sendMessage">>;
+type SubagentsExtensionAPI = Pick<ExtensionAPI, "registerTool"> & Partial<Pick<ExtensionAPI, "getActiveTools" | "on" | "sendMessage" | "registerCommand">>;
 
 function validateSubagentRunRequest(value: unknown): SubagentRunRequest {
   return normalizeSubagentRunRequest(value);
@@ -187,6 +189,10 @@ function managerDependencies(options: SubagentsExtensionOptions, activeTools: ((
   };
   return Object.keys(next).length === 0 ? dependencies : next;
 }
+function storageDirectory(options: SubagentsExtensionOptions): string {
+  const dependencies = options.managerDependencies;
+  return dependencies?.storageDir ?? join(dependencies?.agentDir ?? getAgentDir(), "subagents");
+}
 
 export function createSubagentsExtension(options: SubagentsExtensionOptions = {}, activeTools?: () => readonly string[], notify?: (notification: SubagentNotification) => void | Promise<void>, onStatus?: (status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>) => void): SubagentsExtension {
   const manager = options.manager ?? createSubagentManager(managerDependencies(options, activeTools, notify, onStatus));
@@ -208,6 +214,7 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
   const widget = createSubagentBackgroundWidget();
   const extension = createSubagentsExtension(options, activeTools, notify, (status, request) => { widget.update(status, request); });
   for (const tool of extension.tools) pi.registerTool(tool);
+  if (pi.registerCommand !== undefined) registerSubagentNavigator(pi.registerCommand.bind(pi), extension.manager, storageDirectory(options));
   if (pi.on !== undefined) {
     pi.on("session_start", (_event, context) => { widget.start(context); });
     pi.on("session_shutdown", async () => {
