@@ -272,6 +272,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     } finally { await lifecycle.leave(); }
   };
   const eventPublisher = new WorkflowEventPublisher(piHostCapabilities(pi).events);
+  const reportWorkflowBlocked = (active: boolean, label?: string): void => { try { piHostCapabilities(pi).events?.emit(WORKFLOW_BLOCKED_EVENT, { active, ...(label === undefined ? {} : { label }) }); } catch { /* Workflow state is advisory and must not alter recovery. */ } };
   pi.on("resources_discover", () => {
     if (!pi.getActiveTools().includes("workflow")) return;
     const extensionDir = dirname(fileURLToPath(import.meta.url));
@@ -292,7 +293,6 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     const select = uiCapabilities?.select;
     if (!select) return undefined;
     const hostModels = contextHostCapabilities(host).modelRegistry;
-    const reportBlocked = (active: boolean, label?: string): void => { try { piHostCapabilities(pi).events?.emit(WORKFLOW_BLOCKED_EVENT, { active, ...(label === undefined ? {} : { label }) }); } catch { /* Workflow state is advisory and must not alter recovery. */ } };
     const choose = (title: string, options: string[]) => select.call(ui, title, options);
     const chooseModel = async (failure: AgentProviderFailure): Promise<string | undefined> => {
       const custom = uiCapabilities.custom;
@@ -317,7 +317,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       return await custom.call(ui, (tui, _theme, _keybindings, done) => new ModelSelectorComponent(tui, current, settings as SettingsManager, runtime as ModelRuntime, [], (model) => { done(`${model.provider}/${model.id}`); }, () => { done(undefined); })) as string | undefined;
     };
     return (failure: AgentProviderFailure): Promise<AgentProviderRecovery> => enqueueProviderRecovery(async () => {
-      reportBlocked(true, `Subagent "${failure.label}" failed`);
+      reportWorkflowBlocked(true, `Subagent "${failure.label}" failed`);
       try {
         for (;;) {
           const action = await choose(`Subagent "${failure.label}" failed\nCurrent provider/model: ${failure.provider}/${failure.model}\nProvider error: ${failure.error}\nChoose what to do`, ["Retry", "Change model", "Abort workflow"]);
@@ -331,7 +331,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
           return "abort";
         }
       } finally {
-        reportBlocked(false);
+        reportWorkflowBlocked(false);
       }
     });
   };
@@ -1309,7 +1309,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     },
   };
   pi.registerTool(workflowTool);
-  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow });
+  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked });
   pi.on("session_shutdown", async () => {
     try {
       await Promise.all([...runs.entries()].map(async ([runId, run]) => {

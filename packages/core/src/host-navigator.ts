@@ -18,6 +18,13 @@ type UiInput = (title: string, placeholder?: string) => Promise<string | undefin
 type UiSetStatus = (key: string, text?: string) => void;
 type UiCustom = ExtensionUIContext["custom"];
 export type UiHostCapabilities = { select?: UiSelect; input?: UiInput; setStatus?: UiSetStatus; custom?: UiCustom };
+type UiConfirm = (title: string, message: string) => Promise<boolean>;
+type ReportBlocked = (active: boolean, label?: string) => void;
+async function confirmWithBlocked(ui: { confirm: UiConfirm }, reportBlocked: ReportBlocked | undefined, title: string, message: string): Promise<boolean> {
+  reportBlocked?.(true, title);
+  try { return await ui.confirm(title, message); }
+  finally { reportBlocked?.(false); }
+}
 function isUiSelect(value: unknown): value is UiSelect { return typeof value === "function"; }
 function isUiInput(value: unknown): value is UiInput { return typeof value === "function"; }
 function isUiSetStatus(value: unknown): value is UiSetStatus { return typeof value === "function"; }
@@ -87,9 +94,10 @@ export type WorkflowNavigatorDependencies = {
   projectTrusted: (context: unknown) => boolean;
   resumeHostContext: (context: unknown) => WorkflowRecoveryContext;
   resumeSelectedWorkflow: (runId: string, foreground: boolean, context: unknown, budgetPatch?: unknown) => Promise<{ workflowName: string; state: "running" | "completed" | "awaiting_approval"; attached: boolean; value?: JsonValue }>;
+  reportBlocked?: ReportBlocked;
 };
 export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): void {
-  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow } = deps;
+  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked } = deps;
   pi.registerCommand("workflow", {
     description: "Open the workflow picker; workflow actions are available contextually",
     handler: async (args, ctx) => {
@@ -140,7 +148,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
           }
           if (action === "delete" && stored) {
             if (!hardTerminalRunStates.has(stored.loaded.run.state)) { ctx.ui.notify("Stop the workflow before deleting it.", "warning"); return "dashboard"; }
-            if (!await ctx.ui.confirm("Delete workflow?", `Delete ${stored.loaded.run.workflowName} (${stored.store.runId}) and all owned artifacts? This cannot be undone.`)) return "dashboard";
+            if (!await confirmWithBlocked(ctx.ui, reportBlocked, "Delete workflow?", `Delete ${stored.loaded.run.workflowName} (${stored.store.runId}) and all owned artifacts? This cannot be undone.`)) return "dashboard";
             await stored.store.delete(true); runs.delete(stored.store.runId); terminalRunStates.delete(stored.store.runId); ctx.ui.notify(`Deleted workflow ${stored.store.runId}.`, "info"); return "picker";
           }
           if (action === "pause" && run) { await run.lifecycle.pause(); ctx.ui.notify(`Paused workflow ${run.store.runId}.`, "info"); return "dashboard"; }
@@ -168,7 +176,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
           }
           if (action === "stop" && run) {
             const workflowName = stored?.loaded.run.workflowName ?? run.metadata.name;
-            if (!await ctx.ui.confirm("Stop workflow?", `Stop workflow ${workflowName} (${run.store.runId})? This cannot be undone.`)) return "dashboard";
+            if (!await confirmWithBlocked(ctx.ui, reportBlocked, "Stop workflow?", `Stop workflow ${workflowName} (${run.store.runId})? This cannot be undone.`)) return "dashboard";
             status(`Stopping workflow ${workflowName}...`);
             await stopWorkflowRun(run.store.runId);
             status(`Workflow ${run.store.runId} stopped.`);
@@ -221,7 +229,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
             const parsed = resolveModelReference(target, next, new Set(available()), aliasSettingsPath);
             if (!available().includes(`${parsed.provider}/${parsed.model}`)) {
               ctx.ui.notify(`Warning: ${target} is not currently available in Pi.`, "warning");
-              if (!await ctx.ui.confirm("Save unknown model?", "Save this target for cross-machine portability?")) continue;
+              if (!await confirmWithBlocked(ctx.ui, reportBlocked, "Save unknown model?", "Save this target for cross-machine portability?")) continue;
             }
             save(next);
             continue;
@@ -235,13 +243,13 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
             const parsed = resolveModelReference(target, next, new Set(available()), aliasSettingsPath);
             if (!available().includes(`${parsed.provider}/${parsed.model}`)) {
               ctx.ui.notify(`Warning: ${target} is not currently available in Pi.`, "warning");
-              if (!await ctx.ui.confirm("Save unknown model?", "Save this target for cross-machine portability?")) continue;
+              if (!await confirmWithBlocked(ctx.ui, reportBlocked, "Save unknown model?", "Save this target for cross-machine portability?")) continue;
             }
             save(next);
             continue;
           }
           const deletion = /^Delete (.+)$/.exec(choice);
-          if (deletion?.[1] && await ctx.ui.confirm("Delete model alias?", `Delete ${deletion[1]}? Future workflow resumes using this alias may fail.`)) {
+          if (deletion?.[1] && await confirmWithBlocked(ctx.ui, reportBlocked, "Delete model alias?", `Delete ${deletion[1]}? Future workflow resumes using this alias may fail.`)) {
             const next = Object.fromEntries(Object.entries(aliases).filter(([name]) => name !== deletion[1]));
             save(next);
           }
@@ -265,14 +273,14 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
           if (!runChoice || runChoice === "Close") return;
           if (runChoice === "Model aliases") { await manageAliases(); stores = await loadStores(); continue; }
           if (runChoice === "Delete all completed") {
-            if (!await ctx.ui.confirm("Delete completed runs?", "Delete all completed workflow runs and their artifacts? This cannot be undone.")) continue;
+            if (!await confirmWithBlocked(ctx.ui, reportBlocked, "Delete completed runs?", "Delete all completed workflow runs and their artifacts? This cannot be undone.")) continue;
             for (const entry of sorted) {
               if (entry.loaded.run.state === "completed") { await entry.store.delete(true); runs.delete(entry.store.runId); terminalRunStates.delete(entry.store.runId); }
             }
             ctx.ui.notify("Deleted all completed workflow runs.", "info"); stores = await loadStores(); continue;
           }
           if (runChoice === "Delete all failed") {
-            if (!await ctx.ui.confirm("Delete failed runs?", "Delete all failed workflow runs and their artifacts? This cannot be undone.")) continue;
+            if (!await confirmWithBlocked(ctx.ui, reportBlocked, "Delete failed runs?", "Delete all failed workflow runs and their artifacts? This cannot be undone.")) continue;
             for (const entry of sorted) {
               if (entry.loaded.run.state === "failed") { await entry.store.delete(true); runs.delete(entry.store.runId); terminalRunStates.delete(entry.store.runId); }
             }
@@ -346,7 +354,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
             const liveCandidate = liveAgentSessions.get(`${dashboard.run.id}:${agent.id}`);
             const live = liveCandidate && attempt.session && liveCandidate.reference.transport === attempt.session.transport && liveCandidate.reference.sessionId === attempt.session.sessionId ? liveCandidate : undefined;
             const run = runs.get(dashboard.run.id);
-            const ui = { notify: (message: string, level: "info" | "warning" | "error" = "info") => { ctx.ui.notify(message, level); }, confirm: (title: string, message: string) => ctx.ui.confirm(title, message), select: (title: string, options: readonly string[]) => { return ctx.ui.select(title, [...options]); }, input: (title: string, placeholder?: string) => ctx.ui.input(title, placeholder), setWorkingMessage: (message?: string) => { ctx.ui.setWorkingMessage(message); } };
+            const ui = { notify: (message: string, level: "info" | "warning" | "error" = "info") => { ctx.ui.notify(message, level); }, confirm: (title: string, message: string) => confirmWithBlocked(ctx.ui, reportBlocked, title, message), select: (title: string, options: readonly string[]) => { return ctx.ui.select(title, [...options]); }, input: (title: string, placeholder?: string) => ctx.ui.input(title, placeholder), setWorkingMessage: (message?: string) => { ctx.ui.setWorkingMessage(message); } };
             const attemptSnapshot = deepFreeze(structuredClone(attempt));
             const prepared = live ? liveAgentPrepared.get(`${dashboard.run.id}:${agent.id}`) : undefined;
             const handoff = live ? liveAgentHandoffs.get(`${dashboard.run.id}:${agent.id}`) : undefined;

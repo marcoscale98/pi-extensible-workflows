@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { executeCommand, testExtensionApi } from "./support.js";
-import workflowExtension, { agentActionLabels, createLaunchSnapshot, DEFAULT_SETTINGS, formatAgentDetail, formatNavigatorDashboard, formatNavigatorRun, formatWorkflowPhaseDashboard, registerWorkflowExtension, RunStore, openWorkflowArtifact, WorkflowError } from "../src/index.js";
+import workflowExtension, { agentActionLabels, createLaunchSnapshot, DEFAULT_SETTINGS, formatAgentDetail, formatNavigatorDashboard, formatNavigatorRun, formatWorkflowPhaseDashboard, registerWorkflowExtension, RunStore, openWorkflowArtifact, WorkflowError, WORKFLOW_BLOCKED_EVENT } from "../src/index.js";
 import { testTransport, type TestPiSession } from "./test-transport.js";
 
 type OwnershipNodes = Parameters<RunStore["saveOwnership"]>[0];
@@ -349,11 +349,12 @@ void test("navigator stop asks for confirmation before cancelling", async () => 
   let start: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
   const commands: Array<{ handler: (args: string, ctx: unknown) => Promise<void> }> = [];
   const confirmations: string[] = [];
+  const blockedEvents: unknown[] = [];
   let customCalls = 0;
   let pickerCalls = 0;
   let disposed = false;
   let closeNavigator = () => {};
-  workflowExtension(testExtensionApi({ registerTool() {}, registerCommand(_name: string, options: (typeof commands)[number]) { commands.push(options); }, on(name: string, handler: unknown) { if (name === "session_start") start = handler as typeof start; }, getThinkingLevel: () => "medium" as const, getActiveTools: () => ["workflow"] }), home);
+  workflowExtension(testExtensionApi({ registerTool() {}, registerCommand(_name: string, options: (typeof commands)[number]) { commands.push(options); }, on(name: string, handler: unknown) { if (name === "session_start") start = handler as typeof start; }, events: { emit(name: string, data: unknown) { if (name === WORKFLOW_BLOCKED_EVENT) blockedEvents.push(data); } }, getThinkingLevel: () => "medium" as const, getActiveTools: () => ["workflow"] }), home);
   assert.ok(start && commands[0]);
   const ctx = {
     cwd, mode: "tui", hasUI: true, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" },
@@ -387,6 +388,7 @@ void test("navigator stop asks for confirmation before cancelling", async () => 
   await new Promise((resolve) => setTimeout(resolve, 10));
   for (let attempt = 0; attempt < 20; attempt += 1) { closeNavigator(); await new Promise((resolve) => setTimeout(resolve, 10)); }
   await pending;
+  assert.deepEqual(blockedEvents, [{ active: true, label: "Stop workflow?" }, { active: false }]);
   assert.equal(customCalls, 1);
   assert.equal((await store.load()).run.state, "interrupted");
   assert.deepEqual((await store.loadOwnership()).map(({ state }) => state), ["running"]);
