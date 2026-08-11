@@ -255,7 +255,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   });
   let backgroundWidgetEnabled = true;
   try { backgroundWidgetEnabled = loadSettings(workflowSettingsPath(extensionAgentDir)).backgroundWidget ?? true; } catch { /* Keep the optional UI enabled; the launch path reports settings errors. */ }
-  backgroundWidget(pi, backgroundWidgetEnabled);
+  const backgroundWidgetController = backgroundWidget(pi, backgroundWidgetEnabled);
   const logBridge = (store: RunStore, lifecycle: RunLifecycle, workflowName: string) => async (message: string) => {
     const timestamp = Date.now();
     const bounded = utf8Prefix(message, DELIVERY_LIMIT_BYTES);
@@ -1309,7 +1309,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     },
   };
   pi.registerTool(workflowTool);
-  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked });
+  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked, setNavigatorOpen: (open) => { if (open) backgroundWidgetController.suspend(); else backgroundWidgetController.resume(); } });
   pi.on("session_shutdown", async () => {
     try {
       await Promise.all([...runs.entries()].map(async ([runId, run]) => {

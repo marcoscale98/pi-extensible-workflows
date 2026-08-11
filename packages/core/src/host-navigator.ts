@@ -95,10 +95,11 @@ export type WorkflowNavigatorDependencies = {
   resumeHostContext: (context: unknown) => WorkflowRecoveryContext;
   resumeSelectedWorkflow: (runId: string, foreground: boolean, context: unknown, budgetPatch?: unknown) => Promise<{ workflowName: string; state: "running" | "completed" | "awaiting_approval"; attached: boolean; value?: JsonValue }>;
   reportBlocked?: ReportBlocked;
+  setNavigatorOpen?: (open: boolean) => void;
 };
 export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): void {
-  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked } = deps;
-  pi.registerCommand("workflow", {
+  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked, setNavigatorOpen } = deps;
+  const command = {
     description: "Open the workflow picker; workflow actions are available contextually",
     handler: async (args, ctx) => {
       const command = args.trim();
@@ -748,6 +749,14 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
           }
         }
       }
+    },
+  } satisfies Parameters<ExtensionAPI["registerCommand"]>[1];
+  pi.registerCommand("workflow", {
+    ...command,
+    handler: async (args, ctx) => {
+      setNavigatorOpen?.(true);
+      try { await command.handler(args, ctx); }
+      finally { setNavigatorOpen?.(false); }
     },
   });
 }

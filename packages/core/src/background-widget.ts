@@ -975,8 +975,10 @@ export function renderReceipt(data: Receipt, expanded: boolean, theme: Theme): s
   return lines;
 }
 
-export default function widget(pi: BackgroundWidgetAPI, enabled = true): void {
-  if (!enabled || typeof pi.registerEntryRenderer !== "function" || typeof pi.registerShortcut !== "function" || !pi.events || typeof pi.events.on !== "function") return;
+export interface BackgroundWidgetController { suspend(): void; resume(): void }
+
+export default function widget(pi: BackgroundWidgetAPI, enabled = true): BackgroundWidgetController {
+  if (!enabled || typeof pi.registerEntryRenderer !== "function" || typeof pi.registerShortcut !== "function" || !pi.events || typeof pi.events.on !== "function") return { suspend() {}, resume() {} };
   const eventBus = pi.events;
   const subscribe = (name: string, handler: (event: unknown) => void): (() => void) => eventBus.on?.(name, handler) ?? (() => {});
   const registerEntryRenderer = pi.registerEntryRenderer;
@@ -984,6 +986,7 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): void {
   let context: ExtensionContext | undefined;
   const isTuiContext = (): boolean => context?.hasUI === true && context.mode === "tui";
   let timer: NodeJS.Timeout | undefined;
+  let suspended = false;
   /** True while a frame is on screen, so it is only cleared when there is one. */
   let showing = false;
   let renderFailed = false;
@@ -1138,7 +1141,7 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): void {
 
 
   const paint = (): void => {
-    if (!isTuiContext()) {
+    if (suspended || !isTuiContext()) {
       hide();
       return;
     }
@@ -1332,12 +1335,33 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): void {
   );
 
 
-  const stop = (): void => {
-    sessionGeneration += 1;
+  const stopTimer = (): void => {
     if (timer) clearInterval(timer);
     timer = undefined;
+  };
+  const startTimer = (): void => {
+    if (suspended || timer || !isTuiContext()) return;
+    timer = setInterval(tick, REPAINT_MS);
+    timer.unref();
+  };
+  const suspend = (): void => {
+    suspended = true;
+    stopTimer();
+    hide();
+  };
+  const resume = (): void => {
+    if (!suspended) return;
+    suspended = false;
+    startTimer();
+    tick();
+  };
+
+  const stop = (): void => {
+    sessionGeneration += 1;
+    stopTimer();
     failureEvents.clear();
     hide();
+    context = undefined;
     runs.clear();
     seen.clear();
     receipted.clear();
@@ -1387,10 +1411,7 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): void {
     }
     if (!isTuiContext()) return;
 
-    if (!timer) {
-      timer = setInterval(tick, REPAINT_MS);
-      timer.unref();
-    }
+    startTimer();
 
     tick();
     void reconcile(sessionContext, generation).catch(() => {
@@ -1415,4 +1436,5 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): void {
   });
 
   pi.on("session_shutdown", stop);
+  return { suspend, resume };
 }

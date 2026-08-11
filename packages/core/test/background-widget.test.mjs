@@ -126,9 +126,10 @@ function harness(sessionId = "session-1", options = {}) {
     },
   };
 
-  widget(pi, options.backgroundWidget ?? true);
+  const controller = widget(pi, options.backgroundWidget ?? true);
   return {
     context,
+    controller,
     frames,
     widgets,
     placements,
@@ -203,6 +204,30 @@ void test("draws a tree for a live run and clears it once the run is over", () =
   assert.equal(host.frames.at(-1), undefined, "a finished run leaves the widget at once");
 
   host.shutdown();
+});
+
+void test("suspending hides the widget and stops repainting until resumed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "widget-suspended-"));
+  const directory = writeRun(join(root, "run-1"), runState());
+  const host = harness();
+  host.start();
+  host.emit(WORKFLOW_RUN_STARTED_EVENT, { runId: "run-1", runDirectory: directory, sessionId: "session-1" });
+
+  host.controller.suspend();
+  assert.equal(host.widgets.at(-1), undefined);
+  const suspendedCalls = host.widgets.length;
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
+  host.emit(WORKFLOW_AGENT_STATE_CHANGED_EVENT, { runId: "run-1", runDirectory: directory, sessionId: "session-1" });
+  assert.equal(host.widgets.length, suspendedCalls, "ticks and events stay hidden while suspended");
+
+  host.controller.resume();
+  assert.equal(typeof host.widgets.at(-1), "function");
+  const resumedCalls = host.widgets.length;
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
+  assert.ok(host.widgets.length > resumedCalls, "the repaint timer restarts after the navigator closes");
+
+  host.shutdown();
+  rmSync(root, { recursive: true, force: true });
 });
 
 void test("isolates malformed state from healthy runs", () => {
