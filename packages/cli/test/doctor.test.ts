@@ -778,6 +778,7 @@ else {
   const target = join(process.env.PI_CODING_AGENT_DIR, "npm", "node_modules", "@piewf", "cli");
   rmSync(target, { recursive: true, force: true });
   cpSync(process.env.BUNDLE_ENGINE_SOURCE, target, { recursive: true });
+  rmSync(join(target, "node_modules"), { recursive: true, force: true }); // fixture builds its own node_modules; drop whatever the engine source copied
   mkdirSync(join(target, "node_modules"), { recursive: true });
   symlinkSync(process.env.BUNDLE_CORE_SOURCE, join(target, "node_modules", "pi-extensible-workflows"));
   mkdirSync(join(target, "node_modules", "@earendil-works"), { recursive: true });

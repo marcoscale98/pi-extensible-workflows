@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
-import { InMemoryCredentialStore, type Credential } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, InMemoryModelsStore, type Credential } from "@earendil-works/pi-ai";
 import {
   ModelRuntime,
   createAgentSessionFromServices,
@@ -151,7 +151,7 @@ async function discoverPi(cwd: string, agentDir: string): Promise<DoctorPiState>
   const previousOffline = process.env.PI_OFFLINE;
   process.env.PI_OFFLINE = "1";
   try {
-    const modelRuntime = await ModelRuntime.create({ credentials: await readCredentials(agentDir), modelsPath: join(agentDir, "models.json") });
+    const modelRuntime = await ModelRuntime.create({ credentials: await readCredentials(agentDir), modelsPath: join(agentDir, "models.json"), modelsStore: new InMemoryModelsStore() });
     const services = await createAgentSessionServices({
       cwd,
       agentDir,
