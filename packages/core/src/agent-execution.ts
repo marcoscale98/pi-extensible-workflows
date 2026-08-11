@@ -45,7 +45,7 @@ export interface PiResourceInspection {
   readonly diagnostics: readonly { type: "warning" | "error" | "collision"; message: string; source?: string }[];
   readonly systemPromptSource?: string;
 }
-import type { AgentIdentity, AgentResourceExclusions, AgentResourcePolicy, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
+import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceExclusions, AgentResourcePolicy, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
 import { deepFreeze, jsonObject, jsonValue, object, disabledResources, mergeAgentResourceExclusions, modelAliasName, modelCapability, resolveModelReference, unmatchedResourcePatterns } from "./utils.js";
 import { roleNameOf } from "./types.js";
 import { WorkflowError } from "./types.js";
@@ -56,7 +56,7 @@ import type { RuntimeAgentProgress, RuntimeUsage } from "./runtime/agent-runner.
 import { validateSchema } from "./validation.js";
 import type { RunStore } from "./persistence.js";
 type AgentExecutionRunStore = Pick<RunStore, "recordSystemPrompt" | "validateWorktree" | "worktree" | "snapshotWorktree">;
-export type { AgentInspectionMode, AgentSetup, AgentSetupContext, AgentSetupHook, AgentTransport, AgentTransportContext, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult } from "./types.js";
+export type { AgentAccounting, AgentActivity, AgentInspectionMode, AgentSetup, AgentSetupContext, AgentSetupHook, AgentTransport, AgentTransportContext, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult } from "./types.js";
 export interface AgentBudgetHooks {
   beforeAttempt(): void;
   beforeTurn(): void;
@@ -111,9 +111,7 @@ export interface AgentExecutionRoot {
   agentResourcePolicy?: () => AgentResourcePolicy | Promise<AgentResourcePolicy>;
   runContext?: Readonly<WorkflowRunContext>;
 }
-export interface AgentAccounting { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }
 export interface AgentToolCallProgress { id: string; name: string; state: "running" | "completed" | "failed" }
-export interface AgentActivity { kind: "reasoning" | "tool" | "text"; text: string }
 export interface AgentProgress { accounting: AgentAccounting; toolCalls: readonly AgentToolCallProgress[]; state?: WorkflowAgentSessionState; activity?: AgentActivity; lastEventAt?: number; persist: boolean }
 export interface AgentAttempt { attempt: number; transport: string; session?: WorkflowAgentSessionReference; liveSession?: WorkflowAgentSession; prepared?: Readonly<PreparedAgentSession>; handoff?: LiveSessionHandoff; result?: JsonValue; error?: { code: string; message: string }; accounting: AgentAccounting; setup: AgentSetupSummary }
 export interface AgentExecutionResult { value: JsonValue; attempts: readonly AgentAttempt[]; cwd: string }

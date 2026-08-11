@@ -12,7 +12,7 @@ const SESSION_OWNER_FILE = "owner.json";
 const SESSION_OWNER_WRITE_GRACE_MS = 30_000;
 const RUN_CREATE_TEMP = /^\.([a-zA-Z0-9._-]+)\.(\d+)\.[0-9a-f-]+\.tmp$/;
 
-async function processAlive(pid: number, startedAt?: number): Promise<boolean> {
+export async function processAlive(pid: number, startedAt?: number): Promise<boolean> {
   try { process.kill(pid, 0); } catch (error) { return !isNodeError(error, "ESRCH"); }
   if (startedAt !== undefined && process.platform === "linux") {
     try { if ((await stat(`/proc/${String(pid)}`)).ctimeMs > startedAt) return false; }

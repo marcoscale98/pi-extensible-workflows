@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, link, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
@@ -32,6 +32,7 @@ import {
   type WorkflowAgentSessionState,
   type WorkflowRunContext,
 } from "pi-extensible-workflows";
+import { atomicWriteFile, json as readJson, processAlive } from "pi-extensible-workflows/persistence";
 import {
   SUBAGENT_ATTEMPT_DETAILS_LIMIT,
   SUBAGENT_SYSTEM_PROMPT_LIMIT,
@@ -247,20 +248,9 @@ async function secureDirectory(directory: string): Promise<void> {
 async function atomicJson(path: string, value: unknown): Promise<void> {
   const serialized = JSON.stringify(value);
   if (typeof serialized !== "string") throw new WorkflowError("INTERNAL_ERROR", `Cannot serialize JSON for ${path}`);
-  const temporary = `${path}.${String(process.pid)}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${serialized}\n`, { encoding: "utf8", mode: 0o600 });
-    await rename(temporary, path);
-    await chmod(path, 0o600);
-  } finally {
-    await rm(temporary, { force: true });
-  }
+  await atomicWriteFile(path, `${serialized}\n`);
 }
 
-async function readJson(path: string): Promise<unknown> {
-  const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-  return parsed;
-}
 
 async function currentProcessStart(): Promise<number> {
   if (process.platform === "linux") {
@@ -293,14 +283,6 @@ async function createOwnerMarker(liveness: SubagentLiveness | undefined): Promis
   return { pid, processStart, sessionId, token, acquiredAt: Date.now() };
 }
 
-async function processAlive(pid: number, processStart: number): Promise<boolean> {
-  try { process.kill(pid, 0); } catch (error) { return !isNodeError(error, "ESRCH"); }
-  if (process.platform === "linux") {
-    try { if ((await stat(`/proc/${String(pid)}`)).ctimeMs > processStart) return false; }
-    catch (error) { if (isNodeError(error, "ENOENT")) return false; }
-  }
-  return true;
-}
 
 async function ownerIsLive(owner: SubagentOwnerMarker, liveness: SubagentLiveness | undefined): Promise<boolean> {
   if (liveness?.isLive) {
