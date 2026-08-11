@@ -394,6 +394,7 @@ export class PiRuntimeAgentRunner implements RuntimeAgentRunner {
         const activeSession = session;
         const activeAdapter = adapter;
         report(() => activeAdapter?.snapshot(true) ?? { usage: runtimeUsage(activeSession), toolCalls: [], state: activeSession.getState(), persist: true });
+        //NOTE: best-effort telemetry flush during teardown; the agent failure is rethrown after this block, so dropping the flush must not mask the primary error.
         await flushProgress().catch(() => undefined);
         await flushEvents().catch(() => undefined);
         await flushSystemPrompts().catch(() => undefined);

@@ -93,6 +93,7 @@ export class RunStore {
     this.summaryWrite = write.catch(() => undefined);
     await write;
   }
+  //NOTE: summary.json is an optional derived cache (see OPTIONAL_RUN_FILES); a missed refresh self-heals because every reader (loadSummary, CLI inspector) recomputes from state/journal. Keep this best-effort so a cache hiccup never fails the primary write.
   private refreshSummaryBestEffort(): void { void this.refreshSummary().catch(() => undefined); }
 
   async isComplete(): Promise<boolean> {

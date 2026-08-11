@@ -757,6 +757,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
           if (await answerCheckpoint(runId, label, choice === "Approve", true)) return;
         }
         if (!isForeground() && !signal.aborted && run?.checkpointResolvers.has(path)) deliverBackgroundCheckpoint(metadata.name, runId, { ...input, name: label, path });
+      //NOTE: background checkpoint-UI poll loop; swallow so a transient render error stops polling silently instead of surfacing as an unhandled rejection — the pending checkpoint resolves via the normal delivery path below.
       })().catch(() => undefined);
       return decision;
     };

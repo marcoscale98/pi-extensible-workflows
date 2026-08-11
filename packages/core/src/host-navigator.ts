@@ -528,6 +528,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                   timer = setInterval(() => {
                     if (refreshing || stopRequested) return;
                     refreshing = true;
+                    //NOTE: background dashboard refresh self-heals next tick; swallow so a transient render/read error surfaces as an unhandled rejection instead of refreshing state.
                     void updateDashboard().catch(() => undefined).finally(() => { refreshing = false; });
                   }, 1000);
                   timer.unref();
