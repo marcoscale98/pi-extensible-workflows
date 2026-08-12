@@ -391,8 +391,8 @@ void test("writes one receipt per run, however many events arrive", async () => 
   host.shutdown();
 });
 
-void test("the receipt shows phases, per-agent models, effort and the token split", () => {
-  const lines = renderReceipt({
+void test("the receipt stays compact until expanded, then shows full run details", () => {
+  const receipt = {
     runId: "run-1",
     workflow: "deliver",
     state: "failed",
@@ -406,10 +406,13 @@ void test("the receipt shows phases, per-agent models, effort and the token spli
       { name: "reviewer", state: "failed", model: "fixture-model:xhigh", role: "reviewer", toolCalls: 1, input: 50_000, output: 200, cacheRead: 120_000, costUsd: 0.31, durationMs: 15_000, attempts: 3 },
     ],
     error: "reviewer was interrupted before it answered",
-  }, false, theme);
+  };
 
-  const body = lines.join("\n");
-  assert.match(body, /deliver/);
+  const collapsed = renderReceipt(receipt, false, theme).join("\n");
+  assert.match(collapsed, /deliver/);
+  assert.doesNotMatch(collapsed, /scout|reviewer|run-1/);
+
+  const body = renderReceipt(receipt, true, theme).join("\n");
   assert.match(body, /scout/);
   assert.match(body, /review/);
   assert.match(body, /role scout · via scout-model · 31 calls/);
@@ -417,12 +420,7 @@ void test("the receipt shows phases, per-agent models, effort and the token spli
   assert.match(body, /in 30kt · out 900t · cache 80kt/);
   assert.match(body, /3 attempts/, "a retried agent says so");
   assert.match(body, /interrupted before it answered/);
-  assert.doesNotMatch(body, /run-1/, "the run id stays hidden until expanded");
-
-  assert.match(renderReceipt({
-    runId: "run-1", workflow: "smoke", state: "completed", costUsd: 0, tokens: 0, durationMs: 0,
-    phases: [], phaseBoundaries: [], agents: [],
-  }, true, theme).join("\n"), /run run-1/);
+  assert.match(body, /run run-1/);
 });
 
 void test("resumable runs stay visible until a later terminal state", async () => {
@@ -515,7 +513,7 @@ void test("receipts retain unphased nested agents and granted tools", async () =
     { name: "parent", parentId: undefined, tools: ["read", "grep"], toolCalls: undefined },
     { name: "child", parentId: "parent", tools: ["find"], toolCalls: undefined },
   ]);
-  const body = renderReceipt(receipt, false, theme).map(plain).join("\n");
+  const body = renderReceipt(receipt, true, theme).map(plain).join("\n");
   assert.ok(body.indexOf("parent") < body.indexOf("child"));
   assert.match(body, /read grep/);
   assert.match(body, /find/);
@@ -774,7 +772,7 @@ void test("older receipts still render their tool-call counts", () => {
       phaseBoundaries: [0],
       agents: [{ name: "scout", state: "completed", toolCalls: 31, input: 10, output: 5, cacheRead: 0, costUsd: 0.01, durationMs: 1_000, attempts: 1 }],
     },
-    false,
+    true,
     theme,
   ).map(plain);
 
@@ -933,7 +931,7 @@ void test("a receipt line longer than the terminal is cut, not fatal", () => {
         }],
       },
     },
-    { expanded: false },
+    { expanded: true },
     theme,
   );
 

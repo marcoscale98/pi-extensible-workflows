@@ -890,7 +890,7 @@ export function renderReceipt(data: Receipt, expanded: boolean, theme: Theme): s
     .join(" · ");
 
   const lines = [`${glyph(data.state)} ${theme.bold(data.workflow)} ${theme.fg("muted", headline)}`];
-
+  if (!expanded) return lines;
   data.phases.forEach((phase, index) => {
     const from = data.phaseBoundaries[index] ?? 0;
     const to =
@@ -977,7 +977,7 @@ export function renderReceipt(data: Receipt, expanded: boolean, theme: Theme): s
 
   // The run id is only useful when acting on it (resuming, digging through the
   // run directory), so it stays out of the way until the entry is expanded.
-  if (expanded && data.runId) lines.push(theme.fg("muted", `   run ${data.runId}`));
+  if (data.runId) lines.push(theme.fg("muted", `   run ${data.runId}`));
 
   return lines;
 }
