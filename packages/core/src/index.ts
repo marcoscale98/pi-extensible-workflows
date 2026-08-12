@@ -6,6 +6,7 @@ export * from "./registry.js";
 export * from "./execution.js";
 export * from "./host.js";
 export * from "./workflow-artifacts.js";
+export { formatCost } from "./background-widget.js";
 export { agentActionLabels, formatAgentDetail, navigatorAttentionSortByState, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions } from "./host-view.js";
 export type { AgentDetailPresentation, WorkflowProgressStyles } from "./host-view.js";
 export { default } from "./host.js";

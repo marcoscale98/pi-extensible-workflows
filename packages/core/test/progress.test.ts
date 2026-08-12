@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { contextualWorkflowAction, testExtensionApi, waitForIssue105 } from "./support.js";
-import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, formatNavigatorDashboard, formatNavigatorRun, formatWorkflowPhaseDashboard, formatWorkflowProgress, mergeBudget, RunStore, truncateWorkflowProgress, WORKFLOW_AGENT_STALL_THRESHOLD_MS, type AgentRecord, type PersistedRun } from "../src/index.js";
+import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, formatAgentDetail, formatCost, formatNavigatorDashboard, formatNavigatorRun, formatWorkflowPhaseDashboard, formatWorkflowProgress, mergeBudget, RunStore, truncateWorkflowProgress, WORKFLOW_AGENT_STALL_THRESHOLD_MS, type AgentRecord, type PersistedRun } from "../src/index.js";
+import { navigatorRunLabels } from "../src/host-view.js";
 import { listRunIds } from "../src/persistence.js";
 import { testTransport, type TestPiSession, type TestPiSessionEvent } from "./test-transport.js";
 
@@ -43,6 +44,40 @@ void test("workflow progress shows runtime after the workflow state", () => {
   assert.match(formatWorkflowProgress(run), /\[running\] runtime=12s/);
   assert.match(formatWorkflowProgress({ ...run, state: "completed", usage: { tokens: 0, costUsd: 0, durationMs: 65_432, agentLaunches: 0 } }), /\[completed\] runtime=1m 5s/);
 });
+void test("foreground progress shows compact usage and expanded agent details", () => {
+  const now = 65_432;
+  const agent = makeAgent({
+    state: "completed",
+    model: { provider: "openai-codex", model: "gpt-5.6-sol", thinking: "high" },
+    startedAt: 0,
+    durationMs: now,
+    attempts: 2,
+    accounting: { input: 1_200, output: 300, cacheRead: 40, cacheWrite: 0, cost: 0.001 },
+  });
+  const run = makeRun({
+    workflowName: "accounted",
+    state: "completed",
+    agents: [agent],
+    usage: { tokens: 1_500, costUsd: 0.001, durationMs: now, agentLaunches: 1 },
+  });
+  const collapsed = formatWorkflowProgress(run, "◇", undefined, now);
+  assert.match(collapsed, /\[completed\] 1\.5kt · \$0\.001 runtime=1m 5s/);
+  assert.doesNotMatch(collapsed, /gpt-5\.6-sol|attempt 2/);
+  const expanded = formatWorkflowProgress(run, "◇", undefined, now, true);
+  assert.match(expanded, /gpt-5\.6-sol:high · 1\.5kt · \$0\.001 · 1m 5s · attempt 2/);
+});
+void test("workflow TUI cost views preserve shared sub-cent formatting", () => {
+  const cheap = makeAgent({ accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.001 } });
+  const run = makeRun({ workflowName: "cheap", agents: [cheap] });
+  const snapshot = createLaunchSnapshot({ script: "return true;", args: null, metadata: { name: "cheap" }, settings: DEFAULT_SETTINGS, models: ["openai/gpt"], tools: [], agentTypes: [], schemas: [] });
+  const store = new RunStore("/repo", "session", "run", "/tmp");
+  assert.equal(formatCost(0.001), "$0.001");
+  assert.match(navigatorRunLabels([{ store, loaded: { run } }])[0] ?? "", /\$0\.001/);
+  assert.match(formatNavigatorDashboard(run, [], []), /\$0\.001/);
+  assert.match(formatAgentDetail(cheap).join("\n"), /Cost: \$0\.001/);
+  assert.match(formatNavigatorRun({ run, snapshot }, [], []), /cost=\$0\.001/);
+});
+
 void test("phase tree uses compact state glyphs while details keep activity", () => {
   const agents = [
     { id: "run:1", name: "running", path: "run:1", state: "running" as const, model: { provider: "openai", model: "gpt" }, tools: [], attempts: 1, activity: { kind: "text" as const, text: "responding" } },

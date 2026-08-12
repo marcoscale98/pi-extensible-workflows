@@ -244,7 +244,7 @@ function formatTokens(tokens: number | undefined): string {
   return `${thousands < 10 ? thousands.toFixed(1) : String(Math.round(thousands))}kt`;
 }
 
-function formatCost(cost: number | undefined): string {
+export function formatCost(cost: number | undefined): string {
   if (!cost) return "";
   // Three decimals below a cent: at two, every cheap agent reads as $0.00 and
   // the per-agent column becomes a row of zeroes.
@@ -589,12 +589,13 @@ function renderFrame(runs: readonly Run[], now: number, width: number, offset = 
       .filter(Boolean)
       .join(" · ");
     const budget = budgetWarning(run);
+    const state = run.state ?? "unknown";
     const runKey = `run:${run.id ?? ""}`;
     rows.push({
       rank: 2,
       header: true,
       key: runKey,
-      text: `${mark(run.state, now, paint, run.state)} ${run.workflowName ?? "workflow"}${
+      text: `${mark(state, now, paint, state)} ${paint(ROLE.quiet, `[${state}]`)} ${run.workflowName ?? "workflow"}${
         budget ? `  ${paint(ROLE.warn, budget)}` : ""
       }`,
       right: `${stats ? `${stats} · ` : ""}${formatElapsed(now - run.startedAt)}`,

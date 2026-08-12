@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import widget, { renderReceipt, __navigationForTests } from "../dist/src/background-widget.js";
+import widget, { formatCost, renderReceipt, __navigationForTests } from "../dist/src/background-widget.js";
 import { RunStore } from "../dist/src/persistence.js";
 import {
   WORKFLOW_AGENT_STATE_CHANGED_EVENT,
@@ -34,6 +34,14 @@ const plain = (line) => line.replace(/\x1b\[[0-9;]*m/g, "");
 
 /** Normalizes live animation and elapsed time so repeated row comparisons stay stable. */
 const stableLine = (line) => plain(line).replace(/[⣷⣯⣟⡿⢿⣽⣻]/g, "⣷").replace(/\b\d{2}:\d{2}\b/g, "00:00");
+void test("formats nonzero sub-cent costs with three decimals", () => {
+  assert.equal(formatCost(undefined), "");
+  assert.equal(formatCost(0), "");
+  assert.equal(formatCost(0.001), "$0.001");
+  assert.equal(formatCost(0.0099), "$0.010");
+  assert.equal(formatCost(0.01), "$0.01");
+  assert.equal(formatCost(1.234), "$1.23");
+});
 
 function writeRun(directory, state) {
   mkdirSync(directory, { recursive: true });
@@ -294,22 +302,29 @@ void test("isolates malformed state from healthy runs", () => {
   host.shutdown();
 });
 
-void test("paused and resumable run states use non-running glyphs", () => {
+void test("actionable non-running run states are explicit in the header", () => {
   const root = mkdtempSync(join(tmpdir(), "widget-status-glyphs-"));
   const host = harness();
+  const workflowName = "distinct-workflow";
+  const states = ["paused", "awaiting_input", "interrupted", "budget_exhausted"];
   host.start();
-  for (const state of ["paused", "awaiting_input", "interrupted", "budget_exhausted"]) {
-    const directory = writeRun(join(root, state), runState({ id: state, workflowName: state, state }));
+  for (const state of states) {
+    const directory = writeRun(join(root, state), runState({ id: state, workflowName, state }));
     host.emit(WORKFLOW_RUN_STARTED_EVENT, { runId: state, runDirectory: directory, sessionId: "session-1" });
-    const header = host.frames.at(-1).map(plain).find((line) => line.includes(` ${state} `));
+    const header = host.frames.at(-1).map(plain).find((line) => line.includes(`[${state}]`));
     assert.ok(header);
     const expected = state === "budget_exhausted" ? "✗" : "·";
-    assert.match(header, new RegExp(`${expected} ${state} `), `${state} is not active`);
+    assert.match(header, new RegExp(`${expected} \\[${state}\\] ${workflowName}`), `${state} is explicit`);
     assert.doesNotMatch(header, /[⣷⣯⣟⡿⢿⣽⣻]/, `${state} does not spin`);
   }
 
-  const budgetHeader = host.frames.at(-1).map(plain).find((line) => line.includes(" budget_exhausted "));
-  assert.match(budgetHeader, /✗ budget_exhausted /);
+  const factory = host.widgets.at(-1);
+  assert.equal(typeof factory, "function");
+  const narrow = factory().render(50).map(plain).join("\n");
+  for (const state of states) {
+    assert.match(narrow, new RegExp(`\\[${state}\\]`), `${state} survives a narrow render`);
+  }
+
   host.shutdown();
 });
 
