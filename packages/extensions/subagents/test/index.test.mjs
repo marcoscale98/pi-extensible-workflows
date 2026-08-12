@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
-import { WorkflowError, loadingRegistry, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, loadingRegistry, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
 import extension, {
   createSubagentManager,
   createSubagentTools,
@@ -82,13 +83,21 @@ test("renders subagent calls and background or foreground progress consistently"
   const foregroundState = {};
   const context = { args, state: foregroundState, invalidate() {} };
   const partial = run.renderResult(
-    { content: [], details: { id: "foreground", state: "running", startedAt: Date.now() - 1000, progress: { accounting: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.25 }, toolCalls: [], activity: { kind: "reasoning", text: "thinking" } } } },
+    { content: [], details: { id: "foreground", state: "running", startedAt: Date.now() - 1000, progress: { accounting: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.001 }, toolCalls: [], activity: { kind: "reasoning", text: "thinking" }, lastEventAt: Date.now() } } },
     { expanded: false, isPartial: true },
     theme,
     context,
   ).render(80).join("\n");
   assert.match(partial, /Subagent: scout.*\[running\].*mode=foreground role=reviewer.*runtime=1s/);
   assert.match(partial, /reasoning/);
+  assert.doesNotMatch(partial, /stalled\?/);
+  const staleForeground = run.renderResult(
+    { content: [], details: { id: "foreground", state: "running", startedAt: Date.now() - 1000, progress: { accounting: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.001 }, toolCalls: [], activity: { kind: "reasoning", text: "thinking" }, lastEventAt: Date.now() - WORKFLOW_AGENT_STALL_THRESHOLD_MS - 1 } } },
+    { expanded: false, isPartial: true },
+    theme,
+    context,
+  ).render(80).join("\n");
+  assert.match(staleForeground, /reasoning - stalled\? 10m/);
   assert.ok(foregroundState.subagentSpinner);
 
   const completed = run.renderResult(
@@ -99,7 +108,7 @@ test("renders subagent calls and background or foreground progress consistently"
   ).render(80).join("\n");
   assert.match(completed, /Subagent: scout.*\[completed\]/);
   assert.match(completed, /id=foreground/);
-  assert.match(completed, /tokens=14 cost=\$0\.25/);
+  assert.match(completed, /tokens=14 cost=\$0\.001/);
   assert.equal(foregroundState.subagentSpinner, undefined);
 
   const retry = tools.find(({ name }) => name === "subagents_retry");
@@ -157,18 +166,20 @@ test("renders subagent calls and background or foreground progress consistently"
   assert.match(inspection, /startedAt=1970-01-01T00:00:00\.000Z/);
   assert.match(inspection, /model=fixture\/reviewer:high/);
   assert.match(inspection, /activity=tool read/);
-  assert.match(inspection, /accounting=input=1 output=2 cacheRead=3 cacheWrite=4 cost=0\.5/);
+  assert.match(inspection, /accounting=input=1 output=2 cacheRead=3 cacheWrite=4 cost=\$0\.50/);
   assert.match(inspection, /toolCalls=1.*read \[completed\]/s);
   assert.match(inspection, /value:.*"answer": 42/s);
 });
 
 test("pins live background subagents below the editor until they settle", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-widget-"));
+  await mkdir(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
+  await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ concurrency: 16 }));
   const pending = deferred();
   const started = deferred();
   const cleanupStarted = deferred();
   const releaseCleanup = deferred();
-  let executionOptions;
+  const executionOptions = [];
   const tools = [];
   const handlers = new Map();
   const widgetCalls = [];
@@ -196,7 +207,7 @@ test("pins live background subagents below the editor until they settle", async 
       createExecutor() {
         return {
           async execute(_prompt, options) {
-            executionOptions = options;
+            executionOptions.push(options);
             started.resolve();
             return pending.promise;
           },
@@ -224,15 +235,36 @@ test("pins live background subagents below the editor until they settle", async 
     assert.equal(launch.details.state, "running");
     assert.deepEqual(widgetCalls[0].options, { placement: "belowEditor" });
     assert.match(widgetComponent.render(80).join("\n"), /Subagents \(1 running\).*Subagent: scout.*\[running\].*mode=background role=none/s);
+    for (let index = 1; index < 16; index += 1) {
+      const additional = await run.execute(`widget-call-${String(index)}`, { prompt: `watch ${String(index)}`, label: `scout-${String(index)}`, mode: "background" }, undefined, undefined, context);
+      assert.equal(additional.details.state, "running");
+    }
+    for (const [index, options] of executionOptions.entries()) {
+      await options.onProgress({ accounting: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: `read-${String(index)}` }, lastEventAt: Date.now(), persist: false });
+    }
+    const freshFrame = widgetComponent.render(80).join("\n");
+    assert.doesNotMatch(freshFrame, /stalled\?/);
+    await executionOptions[0].onProgress({ accounting: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: "read-0" }, lastEventAt: Date.now() - WORKFLOW_AGENT_STALL_THRESHOLD_MS - 1, persist: false });
+    const staleFrame = widgetComponent.render(80).join("\n");
+    assert.match(staleFrame, /read-0 - stalled\? 10m/);
+    const frame = widgetComponent.render(80);
+    assert.equal(frame.length, 10);
+    assert.match(frame[0], /Subagents \(16 running\)/);
+    assert.match(frame[1], /Subagent: scout /);
+    assert.match(frame[7], /Subagent: scout-3 /);
+    assert.match(frame[8], /read-3/);
+    assert.equal(frame[9], "… 12 more");
+    const narrowFrame = widgetComponent.render(24);
+    assert.equal(narrowFrame.length, 10);
+    assert.match(narrowFrame[1], /…/);
 
-    await executionOptions.onProgress({ accounting: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: "read" }, lastEventAt: Date.now(), persist: false });
-    assert.match(widgetComponent.render(80).join("\n"), /read/);
     assert.ok(renders > 0);
 
     pending.resolve({ value: "done", attempts: [], cwd });
     await cleanupStarted.promise;
-    assert.equal(widgetCalls.at(-1)?.value, undefined);
     releaseCleanup.resolve();
+    await waitFor(() => widgetCalls.at(-1)?.value === undefined);
+    assert.equal(widgetCalls.at(-1)?.value, undefined);
   } finally {
     releaseCleanup.resolve();
     await handlers.get("session_shutdown")({}, context);
@@ -689,6 +721,77 @@ test("captures steering text inside the detail panel without nesting UI prompts"
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+test("bounds every narrow detail-panel row while preserving scrolling and action selection", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-narrow-"));
+  const storageDir = join(cwd, "storage");
+  const id = "run-narrow";
+  await mkdir(join(storageDir, id), { recursive: true });
+  await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "narrow", label: "narrow", mode: "background" }));
+  const status = { id, sessionId: "session-1", state: "running", startedAt: 1 };
+  const manager = {
+    async run() { throw new Error("unexpected run"); },
+    async inspect(params) { return params.id ? status : [status]; },
+    async steer() {},
+    async stop() {},
+    async retry() {},
+  };
+  const commands = [];
+  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
+  const command = commands.find(({ name }) => name === "subagents");
+  assert.ok(command);
+  const width = 12;
+  let pickerCount = 0;
+  const context = {
+    ...(await executionContext(cwd)),
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      async select(_title, options) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; },
+      async custom(factory) {
+        let closed = false;
+        const tui = { terminal: { rows: 5 }, requestRender() {} };
+        const component = factory(tui, { fg: (_color, text) => text, bold: (text) => text }, { matches(data, binding) { return data === binding || data === "escape" && binding === "tui.select.cancel"; } }, () => { closed = true; });
+        const assertNarrowRows = (rows) => assert.ok(rows.every((row) => visibleWidth(row) <= width), rows.join("\n"));
+        assertNarrowRows(component.render(width));
+        component.handleInput("tui.select.down");
+        assertNarrowRows(component.render(width));
+        component.handleInput("a");
+        assertNarrowRows(component.render(width));
+        let sawActionSection = false;
+        let sawActionRow = false;
+        for (let index = 0; index < 4; index += 1) {
+          component.handleInput("tui.select.pageDown");
+          const frame = component.render(width);
+          assertNarrowRows(frame);
+          sawActionSection ||= frame.some((row) => row.includes("Agent"));
+          sawActionRow ||= frame.some((row) => row.includes("Steer"));
+        }
+        assert.equal(sawActionSection, true);
+        assert.equal(sawActionRow, true);
+        tui.terminal.rows = 30;
+        for (let index = 0; index < 10 && !component.render(80).join("\n").includes("→ Steer"); index += 1) component.handleInput("tui.select.down");
+        assert.match(component.render(80).join("\n"), /→ Steer/);
+        component.handleInput("tui.select.confirm");
+        assertNarrowRows(component.render(width));
+        assert.match(component.render(width).join("\n"), /Steer/);
+        component.handleInput("escape");
+        component.handleInput("escape");
+        component.handleInput("escape");
+        assert.equal(closed, true);
+        return undefined;
+      },
+      notify(message) { throw new Error(message); },
+    },
+  };
+  try {
+    await command.options.handler("", context);
+    assert.equal(pickerCount, 2);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("runs navigator steer, stop, and non-blocking retry actions with state revalidation", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-controls-"));
   const storageDir = join(cwd, "storage");

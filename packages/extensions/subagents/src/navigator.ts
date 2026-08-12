@@ -494,14 +494,15 @@ async function showDetail(manager: SubagentManager, storageDirectory: string, en
     const isDisposed = (): boolean => disposed;
     const renderLines = (width: number): string[] => {
       if (disposed) return [];
+      const renderWidth = Math.max(1, width);
       const options = actionMode ? actionOptions(manager, inspection, context) : [];
-      const detail = detailLines(inspection, theme).map((line) => truncateToWidth(line, Math.max(1, width), "…"));
-      const rows = steerMode ? [...detail, "", theme.bold("Steer subagent"), ...steerEditor.render(Math.max(1, width))] : actionMode ? [...detail, "", theme.bold("Agent actions"), ...options.map((option, index) => `${index === actionIndex ? "→ " : "  "}${index === actionIndex ? theme.fg("accent", option) : option}`)] : detail;
+      const detail = detailLines(inspection, theme).map((line) => truncateToWidth(line, renderWidth, "…"));
+      const rows = steerMode ? [...detail, "", theme.bold("Steer subagent"), ...steerEditor.render(renderWidth)] : actionMode ? [...detail, "", theme.bold("Agent actions"), ...options.map((option, index) => `${index === actionIndex ? "→ " : "  "}${index === actionIndex ? theme.fg("accent", option) : option}`)] : detail;
       const viewport = Math.max(1, tuiRows(tui) - 1);
       const maxOffset = Math.max(0, rows.length - viewport);
       offset = Math.min(offset, maxOffset);
       const hint = theme.fg("dim", steerMode ? "enter submit · esc back" : actionMode ? "↑/↓ actions · enter run · esc back" : "↑/↓ scroll · a actions · enter actions · esc back");
-      return [...rows.slice(offset, offset + viewport), hint];
+      return [...rows.slice(offset, offset + viewport), hint].map((line) => truncateToWidth(line, renderWidth, "…"));
     };
     const runAction = (action: string): void => {
       if (disposed) return;

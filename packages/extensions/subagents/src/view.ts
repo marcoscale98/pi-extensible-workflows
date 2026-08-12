@@ -1,11 +1,13 @@
 import type { AgentToolResult, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { formatCost, formatStalledDuration, WORKFLOW_AGENT_STALL_THRESHOLD_MS } from "pi-extensible-workflows";
 import type { SubagentRunRequest, SubagentStatus } from "./contracts.js";
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const TERMINAL_STATES = new Set<SubagentStatus["state"]>(["completed", "failed", "stopped"]);
 const MAX_INSPECT_VALUE_CHARS = 4000;
 const MAX_INSPECT_TOOL_CALLS = 32;
+const MAX_BACKGROUND_WIDGET_ROWS = 10;
 type SubagentRenderArgs = Partial<SubagentRunRequest> & { id?: string };
 
 type ProgressComponent = ReturnType<typeof subagentProgressBlock>;
@@ -91,11 +93,18 @@ function activity(status: SubagentStatus): string | undefined {
   return [...(status.progress?.toolCalls ?? [])].reverse().find(({ state }) => state === "running")?.name;
 }
 
+function stalledDuration(status: SubagentStatus, now: number): number | undefined {
+  const lastEventAt = status.progress?.lastEventAt;
+  if (status.state !== "running" || lastEventAt === undefined || !Number.isFinite(lastEventAt)) return undefined;
+  const duration = now - lastEventAt;
+  return duration >= WORKFLOW_AGENT_STALL_THRESHOLD_MS ? duration : undefined;
+}
+
 function accounting(status: SubagentStatus): string | undefined {
   const value = status.progress?.accounting;
   if (!value) return undefined;
   const total = value.input + value.output + value.cacheRead + value.cacheWrite;
-  return `tokens=${String(total)} cost=$${value.cost.toFixed(2)}`;
+  return `tokens=${String(total)} cost=${formatCost(value.cost) || "$0.00"}`;
 }
 
 function timestamp(value: number | undefined): string | undefined {
@@ -123,7 +132,9 @@ function formatSubagentProgress(status: SubagentStatus, args: SubagentRenderArgs
     `${theme.fg(color, stateGlyph(status.state, spinner))} ${theme.bold(theme.fg("accent", `Subagent: ${label({ ...args, id: status.id })}`))} ${theme.fg(color, `[${status.state}]`)}${metadata ? ` ${theme.fg("dim", metadata)}` : ""}${elapsed ? ` runtime=${elapsed}` : ""}`,
   ];
   const current = activity(status);
-  if (current) lines.push(`  ${theme.fg("accent", spinner)} ${theme.fg("dim", current)}`);
+  const stalled = stalledDuration(status, now);
+  if (current) lines.push(`  ${theme.fg("accent", spinner)} ${theme.fg("dim", current)}${stalled === undefined ? "" : ` ${theme.fg("warning", `- stalled? ${formatStalledDuration(stalled)}`)}`}`);
+  else if (stalled !== undefined) lines.push(`  ${theme.fg("warning", `stalled? ${formatStalledDuration(stalled)}`)}`);
   if (status.error) lines.push(`  ${theme.fg("error", `${status.error.code}: ${status.error.message}`)}`);
   if (expanded) {
     lines.push(`  ${theme.fg("dim", `id=${status.id}`)}`);
@@ -160,7 +171,7 @@ function formatSubagentInspection(status: SubagentStatus, args: { id?: string },
   const activity = status.progress?.activity;
   if (activity) lines.push(`  ${theme.fg("dim", `activity=${activity.kind}${activity.text ? ` ${activity.text}` : ""}`)}`);
   const accounting = status.progress?.accounting;
-  if (accounting) lines.push(`  ${theme.fg("dim", `accounting=input=${String(accounting.input)} output=${String(accounting.output)} cacheRead=${String(accounting.cacheRead)} cacheWrite=${String(accounting.cacheWrite)} cost=${String(accounting.cost)}`)}`);
+  if (accounting) lines.push(`  ${theme.fg("dim", `accounting=input=${String(accounting.input)} output=${String(accounting.output)} cacheRead=${String(accounting.cacheRead)} cacheWrite=${String(accounting.cacheWrite)} cost=${formatCost(accounting.cost) || "$0.00"}`)}`);
   if (status.worktree) lines.push(`  ${theme.fg("dim", `worktree=${status.worktree.path} branch=${status.worktree.branch}`)}`);
   const toolCalls = status.progress?.toolCalls;
   if (toolCalls?.length) {
@@ -266,9 +277,22 @@ export function createSubagentBackgroundWidget() {
           render(width: number): string[] {
             const now = Date.now();
             const frame = SPINNER[Math.floor(now / 80) % SPINNER.length] ?? "◇";
-            const lines = [theme.bold(theme.fg("accent", `Subagents (${String(runs.size)} running)`))];
-            for (const { status, request } of runs.values()) lines.push(formatSubagentProgress(status, request, theme, frame, now, false));
-            return lines.flatMap((line) => line.split("\n")).map((line) => truncateToWidth(line, Math.max(1, width), "…"));
+            const title = theme.bold(theme.fg("accent", `Subagents (${String(runs.size)} running)`));
+            const blocks = [...runs.values()].map(({ status, request }) => formatSubagentProgress(status, request, theme, frame, now, false).split("\n"));
+            const allRunsFit = blocks.reduce((rows, block) => rows + block.length, 1) <= MAX_BACKGROUND_WIDGET_ROWS;
+            const runRowBudget = allRunsFit ? MAX_BACKGROUND_WIDGET_ROWS - 1 : MAX_BACKGROUND_WIDGET_ROWS - 2;
+            const lines = [title];
+            let runRows = 0;
+            let displayedRuns = 0;
+            for (const block of blocks) {
+              if (runRows + block.length > runRowBudget) break;
+              lines.push(...block);
+              runRows += block.length;
+              displayedRuns += 1;
+            }
+            const hiddenRuns = blocks.length - displayedRuns;
+            if (hiddenRuns > 0) lines.push(`… ${String(hiddenRuns)} more`);
+            return lines.map((line) => truncateToWidth(line, Math.max(1, width), "…"));
           },
           invalidate() {},
         };
