@@ -122,4 +122,3 @@ export async function listRunIds(cwd: string, sessionId: string, home = homedir(
   }
   catch (error) { if (isNodeError(error, "ENOENT")) return []; throw error; }
 }
-

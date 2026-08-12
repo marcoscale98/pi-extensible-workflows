@@ -1,22 +1,42 @@
 # Changelog
 ## Unreleased
 
-### Subagents
+## [5.4.0] - 2026-08-12
 
-- Added the read-only `/subagents` TUI picker for durable standalone run status, including persisted labels and roles.
-- Consolidated subagent inspection snapshots under `progress`, removed system prompts and redundant usage fields from inspection output, and made retry accounting cumulative ([#200](https://github.com/vekexasia/pi-extensible-workflows/issues/200)).
+### Subagents API and migration
+
+- Consolidated the `@piewf/subagents` model-facing API to `subagents_run`, `subagents_inspect`, `subagents_steer`, `subagents_stop`, and `subagents_retry`; replace `subagents_list({})` with `subagents_inspect({})` and replace `subagents_status({ id })` or `subagents_result({ id })` with `subagents_inspect({ id })` ([#198](https://github.com/vekexasia/pi-extensible-workflows/issues/198)).
+- Added foreground standalone subagent runs with durable terminal envelopes, cancellation persistence, retry-mode preservation, and duplicate follow-up suppression; background remains the default, while optional `singleAgent` workflow composition remains inline and does not create a durable standalone run.
+- Added bounded retry metadata and cumulative per-run accounting across internal attempts.
+
+### Subagents TUI and inspection
+
+- Added compact call, progress, inspection, and control renderers plus a bounded background-run widget with stale-run warnings, sub-cent cost display, and width-safe rendering.
+- Added the read-only `/subagents` TUI picker for durable current-session runs, with live refresh, persisted labels and roles, inline steering, lifecycle controls, and shared workflow-agent actions for Herdr, editor, IDs, branches, and worktrees.
+- Consolidated inspection snapshots under `progress`, removed system prompts and redundant usage fields from public inspection output, and kept legacy persisted records readable ([#200](https://github.com/vekexasia/pi-extensible-workflows/issues/200)).
+
+### Workflow progress and navigation
+
+- Separated repeated registered-function invocations into stable occurrence-aware progress groups such as `developUntilApproved #2`, including nested calls, navigator views, and replay/resume ([#199](https://github.com/vekexasia/pi-extensible-workflows/issues/199)).
+- Reworked the background workflow widget to mount once, animate only active runs, rescan at a slower cadence, repaint navigation and elapsed clocks immediately, and suspend while `/workflow` owns the TUI ([#202](https://github.com/vekexasia/pi-extensible-workflows/issues/202)).
+- Collapsed durable workflow receipts to one line by default, while expanded receipts retain phases, agents, accounting, errors, and run IDs.
+- Added explicit live run-state labels, compact token and cost totals, shared sub-cent cost formatting, and expanded per-agent model, usage, runtime, and retry details.
+
+### Reliability and integrations
+
+- Accepted a submitted `workflow_result` even when the provider emitted an empty abort immediately afterward, avoiding an unnecessary recovery prompt.
+- Reported workflow confirmation dialogs as blocked activity so Herdr and other lifecycle observers can represent waits for human input.
+- Kept `piewf doctor` read-only by preventing Pi model discovery from writing a model cache.
+
+### TypeScript and maintenance
+
+- Exported shared workflow/subagent presentation helpers and `formatCost` from the core package.
+- Split the persistence implementation into focused decoder, path, I/O, session-lease, and store modules without changing its public facade, and deduplicated shared domain and persistence helpers.
+- Aligned Pi development dependencies at `0.84.1`.
 
 ### Documentation
 
 - Reworked the main README as the canonical product and package overview, added dedicated Subagents and Herdr HTML guides, and connected package selection, roles, settings, installation, and extension references across the documentation site.
-
-## [5.4.0] - 2026-08-10
-
-### Subagents
-
-- Consolidated the `@piewf/subagents` model-facing API to `subagents_run`, `subagents_inspect`, `subagents_steer`, `subagents_stop`, and `subagents_retry` ([#198](https://github.com/vekexasia/pi-extensible-workflows/issues/198)).
-- Added foreground standalone subagent runs with durable terminal envelopes, cancellation persistence, retry-mode preservation, and duplicate follow-up suppression.
-- Documented the v5.3-to-v5.4 tool mapping and the distinction between foreground standalone runs and optional `singleAgent` workflow composition.
 
 ## [5.3.0] - 2026-08-09
 
@@ -288,6 +308,7 @@
 - Runtime acceptance suite: 24 tests passing.
 - Build, lint, documentation checks, and package dry-run passing.
 
+[5.4.0]: https://github.com/vekexasia/pi-extensible-workflows/compare/v5.3.0...v5.4.0
 [4.0.2]: https://github.com/vekexasia/pi-extensible-workflows/compare/v4.0.1...v4.0.2
 [4.0.1]: https://github.com/vekexasia/pi-extensible-workflows/compare/v3.4.2...v4.0.1
 [3.4.2]: https://github.com/vekexasia/pi-extensible-workflows/compare/v3.4.1...v3.4.2

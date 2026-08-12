@@ -33,4 +33,3 @@ export function structuralPath(...names: string[]): string {
   if (names.length === 0 || names.some((name) => name.trim() === "")) throw new WorkflowError("INVALID_METADATA", "Structural paths require non-empty explicit names");
   return names.map((name) => encodeURIComponent(name)).join("/");
 }
-
