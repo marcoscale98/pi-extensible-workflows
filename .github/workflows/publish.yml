@@ -3,6 +3,7 @@ name: Publish package
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,7 +32,7 @@ jobs:
             echo "Package versions differ: root=$root_version core=$version cli=$cli_version herdr=$herdr_version subagents=$subagents_version" >&2
             exit 1
           fi
-          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
             echo "Tag $GITHUB_REF_NAME does not match package version $version" >&2
             exit 1
           fi
@@ -45,15 +46,19 @@ jobs:
           npm pack --dry-run --json --workspace=packages/cli
           npm pack --dry-run --json --workspace=packages/extensions/herdr
           npm pack --dry-run --json --workspace=packages/extensions/subagents
-      - name: Publish core package
-        run: npm publish --access public
-        working-directory: packages/core
-      - name: Publish CLI package
-        run: npm publish --access public
-        working-directory: packages/cli
-      - name: Publish Herdr package
-        run: npm publish --access public
-        working-directory: packages/extensions/herdr
-      - name: Publish Subagents package
-        run: npm publish --access public
-        working-directory: packages/extensions/subagents
+      - name: Publish missing packages
+        run: |
+          publish() {
+            workspace=$1
+            name=$(node -p "require('./$workspace/package.json').name")
+            version=$(node -p "require('./$workspace/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published"
+            else
+              (cd "$workspace" && npm publish --access public)
+            fi
+          }
+          publish packages/core
+          publish packages/cli
+          publish packages/extensions/herdr
+          publish packages/extensions/subagents
