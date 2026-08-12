@@ -85,14 +85,14 @@ function stateColor(state: SubagentStatus["state"]): "accent" | "success" | "err
 
 function activity(status: SubagentStatus): string | undefined {
   if (status.state !== "running") return undefined;
-  if (status.activity?.kind === "reasoning") return "reasoning";
-  if (status.activity?.kind === "text") return "responding";
-  if (status.activity?.kind === "tool") return status.activity.text;
-  return [...(status.toolCalls ?? [])].reverse().find(({ state }) => state === "running")?.name;
+  if (status.progress?.activity?.kind === "reasoning") return "reasoning";
+  if (status.progress?.activity?.kind === "text") return "responding";
+  if (status.progress?.activity?.kind === "tool") return status.progress.activity.text;
+  return [...(status.progress?.toolCalls ?? [])].reverse().find(({ state }) => state === "running")?.name;
 }
 
 function accounting(status: SubagentStatus): string | undefined {
-  const value = status.accounting;
+  const value = status.progress?.accounting;
   if (!value) return undefined;
   const total = value.input + value.output + value.cacheRead + value.cacheWrite;
   return `tokens=${String(total)} cost=$${value.cost.toFixed(2)}`;
@@ -151,19 +151,21 @@ function formatSubagentInspection(status: SubagentStatus, args: { id?: string },
   lines.push(`  ${theme.fg("dim", `id=${status.id}`)}`);
   const startedAt = timestamp(status.startedAt);
   const finishedAt = timestamp(status.finishedAt);
-  const lastEventAt = timestamp(status.lastEventAt);
+  const lastEventAt = timestamp(status.progress?.lastEventAt);
   if (startedAt) lines.push(`  ${theme.fg("dim", `startedAt=${startedAt}`)}`);
   if (finishedAt) lines.push(`  ${theme.fg("dim", `finishedAt=${finishedAt}`)}`);
   if (lastEventAt) lines.push(`  ${theme.fg("dim", `lastEventAt=${lastEventAt}`)}`);
   const model = status.progress?.state?.model;
   if (model) lines.push(`  ${theme.fg("dim", `model=${model.provider}/${model.model}${model.thinking ? `:${model.thinking}` : ""}`)}`);
-  if (status.activity) lines.push(`  ${theme.fg("dim", `activity=${status.activity.kind}${status.activity.text ? ` ${status.activity.text}` : ""}`)}`);
-  if (status.accounting) lines.push(`  ${theme.fg("dim", `accounting=input=${String(status.accounting.input)} output=${String(status.accounting.output)} cacheRead=${String(status.accounting.cacheRead)} cacheWrite=${String(status.accounting.cacheWrite)} cost=${String(status.accounting.cost)}`)}`);
-  if (status.usage) lines.push(`  ${theme.fg("dim", `usage=tokens=${String(status.usage.tokens.total)} cost=${String(status.usage.cost)}`)}`);
+  const activity = status.progress?.activity;
+  if (activity) lines.push(`  ${theme.fg("dim", `activity=${activity.kind}${activity.text ? ` ${activity.text}` : ""}`)}`);
+  const accounting = status.progress?.accounting;
+  if (accounting) lines.push(`  ${theme.fg("dim", `accounting=input=${String(accounting.input)} output=${String(accounting.output)} cacheRead=${String(accounting.cacheRead)} cacheWrite=${String(accounting.cacheWrite)} cost=${String(accounting.cost)}`)}`);
   if (status.worktree) lines.push(`  ${theme.fg("dim", `worktree=${status.worktree.path} branch=${status.worktree.branch}`)}`);
-  if (status.toolCalls?.length) {
-    lines.push(`  ${theme.fg("dim", `toolCalls=${String(status.toolCalls.length)}`)}`);
-    for (const call of status.toolCalls.slice(-MAX_INSPECT_TOOL_CALLS)) lines.push(`    ${theme.fg("dim", `${call.name} [${call.state}]`)}`);
+  const toolCalls = status.progress?.toolCalls;
+  if (toolCalls?.length) {
+    lines.push(`  ${theme.fg("dim", `toolCalls=${String(toolCalls.length)}`)}`);
+    for (const call of toolCalls.slice(-MAX_INSPECT_TOOL_CALLS)) lines.push(`    ${theme.fg("dim", `${call.name} [${call.state}]`)}`);
   }
   const record = typeof details === "object" && details !== null && !Array.isArray(details) ? details as Record<string, unknown> : undefined;
   if (record && Object.prototype.hasOwnProperty.call(record, "value")) {

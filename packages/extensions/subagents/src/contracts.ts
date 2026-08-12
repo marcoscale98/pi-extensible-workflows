@@ -99,17 +99,13 @@ export function normalizeSingleAgentRequest(value: unknown): SubagentRunRequest 
 export type SubagentInspectRequest = Static<typeof SUBAGENTS_INSPECT_PARAMETERS>;
 export type SubagentIdRequest = Static<typeof SUBAGENTS_ID_PARAMETERS>;
 export type SubagentSteerRequest = Static<typeof SUBAGENTS_STEER_PARAMETERS>;
-export type SubagentUsage = {
-  readonly tokens: {
-    readonly input: number;
-    readonly output: number;
-    readonly cacheRead: number;
-    readonly cacheWrite: number;
-    readonly total: number;
-  };
-  readonly cost: number;
+export type SubagentProgress = {
+  readonly accounting: AgentAccounting;
+  readonly toolCalls: readonly AgentToolCallProgress[];
+  readonly state?: Omit<NonNullable<AgentProgress["state"]>, "systemPrompt">;
+  readonly activity?: AgentActivity;
+  readonly lastEventAt?: number;
 };
-export type SubagentProgress = Pick<AgentProgress, "accounting" | "toolCalls" | "state" | "activity" | "lastEventAt">;
 export interface SubagentStatus {
   readonly id: string;
   readonly sessionId?: string;
@@ -119,14 +115,8 @@ export interface SubagentStatus {
   readonly worktree?: { readonly path: string; readonly branch: string };
   readonly error?: { readonly code: string; readonly message: string };
   readonly progress?: SubagentProgress;
-  readonly activity?: AgentActivity;
-  readonly usage?: SubagentUsage;
-  readonly toolCalls?: readonly AgentToolCallProgress[];
-  readonly accounting?: AgentAccounting;
-  readonly lastEventAt?: number;
   readonly attempts?: number;
   readonly attemptDetails?: readonly AgentAttemptSummary[];
-  readonly systemPrompt?: string;
 }
 export interface SubagentNotification {
   readonly id: string;

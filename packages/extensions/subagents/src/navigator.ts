@@ -3,8 +3,7 @@ import { join } from "node:path";
 import { copyToClipboard, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Editor, truncateToWidth, type EditorTheme } from "@earendil-works/pi-tui";
 import { agentActionLabels, deepFreeze, formatAgentDetail, jsonValue, loadingRegistry, navigatorAttentionSortByState, openWorkflowArtifact, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions, workflowPromptArtifact, workflowResultArtifact, type AgentAttemptSummary, type AgentDetailPresentation, type StandaloneAgentAttemptActionContext, type WorkflowArtifact } from "pi-extensible-workflows";
-import { normalizeSubagentRunRequest, SUBAGENT_ATTEMPT_DETAILS_LIMIT, SUBAGENT_SYSTEM_PROMPT_LIMIT, type SubagentManager, type SubagentManagerContext, type SubagentRunRequest, type SubagentStatus } from "./contracts.js";
-
+import { normalizeSubagentRunRequest, SUBAGENT_ATTEMPT_DETAILS_LIMIT, type SubagentManager, type SubagentManagerContext, type SubagentRunRequest, type SubagentStatus } from "./contracts.js";
 const MAX_DETAIL_TEXT = 4000;
 const MAX_DETAIL_TOOL_CALLS = 32;
 
@@ -38,7 +37,8 @@ function thinkingValue(value: unknown): ModelThinking | undefined { return value
 function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 function nonnegativeInteger(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
 function stringArrayValue(value: unknown): readonly string[] | undefined { return Array.isArray(value) && value.length <= 256 && value.every((item) => typeof item === "string") ? value : undefined; }
-function accountingValue(value: unknown): NonNullable<SubagentStatus["accounting"]> | undefined {
+type SubagentProgress = NonNullable<SubagentStatus["progress"]>;
+function accountingValue(value: unknown): SubagentProgress["accounting"] | undefined {
   const record = objectValue(value);
   if (!record) return undefined;
   const input = record.input;
@@ -49,32 +49,19 @@ function accountingValue(value: unknown): NonNullable<SubagentStatus["accounting
   if (!finiteNumber(input) || !finiteNumber(output) || !finiteNumber(cacheRead) || !finiteNumber(cacheWrite) || !finiteNumber(cost)) return undefined;
   return { input, output, cacheRead, cacheWrite, cost };
 }
-function activityValue(value: unknown): NonNullable<SubagentStatus["activity"]> | undefined {
+function activityValue(value: unknown): NonNullable<SubagentProgress["activity"]> | undefined {
   const record = objectValue(value);
   return record && (record.kind === "reasoning" || record.kind === "tool" || record.kind === "text") && typeof record.text === "string" ? { kind: record.kind, text: record.text } : undefined;
 }
-function toolCallsValue(value: unknown): NonNullable<SubagentStatus["toolCalls"]> | undefined {
+function toolCallsValue(value: unknown): SubagentProgress["toolCalls"] | undefined {
   if (!Array.isArray(value) || value.length > 256) return undefined;
-  const calls: NonNullable<SubagentStatus["toolCalls"]>[number][] = [];
+  const calls: SubagentProgress["toolCalls"][number][] = [];
   for (const item of value) {
     const record = objectValue(item);
     if (!record || typeof record.id !== "string" || typeof record.name !== "string" || record.state !== "running" && record.state !== "completed" && record.state !== "failed") return undefined;
     calls.push({ id: record.id, name: record.name, state: record.state });
   }
   return calls;
-}
-function usageValue(value: unknown): NonNullable<SubagentStatus["usage"]> | undefined {
-  const record = objectValue(value);
-  const tokens = objectValue(record?.tokens);
-  if (!record || !tokens) return undefined;
-  const input = tokens.input;
-  const output = tokens.output;
-  const cacheRead = tokens.cacheRead;
-  const cacheWrite = tokens.cacheWrite;
-  const total = tokens.total;
-  const cost = record.cost;
-  if (!finiteNumber(input) || !finiteNumber(output) || !finiteNumber(cacheRead) || !finiteNumber(cacheWrite) || !finiteNumber(total) || !finiteNumber(cost)) return undefined;
-  return { tokens: { input, output, cacheRead, cacheWrite, total }, cost };
 }
 function sessionReferenceValue(value: unknown): AgentAttemptSummary["session"] | undefined {
   const record = objectValue(value);
@@ -91,7 +78,7 @@ function worktreeValue(value: unknown): { readonly path: string; readonly branch
   const record = objectValue(value);
   return record && typeof record.path === "string" && record.path.trim() && typeof record.branch === "string" && record.branch.trim() ? { path: record.path, branch: record.branch } : undefined;
 }
-function progressValue(value: unknown): NonNullable<SubagentStatus["progress"]> | undefined {
+function progressValue(value: unknown): SubagentProgress | undefined {
   const record = objectValue(value);
   if (!record) return undefined;
   const accounting = accountingValue(record.accounting);
@@ -100,7 +87,7 @@ function progressValue(value: unknown): NonNullable<SubagentStatus["progress"]> 
   const activity = record.activity === undefined ? undefined : activityValue(record.activity);
   if (record.activity !== undefined && activity === undefined) return undefined;
   const rawState = record.state;
-  let state: NonNullable<NonNullable<SubagentStatus["progress"]>["state"]> | undefined;
+  let state: SubagentProgress["state"];
   if (rawState !== undefined) {
     const stateRecord = objectValue(rawState);
     const model = objectValue(stateRecord?.model);
@@ -113,6 +100,15 @@ function progressValue(value: unknown): NonNullable<SubagentStatus["progress"]> 
   const lastEventAt = record.lastEventAt;
   if (lastEventAt !== undefined && !nonnegativeInteger(lastEventAt)) return undefined;
   return { accounting, toolCalls, ...(state === undefined ? {} : { state }), ...(activity === undefined ? {} : { activity }), ...(lastEventAt === undefined ? {} : { lastEventAt }) };
+}
+function legacyProgressValue(record: Record<string, unknown>): SubagentProgress | undefined {
+  const accounting = accountingValue(record.accounting);
+  const toolCalls = toolCallsValue(record.toolCalls);
+  if (!accounting || !toolCalls) return undefined;
+  const activity = record.activity === undefined ? undefined : activityValue(record.activity);
+  const lastEventAt = record.lastEventAt;
+  if (record.activity !== undefined && activity === undefined || lastEventAt !== undefined && !nonnegativeInteger(lastEventAt)) return undefined;
+  return { accounting, toolCalls, ...(activity === undefined ? {} : { activity }), ...(lastEventAt === undefined ? {} : { lastEventAt }) };
 }
 function attemptValue(value: unknown): AgentAttemptSummary | undefined {
   const record = objectValue(value);
@@ -142,8 +138,7 @@ function statusValue(value: unknown): SubagentStatus | undefined {
   if (!record || typeof id !== "string" || !id || state !== "running" && state !== "completed" && state !== "failed" && state !== "stopped") return undefined;
   const startedAt = record.startedAt;
   const finishedAt = record.finishedAt;
-  const lastEventAt = record.lastEventAt;
-  if (startedAt !== undefined && !nonnegativeInteger(startedAt) || finishedAt !== undefined && (!nonnegativeInteger(finishedAt) || typeof startedAt === "number" && finishedAt < startedAt) || lastEventAt !== undefined && !nonnegativeInteger(lastEventAt)) return undefined;
+  if (startedAt !== undefined && !nonnegativeInteger(startedAt) || finishedAt !== undefined && (!nonnegativeInteger(finishedAt) || typeof startedAt === "number" && finishedAt < startedAt)) return undefined;
   const sessionId = record.sessionId;
   if (sessionId !== undefined && (typeof sessionId !== "string" || !sessionId.trim())) return undefined;
   const worktree = record.worktree === undefined ? undefined : worktreeValue(record.worktree);
@@ -154,15 +149,9 @@ function statusValue(value: unknown): SubagentStatus | undefined {
   if (attempts !== undefined && (!nonnegativeInteger(attempts) || attempts < 1)) return undefined;
   const attemptDetails = record.attemptDetails === undefined ? undefined : Array.isArray(record.attemptDetails) ? record.attemptDetails.slice(-SUBAGENT_ATTEMPT_DETAILS_LIMIT).map(attemptValue) : undefined;
   if (record.attemptDetails !== undefined && (!attemptDetails || attemptDetails.some((attempt): attempt is undefined => attempt === undefined))) return undefined;
-  const systemPrompt = record.systemPrompt;
-  if (systemPrompt !== undefined && (typeof systemPrompt !== "string" || systemPrompt.length > SUBAGENT_SYSTEM_PROMPT_LIMIT)) return undefined;
-  const progress = record.progress === undefined ? undefined : progressValue(record.progress);
-  const activity = record.activity === undefined ? undefined : activityValue(record.activity);
-  const toolCalls = record.toolCalls === undefined ? undefined : toolCallsValue(record.toolCalls);
-  const accounting = record.accounting === undefined ? undefined : accountingValue(record.accounting);
-  const usage = record.usage === undefined ? undefined : usageValue(record.usage);
-  if (record.progress !== undefined && progress === undefined || record.activity !== undefined && activity === undefined || record.toolCalls !== undefined && toolCalls === undefined || record.accounting !== undefined && accounting === undefined || record.usage !== undefined && usage === undefined) return undefined;
-  const result: SubagentStatus = {
+  const progress = record.progress === undefined ? legacyProgressValue(record) : progressValue(record.progress);
+  if (record.progress !== undefined && progress === undefined) return undefined;
+  return {
     id,
     ...(sessionId === undefined ? {} : { sessionId }),
     state,
@@ -173,14 +162,7 @@ function statusValue(value: unknown): SubagentStatus | undefined {
     ...(attempts === undefined ? {} : { attempts }),
     ...(attemptDetails === undefined ? {} : { attemptDetails: attemptDetails.filter((attempt): attempt is AgentAttemptSummary => attempt !== undefined) }),
     ...(progress === undefined ? {} : { progress }),
-    ...(activity === undefined ? {} : { activity }),
-    ...(toolCalls === undefined ? {} : { toolCalls }),
-    ...(accounting === undefined ? {} : { accounting }),
-    ...(usage === undefined ? {} : { usage }),
-    ...(systemPrompt === undefined ? {} : { systemPrompt }),
-    ...(lastEventAt === undefined ? {} : { lastEventAt }),
   };
-  return result;
 }
 
 function inspectionValue(value: unknown): { status: SubagentStatus; record: Record<string, unknown> } | undefined {
@@ -256,21 +238,17 @@ function appendValue(lines: string[], title: string, value: unknown): void {
 function latestAttempt(status: SubagentStatus): AgentAttemptSummary | undefined {
   return [...(status.attemptDetails ?? [])].sort((left, right) => right.attempt - left.attempt)[0];
 }
-function usageAccounting(status: SubagentStatus): NonNullable<SubagentStatus["accounting"]> | undefined {
-  if (status.accounting) return status.accounting;
-  if (status.progress?.accounting) return status.progress.accounting;
-  const usage = status.usage;
-  if (!usage) return undefined;
-  return { input: usage.tokens.input, output: usage.tokens.output, cacheRead: usage.tokens.cacheRead, cacheWrite: usage.tokens.cacheWrite, cost: usage.cost };
+function usageAccounting(status: SubagentStatus): SubagentProgress["accounting"] | undefined {
+  return status.progress?.accounting;
 }
 function detailPresentation(inspection: Inspection): AgentDetailPresentation {
   const { status, request } = inspection.entry;
   const attempt = latestAttempt(status);
   const state = status.progress?.state;
-  const activity = status.activity ?? status.progress?.activity;
+  const activity = status.progress?.activity;
   const model = state?.model ?? attempt?.setup.model;
   const tools = state?.tools ?? attempt?.setup.tools;
-  const lastEventAt = status.lastEventAt ?? status.progress?.lastEventAt;
+  const lastEventAt = status.progress?.lastEventAt;
   const attempts = status.attempts ?? attempt?.attempt;
   const accounting = usageAccounting(status);
   const role = requestRole(request);
@@ -305,9 +283,10 @@ function detailLines(inspection: Inspection, theme?: Theme): string[] {
   if (request?.prompt) appendValue(lines, "prompt", request.prompt);
   if (entry.requestError) lines.push(`request=unavailable: ${boundedText(entry.requestError)}`);
   if (status.worktree) lines.push(`worktree=${boundedText(status.worktree.path)} branch=${boundedText(status.worktree.branch)}`);
-  if (status.toolCalls?.length) {
-    lines.push(`toolCalls=${String(status.toolCalls.length)}`);
-    for (const call of status.toolCalls.slice(-MAX_DETAIL_TOOL_CALLS)) lines.push(`  ${boundedText(call.name, 256)} [${call.state}]`);
+  const toolCalls = status.progress?.toolCalls;
+  if (toolCalls?.length) {
+    lines.push(`toolCalls=${String(toolCalls.length)}`);
+    for (const call of toolCalls.slice(-MAX_DETAIL_TOOL_CALLS)) lines.push(`  ${boundedText(call.name, 256)} [${call.state}]`);
   }
   if (Object.prototype.hasOwnProperty.call(record, "value")) appendValue(lines, "value", record.value);
   return lines;
@@ -351,6 +330,9 @@ function standaloneActionContext(manager: SubagentManager, inspection: Inspectio
     ui: Object.freeze(ui),
   };
 }
+function liveSystemPrompt(manager: SubagentManager, status: SubagentStatus): string | undefined {
+  return manager.getAttemptActionData?.(status.id)?.prepared?.systemPrompt;
+}
 function actionOptions(manager: SubagentManager, inspection: Inspection, context: ExtensionCommandContext): string[] {
   const actionContext = standaloneActionContext(manager, inspection, context);
   const extensionLabels = actionContext === undefined ? [] : visibleStandaloneAgentAttemptActions(loadingRegistry().agentAttemptActions(), actionContext).map(([, action]) => action.label);
@@ -359,7 +341,7 @@ function actionOptions(manager: SubagentManager, inspection: Inspection, context
     extensionLabels,
     hasWorktree: inspection.entry.status.worktree !== undefined,
     openPrompt: context.mode === "tui" && inspection.entry.request?.prompt !== undefined,
-    openSystemPrompt: context.mode === "tui" && inspection.entry.status.systemPrompt !== undefined,
+    openSystemPrompt: context.mode === "tui" && liveSystemPrompt(manager, inspection.entry.status) !== undefined,
     openResult: context.mode === "tui" && Object.prototype.hasOwnProperty.call(inspection.record, "value") && jsonValue(value),
     standaloneState: inspection.entry.status.state,
   });
@@ -395,7 +377,7 @@ async function performAction(manager: SubagentManager, storageDirectory: string,
   if (action === "Copy branch" && fresh.entry.status.worktree) { await clipboard(fresh.entry.status.worktree.branch); context.ui.notify("Copied branch.", "info"); return "stay"; }
   if (action === "Copy worktree path" && fresh.entry.status.worktree) { await clipboard(fresh.entry.status.worktree.path); context.ui.notify("Copied worktree path.", "info"); return "stay"; }
   if (action === "Open prompt in editor" && tui && fresh.entry.request?.prompt !== undefined) { await openNavigatorArtifact(context, tui, workflowPromptArtifact(fresh.entry.request.prompt), "agent prompt"); return "stay"; }
-  if (action === "Open system prompt in editor" && tui && fresh.entry.status.systemPrompt !== undefined) { await openNavigatorArtifact(context, tui, workflowPromptArtifact(fresh.entry.status.systemPrompt), "agent system prompt"); return "stay"; }
+  if (action === "Open system prompt in editor" && tui) { const systemPrompt = liveSystemPrompt(manager, fresh.entry.status); if (systemPrompt !== undefined) { await openNavigatorArtifact(context, tui, workflowPromptArtifact(systemPrompt), "agent system prompt"); return "stay"; } }
   if (action === "Open result in editor" && tui && Object.prototype.hasOwnProperty.call(fresh.record, "value") && jsonValue(fresh.record.value)) { await openNavigatorArtifact(context, tui, workflowResultArtifact(fresh.record.value), "agent result"); return "stay"; }
   if (action === "Steer") {
     const message = await context.ui.input("Steer subagent", "Message for the running subagent");

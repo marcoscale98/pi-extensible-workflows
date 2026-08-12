@@ -82,7 +82,7 @@ test("renders subagent calls and background or foreground progress consistently"
   const foregroundState = {};
   const context = { args, state: foregroundState, invalidate() {} };
   const partial = run.renderResult(
-    { content: [], details: { id: "foreground", state: "running", startedAt: Date.now() - 1000, activity: { kind: "reasoning", text: "thinking" }, accounting: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.25 } } },
+    { content: [], details: { id: "foreground", state: "running", startedAt: Date.now() - 1000, progress: { accounting: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.25 }, toolCalls: [], activity: { kind: "reasoning", text: "thinking" } } } },
     { expanded: false, isPartial: true },
     theme,
     context,
@@ -107,7 +107,7 @@ test("renders subagent calls and background or foreground progress consistently"
   const retryState = {};
   const retryContext = { args: { id: "source-subagent-id" }, state: retryState, invalidate() {} };
   const retryPartial = retry.renderResult(
-    { content: [], details: { id: "retried", state: "running", activity: { kind: "tool", text: "read" } } },
+    { content: [], details: { id: "retried", state: "running", progress: { accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: "read" } } } },
     { expanded: false, isPartial: true },
     theme,
     retryContext,
@@ -145,11 +145,7 @@ test("renders subagent calls and background or foreground progress consistently"
         startedAt: 0,
         finishedAt: 1000,
         lastEventAt: 900,
-        progress: { state: { model: { provider: "fixture", model: "reviewer", thinking: "high" } } },
-        activity: { kind: "tool", text: "read" },
-        accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 },
-        usage: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 }, cost: 0.5 },
-        toolCalls: [{ id: "tool-1", name: "read", state: "completed" }],
+        progress: { state: { model: { provider: "fixture", model: "reviewer", thinking: "high" } }, activity: { kind: "tool", text: "read" }, accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 }, toolCalls: [{ id: "tool-1", name: "read", state: "completed" }], lastEventAt: 900 },
         worktree: { path: "/tmp/worktree", branch: "subagent/inspect" },
         value: { answer: 42 },
       },
@@ -391,7 +387,7 @@ test("refreshes an open running subagent detail without overlap and stops at ter
   let detailCalls = 0;
   await mkdir(join(storageDir, id), { recursive: true });
   await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "refresh", label: "refresh", mode: "background" }));
-  const running = { id, sessionId: "session-1", state: "running", startedAt: 1, activity: { kind: "tool", text: "before" } };
+  const running = { id, sessionId: "session-1", state: "running", startedAt: 1, progress: { accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: "before" } } };
   const manager = {
     async run() { throw new Error("unexpected run"); },
     async inspect(params) {
@@ -427,7 +423,7 @@ test("refreshes an open running subagent detail without overlap and stops at ter
         timerCallbacks[0]();
         timerCallbacks[0]();
         assert.equal(detailCalls, 2);
-        refresh.resolve({ ...running, state: "completed", finishedAt: 2, activity: { kind: "text", text: "done" } });
+        refresh.resolve({ ...running, state: "completed", finishedAt: 2, progress: { ...running.progress, activity: { kind: "text", text: "done" } } });
         await flush();
         assert.equal(detailCalls, 2);
         assert.match(component.render(120).join("\n"), /done/);
@@ -544,11 +540,7 @@ test("matches workflow agent detail fields and runs standalone registered and co
     lastEventAt: Date.now() - 601_000,
     attempts: 2,
     attemptDetails: [attempt],
-    systemPrompt: "System instructions",
     progress: { accounting: attempt.accounting, toolCalls: [{ id: "tool", name: "read", state: "completed" }], state: { model: { provider: "fixture", model: "model" }, tools: ["read"] }, activity: { kind: "tool", text: "read" }, lastEventAt: attempt.startedAt },
-    activity: { kind: "tool", text: "read" },
-    accounting: attempt.accounting,
-    toolCalls: [{ id: "tool", name: "read", state: "completed" }],
     worktree: { path: join(cwd, "worktree"), branch: "subagent/run-agent-actions" },
   };
   let actionContext;
@@ -841,10 +833,11 @@ test("opens bounded prompt, system prompt, and result artifacts from the subagen
   await mkdir(join(storageDir, id), { recursive: true });
   await writeFile(join(storageDir, id, "request.json"), JSON.stringify({ prompt: "PROMPT_START", label: "editor", mode: "background" }));
   const attempt = { attempt: 1, transport: "fixture", setup: { hookNames: [], model: { provider: "fixture", model: "model" }, tools: [], cwd }, accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 } };
-  const status = { id, sessionId: "session-1", state: "completed", startedAt: 1, finishedAt: 2, attempts: 1, attemptDetails: [attempt], systemPrompt: "SYSTEM_PROMPT_START" };
+  const status = { id, sessionId: "session-1", state: "completed", startedAt: 1, finishedAt: 2, attempts: 1, attemptDetails: [attempt] };
   const manager = {
     async run() { throw new Error("unexpected run"); },
     async inspect(params) { return params.id ? { ...status, value: { answer: 42 } } : [status]; },
+    getAttemptActionData() { return { attempt, prepared: { cwd, model: { provider: "fixture", model: "model" }, tools: [], sessionLabel: "editor", systemPrompt: "SYSTEM_PROMPT_START" }, signal: new AbortController().signal }; },
     async steer() {},
     async stop() {},
     async retry() {},
@@ -1840,7 +1833,7 @@ test("stop and steer race without affecting a sibling run", async () => {
   }
 });
 
-test("persists latest progress, activity, usage, tool calls, and accounting", async () => {
+test("persists progress under one snapshot without duplicate accounting fields", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-progress-"));
   const storageDir = join(cwd, "subagents-storage");
   const pending = deferred();
@@ -1861,18 +1854,73 @@ test("persists latest progress, activity, usage, tool calls, and accounting", as
   try {
     const run = await manager.run({ prompt: "progress" }, context);
     const status = await (async () => { await waitFor(async () => Boolean((await manager.inspect({ id: run.id }, context)).progress)); return manager.inspect({ id: run.id }, context); })();
-    assert.deepEqual(status.accounting, accounting);
-    assert.deepEqual(status.activity, { kind: "tool", text: "read" });
-    assert.deepEqual(status.toolCalls, toolCalls);
-    assert.deepEqual(status.usage, { tokens: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, total: 14 }, cost: 0.25 });
     assert.deepEqual(status.progress, { accounting, toolCalls, activity: { kind: "tool", text: "read" }, lastEventAt: 123 });
+    for (const field of ["usage", "accounting", "toolCalls", "activity", "lastEventAt"]) assert.equal(status[field], undefined);
+    assert.equal(JSON.stringify(status).includes("systemPrompt"), false);
     pending.resolve({ value: "done", attempts: [], cwd });
     await waitFor(async () => (await manager.inspect({ id: run.id }, context)).state === "completed");
     const restarted = createSubagentManager({ storageDir });
-    assert.deepEqual((await restarted.inspect({ id: run.id }, context)).accounting, accounting);
+    assert.deepEqual((await restarted.inspect({ id: run.id }, context)).progress?.accounting, accounting);
     await restarted.dispose();
   } finally {
     pending.resolve({ value: "cleanup", attempts: [], cwd });
+    await manager.dispose();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+test("keeps retry accounting cumulative while live and at success or failure settlement", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-retry-accounting-"));
+  const storageDir = join(cwd, "subagents-storage");
+  const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  const first = { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.25 };
+  const secondLive = { input: 7, output: 8, cacheRead: 9, cacheWrite: 10, cost: 0.75 };
+  const secondFinal = { input: 11, output: 12, cacheRead: 13, cacheWrite: 14, cost: 1.25 };
+  const setup = { hookNames: [], model: { provider: "fixture", model: "model" }, tools: [], cwd };
+  const ready = { success: deferred(), failure: deferred() };
+  const release = { success: deferred(), failure: deferred() };
+  const add = (left, right) => ({ input: left.input + right.input, output: left.output + right.output, cacheRead: left.cacheRead + right.cacheRead, cacheWrite: left.cacheWrite + right.cacheWrite, cost: left.cost + right.cost });
+  const manager = createSubagentManager({
+    storageDir,
+    createExecutor() {
+      return {
+        async execute(prompt, options) {
+          const firstFailure = { attempt: 1, transport: "fixture", setup, accounting: first, error: { code: "AGENT_FAILED", message: "first attempt" } };
+          const final = { attempt: 2, transport: "fixture", setup, accounting: secondFinal, result: "done" };
+          await options.onAttempt?.({ attempt: 1, transport: "fixture", setup, accounting: zero });
+          await options.onProgress?.({ accounting: first, toolCalls: [], persist: false });
+          await options.onAttempt?.(firstFailure);
+          await options.onAttempt?.({ attempt: 2, transport: "fixture", setup, accounting: zero });
+          await options.onProgress?.({ accounting: secondLive, toolCalls: [], persist: false });
+          ready[prompt].resolve();
+          await release[prompt].promise;
+          if (prompt === "failure") {
+            const error = new Error("second attempt failed");
+            error.attempts = [firstFailure, { ...final, result: undefined, error: { code: "AGENT_FAILED", message: "second attempt" } }];
+            throw error;
+          }
+          return { value: "done", attempts: [firstFailure, final], cwd };
+        },
+      };
+    },
+  });
+  const context = await managerContext(cwd);
+  try {
+    const success = await manager.run({ prompt: "success" }, context);
+    const failure = await manager.run({ prompt: "failure" }, context);
+    await Promise.all([ready.success.promise, ready.failure.promise]);
+    const runningAccounting = add(first, secondLive);
+    assert.deepEqual((await manager.inspect({ id: success.id }, context)).progress?.accounting, runningAccounting);
+    assert.deepEqual((await manager.inspect({ id: failure.id }, context)).progress?.accounting, runningAccounting);
+    release.success.resolve();
+    release.failure.resolve();
+    await waitFor(async () => (await manager.inspect({ id: success.id }, context)).state === "completed");
+    await waitFor(async () => (await manager.inspect({ id: failure.id }, context)).state === "failed");
+    const terminalAccounting = add(first, secondFinal);
+    assert.deepEqual((await manager.inspect({ id: success.id }, context)).progress?.accounting, terminalAccounting);
+    assert.deepEqual((await manager.inspect({ id: failure.id }, context)).progress?.accounting, terminalAccounting);
+  } finally {
+    release.success.resolve();
+    release.failure.resolve();
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
   }
@@ -2652,14 +2700,14 @@ test("tolerates malformed injected attempt setup while retaining valid accountin
     const result = await manager.run({ prompt: "tolerate malformed metadata", mode: "foreground" }, context);
     assert.equal(result.state, "completed");
     const status = await manager.inspect({ id: result.id }, context);
-    assert.deepEqual(status.accounting, accounting);
+    assert.deepEqual(status.progress?.accounting, accounting);
   } finally {
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
   }
 });
 
-test("refreshes and clears the system prompt independently of attempt summary validity", async () => {
+test("excludes the system prompt from every inspection projection", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-system-prompt-refresh-"));
   const attemptsReady = deferred();
   const continueAfterSecond = deferred();
@@ -2698,13 +2746,13 @@ test("refreshes and clears the system prompt independently of attempt summary va
   try {
     const run = await manager.run({ prompt: "system prompt", mode: "background" }, context);
     await attemptsReady.promise;
-    assert.equal((await manager.inspect({ id: run.id }, detailContext)).systemPrompt, "SECOND");
+    assert.equal((await manager.inspect({ id: run.id }, detailContext)).progress?.state?.systemPrompt, undefined);
     continueAfterSecond.resolve();
     await cleared.promise;
-    assert.equal((await manager.inspect({ id: run.id }, detailContext)).systemPrompt, undefined);
+    assert.equal((await manager.inspect({ id: run.id }, detailContext)).progress?.state?.systemPrompt, undefined);
     release.resolve();
     await waitFor(async () => (await manager.inspect({ id: run.id }, context)).state === "completed");
-    assert.equal((await manager.inspect({ id: run.id }, detailContext)).systemPrompt, "FINAL");
+    assert.equal((await manager.inspect({ id: run.id }, detailContext)).progress?.state?.systemPrompt, undefined);
   } finally {
     continueAfterSecond.resolve();
     release.resolve();
@@ -2801,7 +2849,7 @@ test("rejects malformed persisted attempt metadata at the manager boundary", asy
   const manager = createSubagentManager({ storageDir });
   const context = await managerContext(cwd);
   try {
-    for (const [field, value] of [["sessionId", 42], ["attempts", 0], ["attemptDetails", [{}]], ["systemPrompt", 42]]) {
+    for (const [field, value] of [["sessionId", 42], ["attempts", 0], ["attemptDetails", [{}]]]) {
       await writeFile(join(storageDir, id, "status.json"), JSON.stringify({ id, state: "completed", startedAt: 1, [field]: value }));
       await assert.rejects(manager.inspect({ id }, context), (error) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR");
     }
