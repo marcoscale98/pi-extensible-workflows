@@ -239,6 +239,22 @@ void test("mounts once and only animates while a run spins", async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+void test("refreshes elapsed clocks without spinner animation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "widget-elapsed-"));
+  const directory = writeRun(join(root, "run-1"), runState({ state: "paused" }));
+  const host = harness();
+  host.start();
+  host.emit(WORKFLOW_RUN_STARTED_EVENT, { runId: "run-1", runDirectory: directory, sessionId: "session-1" });
+
+  const header = () => host.frames.at(-1).map(plain).find((line) => line.includes(" smoke "));
+  const initial = header();
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 1250));
+  assert.notEqual(header(), initial, "a paused run's elapsed time keeps moving");
+
+  host.shutdown();
+  rmSync(root, { recursive: true, force: true });
+});
+
 
 void test("suspending hides the widget and stops repainting until resumed", async () => {
   const root = mkdtempSync(join(tmpdir(), "widget-suspended-"));
@@ -1137,8 +1153,11 @@ void test("the shortcut scrolls the widget through a tree too tall to show", () 
   host.setEditorText("");
   assert.equal(host.key("\u001b[1;1:1B"), false, "↓ is not claimed at rest");
 
+  const beforeFocus = host.renderRequests;
   shortcut.handler();
+  assert.equal(host.renderRequests, beforeFocus + 1, "entering scroll mode repaints immediately");
   assert.equal(host.key("\u001b[1;1:1B"), true, "and is claimed while scrolling");
+  assert.equal(host.renderRequests, beforeFocus + 2, "scrolling repaints immediately");
   const scrolled = draw();
   assert.notDeepEqual(scrolled, resting, "the window moved");
   assert.ok(scrolled.length <= 10, "still within budget");

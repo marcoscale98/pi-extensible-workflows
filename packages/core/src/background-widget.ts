@@ -1105,15 +1105,18 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
     if (isKeyRelease(data)) return { consume: true };
     if (matchesKey(data, Key.up)) {
       offset = Math.max(0, offset - 1);
+      requestRender?.();
       return { consume: true };
     }
     if (matchesKey(data, Key.down)) {
       offset = Math.min(maxOffset(rowCount, MAX_ROWS - 2), offset + 1);
+      requestRender?.();
       return { consume: true };
     }
     if (matchesKey(data, Key.escape) || data === "q") {
       focused = false;
       offset = 0;
+      requestRender?.();
       return { consume: true };
     }
     focused = false;
@@ -1175,7 +1178,8 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
   const startTimers = (): void => {
     if (!showing || suspended || !isTuiContext()) return;
     if (rescanTimer === undefined) {
-      rescanTimer = setInterval(() => { tick(); }, RESCAN_MS);
+      // Rescans also refresh elapsed clocks for visible runs without a spinner.
+      rescanTimer = setInterval(() => { tick(true); }, RESCAN_MS);
       rescanTimer.unref();
     }
     const animate = needsAnimation();
@@ -1486,6 +1490,7 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
       }
       focused = !focused;
       offset = 0;
+      requestRender?.();
     },
   });
 
