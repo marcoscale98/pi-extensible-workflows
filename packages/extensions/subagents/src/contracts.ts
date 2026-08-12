@@ -14,6 +14,7 @@ export const SUBAGENTS_TOOL_NAMES = [
   "subagents_retry",
 ] as const;
 export const SUBAGENT_ATTEMPT_DETAILS_LIMIT = 1;
+export const SUBAGENT_MAX_RETRIES = 255;
 export const SUBAGENT_SYSTEM_PROMPT_LIMIT = 64 * 1024;
 
 const SUBAGENTS_ROLE_OVERRIDE = Type.Object({
@@ -45,7 +46,7 @@ export const SUBAGENTS_RUN_PARAMETERS = Type.Object({
   role: Type.Optional(Type.Union([Type.String({ description: "Workflow role name" }), SUBAGENTS_ROLE_OVERRIDE])),
   worktree: Type.Optional(Type.String({ description: "Optional named worktree" })),
   outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Optional JSON schema for the result" })),
-  retries: Type.Optional(Type.Integer({ minimum: 0, description: "Optional retry count" })),
+  retries: Type.Optional(Type.Integer({ minimum: 0, maximum: SUBAGENT_MAX_RETRIES, description: "Optional retry count; at most 255 retries" })),
   timeoutMs: Type.Optional(Type.Union([Type.Integer({ minimum: 1, description: "Optional execution timeout in milliseconds" }), Type.Null()])),
 }, { additionalProperties: false });
 

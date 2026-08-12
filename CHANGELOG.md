@@ -4,6 +4,7 @@
 ### Subagents
 
 - Added the read-only `/subagents` TUI picker for durable standalone run status, including persisted labels and roles.
+- Consolidated subagent inspection snapshots under `progress`, removed system prompts and redundant usage fields from inspection output, and made retry accounting cumulative ([#200](https://github.com/vekexasia/pi-extensible-workflows/issues/200)).
 
 ### Documentation
 

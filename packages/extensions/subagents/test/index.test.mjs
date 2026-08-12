@@ -826,7 +826,7 @@ test("navigator skips malformed persisted attempt metadata", async () => {
     await rm(cwd, { recursive: true, force: true });
   }
 });
-test("opens bounded prompt, system prompt, and result artifacts from the subagent navigator", async () => {
+test("opens bounded prompt and result artifacts while terminal runs hide system prompts", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-editors-"));
   const storageDir = join(cwd, "storage");
   const id = "run-editors";
@@ -837,7 +837,6 @@ test("opens bounded prompt, system prompt, and result artifacts from the subagen
   const manager = {
     async run() { throw new Error("unexpected run"); },
     async inspect(params) { return params.id ? { ...status, value: { answer: 42 } } : [status]; },
-    getAttemptActionData() { return { attempt, prepared: { cwd, model: { provider: "fixture", model: "model" }, tools: [], sessionLabel: "editor", systemPrompt: "SYSTEM_PROMPT_START" }, signal: new AbortController().signal }; },
     async steer() {},
     async stop() {},
     async retry() {},
@@ -877,8 +876,8 @@ test("opens bounded prompt, system prompt, and result artifacts from the subagen
           component.handleInput("a");
         };
         component.handleInput("a");
+        assert.doesNotMatch(component.render(140).join("\n"), /Open system prompt in editor/);
         await waitForArtifact("Open prompt in editor", "PROMPT_START");
-        await waitForArtifact("Open system prompt in editor", "SYSTEM_PROMPT_START");
         await waitForArtifact("Open result in editor", '"answer": 42');
         component.handleInput("escape");
         component.handleInput("escape");
@@ -1857,6 +1856,11 @@ test("persists progress under one snapshot without duplicate accounting fields",
     assert.deepEqual(status.progress, { accounting, toolCalls, activity: { kind: "tool", text: "read" }, lastEventAt: 123 });
     for (const field of ["usage", "accounting", "toolCalls", "activity", "lastEventAt"]) assert.equal(status[field], undefined);
     assert.equal(JSON.stringify(status).includes("systemPrompt"), false);
+    await waitFor(async () => { try { return JSON.parse(await readFile(join(storageDir, run.id, "status.json"), "utf8")).progress !== undefined; } catch { return false; } });
+    const persisted = JSON.parse(await readFile(join(storageDir, run.id, "status.json"), "utf8"));
+    assert.deepEqual(persisted.progress, status.progress);
+    assert.equal(JSON.stringify(persisted).includes("systemPrompt"), false);
+    for (const field of ["usage", "accounting", "toolCalls", "activity", "lastEventAt"]) assert.equal(persisted[field], undefined);
     pending.resolve({ value: "done", attempts: [], cwd });
     await waitFor(async () => (await manager.inspect({ id: run.id }, context)).state === "completed");
     const restarted = createSubagentManager({ storageDir });
@@ -1889,6 +1893,7 @@ test("keeps retry accounting cumulative while live and at success or failure set
           await options.onAttempt?.({ attempt: 1, transport: "fixture", setup, accounting: zero });
           await options.onProgress?.({ accounting: first, toolCalls: [], persist: false });
           await options.onAttempt?.(firstFailure);
+          await options.onProgress?.({ accounting: { input: 99, output: 99, cacheRead: 99, cacheWrite: 99, cost: 99 }, toolCalls: [], persist: false });
           await options.onAttempt?.({ attempt: 2, transport: "fixture", setup, accounting: zero });
           await options.onProgress?.({ accounting: secondLive, toolCalls: [], persist: false });
           ready[prompt].resolve();
@@ -2812,10 +2817,12 @@ test("loads legacy oversized progress metadata without breaking the picker list"
   const storageDir = join(cwd, "storage");
   const goodId = "11111111-1111-4111-8111-111111111111";
   const legacyId = "22222222-2222-4222-8222-222222222222";
+  const legacyTopLevelId = "44444444-4444-4444-8444-444444444444";
   const invalidId = "33333333-3333-4333-8333-333333333333";
   const accounting = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 };
   await mkdir(join(storageDir, goodId), { recursive: true });
   await mkdir(join(storageDir, legacyId), { recursive: true });
+  await mkdir(join(storageDir, legacyTopLevelId), { recursive: true });
   await mkdir(join(storageDir, invalidId), { recursive: true });
   await writeFile(join(storageDir, goodId, "status.json"), JSON.stringify({ id: goodId, state: "completed", startedAt: 1 }));
   await writeFile(join(storageDir, legacyId, "status.json"), JSON.stringify({
@@ -2824,16 +2831,30 @@ test("loads legacy oversized progress metadata without breaking the picker list"
     startedAt: 2,
     progress: { accounting, toolCalls: [], state: { model: { provider: "fixture", model: "model" }, tools: [], systemPrompt: "x".repeat(70_000) } },
   }));
+  await writeFile(join(storageDir, legacyTopLevelId, "status.json"), JSON.stringify({
+    id: legacyTopLevelId,
+    state: "completed",
+    startedAt: 3,
+    accounting,
+    usage: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 }, cost: 0.5 },
+    systemPrompt: "legacy system prompt",
+  }));
   await writeFile(join(storageDir, invalidId, "status.json"), JSON.stringify({ id: invalidId, state: "completed", startedAt: "invalid" }));
   const manager = createSubagentManager({ storageDir });
   const context = await managerContext(cwd);
   try {
     const statuses = await manager.inspect({}, context);
-    assert.deepEqual(statuses.map(({ id }) => id), [goodId, legacyId]);
+    assert.deepEqual(statuses.map(({ id }) => id), [goodId, legacyId, legacyTopLevelId]);
     const legacy = statuses.find(({ id }) => id === legacyId);
     assert.equal(legacy?.progress?.state?.systemPrompt, undefined);
     assert.equal(legacy?.attemptDetails, undefined);
     assert.equal(legacy?.systemPrompt, undefined);
+    const legacyTopLevel = statuses.find(({ id }) => id === legacyTopLevelId);
+    assert.deepEqual(legacyTopLevel?.progress, { accounting, toolCalls: [] });
+    assert.equal(legacyTopLevel?.usage, undefined);
+    assert.equal(legacyTopLevel?.accounting, undefined);
+    assert.equal(legacyTopLevel?.toolCalls, undefined);
+    assert.equal(JSON.stringify(legacyTopLevel).includes("systemPrompt"), false);
   } finally {
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });

@@ -49,6 +49,16 @@ function accountingValue(value: unknown): SubagentProgress["accounting"] | undef
   if (!finiteNumber(input) || !finiteNumber(output) || !finiteNumber(cacheRead) || !finiteNumber(cacheWrite) || !finiteNumber(cost)) return undefined;
   return { input, output, cacheRead, cacheWrite, cost };
 }
+function legacyAccountingValue(record: Record<string, unknown>): SubagentProgress["accounting"] | undefined {
+  const accounting = accountingValue(record.accounting);
+  if (record.accounting !== undefined && !accounting) return undefined;
+  const usage = record.usage;
+  if (usage === undefined) return accounting;
+  const usageRecord = objectValue(usage);
+  const tokens = objectValue(usageRecord?.tokens);
+  if (!usageRecord || !tokens || !finiteNumber(tokens.input) || !finiteNumber(tokens.output) || !finiteNumber(tokens.cacheRead) || !finiteNumber(tokens.cacheWrite) || !finiteNumber(tokens.total) || !finiteNumber(usageRecord.cost)) return undefined;
+  return accounting ?? { input: tokens.input, output: tokens.output, cacheRead: tokens.cacheRead, cacheWrite: tokens.cacheWrite, cost: usageRecord.cost };
+}
 function activityValue(value: unknown): NonNullable<SubagentProgress["activity"]> | undefined {
   const record = objectValue(value);
   return record && (record.kind === "reasoning" || record.kind === "tool" || record.kind === "text") && typeof record.text === "string" ? { kind: record.kind, text: record.text } : undefined;
@@ -102,8 +112,8 @@ function progressValue(value: unknown): SubagentProgress | undefined {
   return { accounting, toolCalls, ...(state === undefined ? {} : { state }), ...(activity === undefined ? {} : { activity }), ...(lastEventAt === undefined ? {} : { lastEventAt }) };
 }
 function legacyProgressValue(record: Record<string, unknown>): SubagentProgress | undefined {
-  const accounting = accountingValue(record.accounting);
-  const toolCalls = toolCallsValue(record.toolCalls);
+  const accounting = legacyAccountingValue(record);
+  const toolCalls = record.toolCalls === undefined ? [] : toolCallsValue(record.toolCalls);
   if (!accounting || !toolCalls) return undefined;
   const activity = record.activity === undefined ? undefined : activityValue(record.activity);
   const lastEventAt = record.lastEventAt;
