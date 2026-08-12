@@ -91,6 +91,8 @@ function harness(sessionId = "session-1", options = {}) {
   const inputHandlers = [];
   let editorText = "";
   let renderer;
+  let widgetComponent;
+  let renderRequests = 0;
 
   const pi = {
     on: (name, handler) => { handlers.set(name, handler); },
@@ -105,6 +107,11 @@ function harness(sessionId = "session-1", options = {}) {
     registerShortcut: (shortcut, options) => { shortcuts.set(shortcut, options); },
   };
 
+  tui.requestRender = () => {
+    renderRequests += 1;
+    if (widgetComponent) frames.push(widgetComponent.render(WIDTH));
+  };
+
   const context = {
     hasUI: options.hasUI ?? true,
     mode: options.mode ?? "tui",
@@ -116,7 +123,8 @@ function harness(sessionId = "session-1", options = {}) {
       setWidget: (_key, value, options) => {
         widgets.push(value);
         placements.push(options?.placement);
-        frames.push(typeof value === "function" ? value(tui, theme).render(WIDTH) : value);
+        widgetComponent = typeof value === "function" ? value(tui, theme) : undefined;
+        frames.push(widgetComponent ? widgetComponent.render(WIDTH) : value);
       },
       onTerminalInput: (handler) => {
         inputHandlers.push(handler);
@@ -135,6 +143,7 @@ function harness(sessionId = "session-1", options = {}) {
     placements,
     entries,
     tui,
+    get renderRequests() { return renderRequests; },
     shortcuts,
     setEditorText: (text) => { editorText = text; },
     // Feed a keystroke the way the host does: every handler sees it until one
@@ -202,9 +211,34 @@ void test("draws a tree for a live run and clears it once the run is over", () =
   writeRun(directory, runState({ state: "completed", agents: [] }));
   host.emit(WORKFLOW_AGENT_STATE_CHANGED_EVENT, { runId: "run-1", runDirectory: directory, sessionId: "session-1" });
   assert.equal(host.frames.at(-1), undefined, "a finished run leaves the widget at once");
-
   host.shutdown();
 });
+
+void test("mounts once and only animates while a run spins", async () => {
+  const root = mkdtempSync(join(tmpdir(), "widget-lifecycle-"));
+  const directory = writeRun(join(root, "run-1"), runState());
+  const host = harness();
+  host.start();
+  host.emit(WORKFLOW_RUN_STARTED_EVENT, { runId: "run-1", runDirectory: directory, sessionId: "session-1" });
+
+  const mountedCalls = host.widgets.length;
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 350));
+  assert.equal(host.widgets.length, mountedCalls, "animation does not remount the widget");
+  assert.ok(host.renderRequests > 0, "an active spinner requests animation renders");
+
+  const beforePause = host.renderRequests;
+  writeRun(directory, runState({ state: "paused" }));
+  host.emit(WORKFLOW_RUN_STATE_CHANGED_EVENT, { runId: "run-1", runDirectory: directory, sessionId: "session-1", state: "paused" });
+  assert.equal(host.renderRequests, beforePause + 1, "a state change requests one render");
+  const pausedRenders = host.renderRequests;
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 350));
+  assert.equal(host.widgets.length, mountedCalls, "a paused run stays mounted");
+  assert.equal(host.renderRequests, pausedRenders, "a paused run stops animation renders");
+
+  host.shutdown();
+  rmSync(root, { recursive: true, force: true });
+});
+
 
 void test("suspending hides the widget and stops repainting until resumed", async () => {
   const root = mkdtempSync(join(tmpdir(), "widget-suspended-"));
@@ -222,9 +256,9 @@ void test("suspending hides the widget and stops repainting until resumed", asyn
 
   host.controller.resume();
   assert.equal(typeof host.widgets.at(-1), "function");
-  const resumedCalls = host.widgets.length;
+  const resumedRenders = host.renderRequests;
   await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
-  assert.ok(host.widgets.length > resumedCalls, "the repaint timer restarts after the navigator closes");
+  assert.ok(host.renderRequests > resumedRenders, "the repaint timer restarts after the navigator closes");
 
   host.shutdown();
   rmSync(root, { recursive: true, force: true });
@@ -757,8 +791,8 @@ void test("shell activity appears without an event to announce it", async () => 
     activeShellsByPhase: [{ phaseIndex: 0, active: 1, startedAt: Date.now() - 30_000 }],
   });
 
-  // Wait past one repaint without emitting anything.
-  await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
+  // Wait past the separate filesystem rescan without emitting anything.
+  await new Promise((resolve) => globalThis.setTimeout(resolve, 1200));
 
   assert.match(host.frames.at(-1).map(plain).join("\n"), /1 command/, "the widget noticed on its own");
 

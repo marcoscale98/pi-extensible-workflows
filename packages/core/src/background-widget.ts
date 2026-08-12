@@ -10,7 +10,7 @@
  *
  * Run state arrives as workflow events; the numbers behind it (tokens, cost,
  * per-agent accounting) live only in the run's state.json, so an event is a
- * signal to re-read rather than the data itself. The repaint timer checks for
+ * signal to re-read rather than the data itself. A slower rescan timer checks for
  * changed state files without reparsing unchanged runs.
  */
 
@@ -47,6 +47,12 @@ const ENTRY_TYPE = "piewf-run-receipt";
  * stutter; the underlying data is only re-read when an event says it changed.
  */
 const REPAINT_MS = 125;
+
+/**
+ * Filesystem rescan interval. Shell-only activity has no event, but it does not
+ * need to be polled at the animation cadence.
+ */
+const RESCAN_MS = 1000;
 
 /**
  * Rows the widget will occupy, border included.
@@ -460,6 +466,7 @@ function phaseSlices(run: Run): PhaseSlice[] {
 interface TuiHandle {
   hasOverlay?: () => boolean;
   getFocusedComponent?: () => unknown;
+  requestRender?: () => void;
 }
 
 interface Row {
@@ -985,7 +992,9 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
   const registerShortcut = pi.registerShortcut;
   let context: ExtensionContext | undefined;
   const isTuiContext = (): boolean => context?.hasUI === true && context.mode === "tui";
-  let timer: NodeJS.Timeout | undefined;
+  let animationTimer: NodeJS.Timeout | undefined;
+  let rescanTimer: NodeJS.Timeout | undefined;
+  let requestRender: (() => void) | undefined;
   let suspended = false;
   /** True while a frame is on screen, so it is only cleared when there is one. */
   let showing = false;
@@ -1060,7 +1069,18 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
     size.rows = 0;
     host = undefined;
   };
+  const stopAnimationTimer = (): void => {
+    if (animationTimer !== undefined) clearInterval(animationTimer);
+    animationTimer = undefined;
+  };
+  const stopRescanTimer = (): void => {
+    if (rescanTimer !== undefined) clearInterval(rescanTimer);
+    rescanTimer = undefined;
+  };
   const hide = (): void => {
+    stopAnimationTimer();
+    stopRescanTimer();
+    requestRender = undefined;
     if (showing) {
       try { context?.ui.setWidget(KEY, undefined); } catch { /* A failed repaint is already being cleared. */ }
     }
@@ -1106,7 +1126,7 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
   };
 
 
-  /** Re-read one run's state. Called on events, never on the repaint timer. */
+  /** Re-read one run's state. Called on events, never on the animation timer. */
   const refresh = (runId: string, directory: string, runSessionId: string): void => {
     // A run filed under another session belongs to another window's widget.
     if (runSessionId !== sessionId() || receipted.has(runId)) return;
@@ -1140,17 +1160,54 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
   };
 
 
-  const paint = (): void => {
+  const hasVisibleRun = (): boolean => {
+    for (const run of runs.values()) {
+      if (isRunLive(run.state) && run.delivery?.mode !== "foreground") return true;
+    }
+    return false;
+  };
+  const needsAnimation = (): boolean => {
+    for (const run of runs.values()) {
+      if (run.state === "running" && run.delivery?.mode !== "foreground") return true;
+    }
+    return false;
+  };
+  const startTimers = (): void => {
+    if (!showing || suspended || !isTuiContext()) return;
+    if (rescanTimer === undefined) {
+      rescanTimer = setInterval(() => { tick(); }, RESCAN_MS);
+      rescanTimer.unref();
+    }
+    const animate = needsAnimation();
+    if (animate && animationTimer === undefined) {
+      animationTimer = setInterval(() => {
+        try {
+          if (renderFailed || !showing || !needsAnimation()) {
+            stopAnimationTimer();
+            return;
+          }
+          requestRender?.();
+        } catch {
+          hide();
+        }
+      }, REPAINT_MS);
+      animationTimer.unref();
+    } else if (!animate) {
+      stopAnimationTimer();
+    }
+  };
+  const paint = (stateChanged = false): void => {
     if (suspended || !isTuiContext()) {
       hide();
       return;
     }
-    if (renderFailed) {
+    if (renderFailed || !hasVisibleRun()) {
       hide();
       return;
     }
-    if (![...runs.values()].some((run) => isRunLive(run.state) && run.delivery?.mode !== "foreground")) {
-      hide();
+    if (showing) {
+      startTimers();
+      if (stateChanged) requestRender?.();
       return;
     }
 
@@ -1164,51 +1221,57 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
     // glance down at, not something standing between the conversation and
     // the place you type.
     showing = true;
-    context?.ui.setWidget(
-      KEY,
-      (tui: TuiHandle, theme: Theme) => {
-        // Held so the input handler can ask who owns the keyboard right now.
-        host = tui;
-        return {
-          render: (width: number): string[] => {
-            try {
-              // The layout is composed against a floor of twenty columns, because
-              // a tree drawn narrower than that is unreadable anyway — but what
-              // leaves this function is measured against the width Pi actually
-              // gave. A pane narrower than the floor gets a cut frame; it does
-              // not get a crash, and pi-tui treats an over-wide line as fatal.
-              const usable = Math.max(20, width);
-              const frame = renderFrame([...runs.values()], Date.now(), usable, focused ? offset : 0, theme, focused, size);
-              if (frame === undefined) {
+    try {
+      context?.ui.setWidget(
+        KEY,
+        (tui: TuiHandle, theme: Theme) => {
+          // Held so the input handler can ask who owns the keyboard right now.
+          host = tui;
+          requestRender = () => { tui.requestRender?.(); };
+          return {
+            render: (width: number): string[] => {
+              try {
+                // The layout is composed against a floor of twenty columns, because
+                // a tree drawn narrower than that is unreadable anyway — but what
+                // leaves this function is measured against the width Pi actually
+                // gave. A pane narrower than the floor gets a cut frame; it does
+                // not get a crash, and pi-tui treats an over-wide line as fatal.
+                const usable = Math.max(20, width);
+                const frame = renderFrame([...runs.values()], Date.now(), usable, focused ? offset : 0, theme, focused, size);
+                if (frame === undefined) {
+                  renderFailed = true;
+                  inputUnsubscribe?.();
+                  inputUnsubscribe = undefined;
+                  resetNavigation();
+                  return [];
+                }
+                // The keys track the body rows exactly, so they say how far the
+                // cursor may travel — the lid and the floor are not rows to land on.
+                rowCount = size.rows;
+                offset = Math.min(offset, maxOffset(rowCount, MAX_ROWS - 2));
+                return frame.map((line) =>
+                  visibleLength(line) > width ? truncate(line, width) : line,
+                );
+              } catch {
                 renderFailed = true;
                 inputUnsubscribe?.();
                 inputUnsubscribe = undefined;
                 resetNavigation();
                 return [];
               }
-              // The keys track the body rows exactly, so they say how far the
-              // cursor may travel — the lid and the floor are not rows to land on.
-              rowCount = size.rows;
-              offset = Math.min(offset, maxOffset(rowCount, MAX_ROWS - 2));
-              return frame.map((line) =>
-                visibleLength(line) > width ? truncate(line, width) : line,
-              );
-            } catch {
-              renderFailed = true;
-              inputUnsubscribe?.();
-              inputUnsubscribe = undefined;
-              resetNavigation();
-              return [];
-            }
-          },
-          invalidate: (): void => {
-            // Nothing is cached between frames; every render reads current state.
-          },
-        };
-      },
-      { placement: "belowEditor" },
-    );
-    installInput();
+            },
+            invalidate: (): void => {
+              // Nothing is cached between frames; every render reads current state.
+            },
+          };
+        },
+        { placement: "belowEditor" },
+      );
+      installInput();
+      startTimers();
+    } catch {
+      hide();
+    }
   };
 
   /**
@@ -1220,11 +1283,13 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
    * run is cheap next to parsing one — the check costs a few microseconds and
    * only the changed file is read.
    */
-  const rescan = (): void => {
+  const rescan = (): boolean => {
+    let changed = false;
     for (const [runId, run] of runs) {
       if (receipted.has(runId)) {
         runs.delete(runId);
         seen.delete(runId);
+        changed = true;
         continue;
       }
       try {
@@ -1234,18 +1299,20 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
         const fresh = readRun(run.directory);
         if (fresh) {
           runs.set(runId, run.waiting ? { ...fresh, waiting: run.waiting } : fresh);
+          changed = true;
           if (isRunTerminal(fresh.state) && !awaitingDedicatedReceipt.has(runId)) receipt(runId);
         }
       } catch {
         // The run's directory went away, or is mid-write. Keep what we have.
       }
     }
+    return changed;
   };
 
-  function tick(): void {
+  function tick(stateChanged = false): void {
     try {
-      rescan();
-      paint();
+      const rescanned = rescan();
+      paint(stateChanged || rescanned);
     } catch {
       // A failed repaint is a skipped frame, never fatal: a widget that dies
       // quietly is indistinguishable from one that was never drawn.
@@ -1284,7 +1351,7 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
     if (typeof error?.message === "string") failureEvents.set(runId, { message: error.message });
     refresh(runId, runDirectory, eventSession);
     if (terminal) receipt(runId);
-    tick();
+    tick(true);
   };
 
   /** Unsubscribe callbacks, so this instance can leave the bus as it found it. */
@@ -1330,35 +1397,23 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
         delete answered.waiting;
         runs.set(runId, answered);
       }
-      tick();
+      tick(true);
     }),
   );
 
 
-  const stopTimer = (): void => {
-    if (timer) clearInterval(timer);
-    timer = undefined;
-  };
-  const startTimer = (): void => {
-    if (suspended || timer || !isTuiContext()) return;
-    timer = setInterval(tick, REPAINT_MS);
-    timer.unref();
-  };
   const suspend = (): void => {
     suspended = true;
-    stopTimer();
     hide();
   };
   const resume = (): void => {
     if (!suspended) return;
     suspended = false;
-    startTimer();
-    tick();
+    tick(true);
   };
 
   const stop = (): void => {
     sessionGeneration += 1;
-    stopTimer();
     failureEvents.clear();
     hide();
     context = undefined;
@@ -1411,7 +1466,6 @@ export default function widget(pi: BackgroundWidgetAPI, enabled = true): Backgro
     }
     if (!isTuiContext()) return;
 
-    startTimer();
 
     tick();
     void reconcile(sessionContext, generation).catch(() => {
