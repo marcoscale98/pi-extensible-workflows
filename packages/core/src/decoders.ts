@@ -189,13 +189,13 @@ function decodeWorkflowSettings(value: unknown): LaunchSnapshot["settings"] | un
   const modelAliases = value.modelAliases === undefined ? undefined : decodeStringMap(value.modelAliases);
   const skills = value.skills === undefined ? undefined : decodeStringArray(value.skills);
   const tools = value.tools === undefined ? undefined : decodeStringArray(value.tools);
-  const extensions = value.extensions === undefined ? undefined : Array.isArray(value.extensions) ? decodeStringArray(value.extensions) : decodeWorkflowExtensions(value.extensions);
+  const extensions = value.extensions === undefined ? undefined : decodeStringArray(value.extensions);
   const extensionSettings = value.extensionSettings === undefined ? undefined : decodeWorkflowExtensions(value.extensionSettings);
   if (backgroundWidget === INVALID_PERSISTED_VALUE || (value.modelAliases !== undefined && !modelAliases) || value.skills !== undefined && !skills || value.tools !== undefined && !tools || value.extensions !== undefined && !extensions || value.extensionSettings !== undefined && !extensionSettings) return undefined;
   return {
     concurrency: value.concurrency,
     ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }), ...(skills === undefined ? {} : { skills }), ...(tools === undefined ? {} : { tools }),
-    ...(extensions === undefined ? {} : { extensions: extensions as NonNullable<LaunchSnapshot["settings"]["extensions"]> }), ...(extensionSettings === undefined ? {} : { extensionSettings }),
+    ...(extensions === undefined ? {} : { extensions }), ...(extensionSettings === undefined ? {} : { extensionSettings }),
   };
 }
 function decodeWorkflowSettingsSources(value: unknown): NonNullable<LaunchSnapshot["settingsSources"]> | undefined {

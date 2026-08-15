@@ -34,14 +34,14 @@ void test("untrusted project policy cannot influence launch validation", async (
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows", "roles"), { recursive: true });
   writeFileSync(join(agentDir, "pi-extensible-workflows", "roles", "safe.md"), "Global role");
   writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "Untrusted project role");
-  writeFileSync(globalSettingsPath, JSON.stringify({ concurrency: 3, disabledAgentResources: { skills: ["global-only"], extensions: ["/global-only.ts"] } }));
-  writeFileSync(projectSettingsPath, JSON.stringify({ concurrency: 1, modelAliases: { reviewer: "evil/provider" }, disabledAgentResources: { skills: ["project-only"], extensions: ["/project-only.ts"] } }));
+  writeFileSync(globalSettingsPath, JSON.stringify({ concurrency: 3, skills: ["global-only"], extensions: ["/global-only.ts"] }));
+  writeFileSync(projectSettingsPath, JSON.stringify({ concurrency: 1, modelAliases: { reviewer: "evil/provider" }, skills: ["project-only"], extensions: ["/project-only.ts"] }));
 
   const resolution = resolveWorkflowSettings(cwd, false, globalSettingsPath);
   assert.equal(resolution.projectTrusted, false);
   assert.deepEqual(resolution.project, {});
   assert.deepEqual(resolution.effective, resolution.global);
-  assert.deepEqual(resolution.effective.disabledAgentResources, { skills: ["global-only"], extensions: ["/global-only.ts"] });
+  assert.deepEqual(resolution.effective.skills, ["global-only"]);
   const roles = loadAgentDefinitions(cwd, agentDir, false);
   assert.equal(roles.reviewer, undefined);
   assert.deepEqual(roles.safe, { prompt: "Global role" });
@@ -117,14 +117,14 @@ void test("retry attempts refresh global and role exclusions without reviving pr
   const settingsPath = join(agentDir, "pi-extensible-workflows", "settings.json");
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(settingsPath, JSON.stringify({ disabledAgentResources: { skills: ["global-first"], extensions: [] } }));
-  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ disabledAgentResources: { skills: ["project-must-stay-ignored"], extensions: [] } }));
+  writeFileSync(settingsPath, JSON.stringify({ skills: ["global-first"], extensions: [] }));
+  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ skills: ["project-must-stay-ignored"], extensions: [] }));
   const inputs: SessionInput[] = [];
   let sessions = 0;
-  const executor = new WorkflowAgentExecutor({ cwd, model: { provider: "openai", model: "gpt" }, tools: new Set(), availableModels: new Set(["openai/gpt"]), agentDefinitions: { reviewer: { disabledAgentResources: { skills: ["role-only"], extensions: [] } } }, agentResourcePolicy: () => resolveAgentResourcePolicy(cwd, false, settingsPath) }, testTransport(async (input): Promise<TestPiSession> => {
+  const executor = new WorkflowAgentExecutor({ cwd, model: { provider: "openai", model: "gpt" }, tools: new Set(), availableModels: new Set(["openai/gpt"]), agentDefinitions: { reviewer: { skills: ["role-only"], extensions: [] } }, agentResourcePolicy: () => resolveAgentResourcePolicy(cwd, false, settingsPath) }, testTransport(async (input): Promise<TestPiSession> => {
     inputs.push(input);
     const session = ++sessions;
-    return { sessionId: `retry-${String(session)}`, sessionFile: `/sessions/retry-${String(session)}.jsonl`, messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }], getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), prompt: async () => { if (session === 1) { writeFileSync(settingsPath, JSON.stringify({ disabledAgentResources: { skills: ["global-second"], extensions: [] } })); throw new Error("retry"); } }, dispose() {} };
+    return { sessionId: `retry-${String(session)}`, sessionFile: `/sessions/retry-${String(session)}.jsonl`, messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }], getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), prompt: async () => { if (session === 1) { writeFileSync(settingsPath, JSON.stringify({ skills: ["global-second"], extensions: [] })); throw new Error("retry"); } }, dispose() {} };
   }));
 
   assert.equal((await executor.execute("inspect", { label: "reviewer", workflowName: "trust", role: "reviewer", retries: 1 })).value, "done");
@@ -159,7 +159,7 @@ void test("cold resume rejects persisted project roles before launching them", a
   await shutdown?.();
 });
 
-void test("cold resume propagates persisted roles with current global exclusions", async () => {
+void test("cold resume propagates persisted roles with current global selectors", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trust-cold-policy-"));
   const cwd = join(home, "project");
   const agentDir = join(home, "agent");
@@ -167,10 +167,10 @@ void test("cold resume propagates persisted roles with current global exclusions
   mkdirSync(cwd, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(settingsPath, JSON.stringify({ disabledAgentResources: { skills: ["global-cold"], extensions: [] } }));
-  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ disabledAgentResources: { skills: ["project-ignored"], extensions: [] } }));
+  writeFileSync(settingsPath, JSON.stringify({ skills: ["global-cold"], extensions: [] }));
+  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ skills: ["project-ignored"], extensions: [] }));
   const store = new RunStore(cwd, "session", "run", home);
-  await store.create({ id: "run", workflowName: "cold-policy", cwd, sessionId: "session", state: "interrupted", agents: [], agentSessions: [] }, createLaunchSnapshot({ script: `return agent("review", { role: "reviewer" });`, args: null, metadata: { name: "cold-policy" }, settings: { concurrency: 1, disabledAgentResources: { skills: ["stale-snapshot"], extensions: [] } }, models: ["openai/gpt"], tools: [], agentTypes: ["reviewer"], roles: { reviewer: { prompt: "Cold-resumed reviewer role", disabledAgentResources: { skills: ["role-cold"], extensions: [] } } }, projectRoles: [], schemas: [] }));
+  await store.create({ id: "run", workflowName: "cold-policy", cwd, sessionId: "session", state: "interrupted", agents: [], agentSessions: [] }, createLaunchSnapshot({ script: `return agent("review", { role: "reviewer" });`, args: null, metadata: { name: "cold-policy" }, settings: { concurrency: 1, skills: ["stale-snapshot"], extensions: [] }, models: ["openai/gpt"], tools: [], agentTypes: ["reviewer"], roles: { reviewer: { prompt: "Cold-resumed reviewer role", skills: ["role-cold"], extensions: [] } }, projectRoles: [], schemas: [] }));
 
   const inputs: SessionInput[] = [];
   const createSession = async (input: SessionInput): Promise<TestPiSession> => {

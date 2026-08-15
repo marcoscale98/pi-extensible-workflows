@@ -161,7 +161,7 @@ void test("cold resume persists effective role, fallback, nested, retry, and exp
   const cwd = join(home, "project");
   const store = new RunStore(cwd, "session-a", "run-a", home);
   const script = "const role = await agent(\"top role\", { role: \"reviewer\" }); const named = await agent(\"named\", { label: \"API inspection\" }); const parent = await agent(\"nested policies\"); return { role, named, parent };";
-  const role = { prompt: "Review role", model: "role-provider/role-model", thinking: "high" as const, tools: ["read"], disabledAgentResources: { skills: ["role-only"], extensions: [join(home, "role-only.ts")] } };
+  const role = { prompt: "Review role", model: "role-provider/role-model", thinking: "high" as const, tools: ["read"], skills: ["role-only"], extensions: [join(home, "role-only.ts")] };
   const snapshot = createLaunchSnapshot({ script, args: null, metadata: { name: "policy-reporting" }, settings: { concurrency: 2 }, models: ["root-provider/root-model", "role-provider/role-model", "case-provider/model-only", "case-provider/model-and-thinking"], tools: ["agent", "read"], agentTypes: ["reviewer"], roles: { reviewer: role }, schemas: [] });
   await store.create({ id: "run-a", workflowName: "policy-reporting", cwd, sessionId: "session-a", state: "interrupted", agents: [], agentSessions: [] }, snapshot);
   await store.saveOwnership([]);
@@ -212,7 +212,7 @@ void test("cold resume persists effective role, fallback, nested, retry, and exp
   await waitForRunState(store, "completed");
   const loaded = await store.load();
   assert.equal(loaded.run.state, "completed");
-  assert.deepEqual(loaded.snapshot.roles?.reviewer?.disabledAgentResources, role.disabledAgentResources);
+  assert.deepEqual(loaded.snapshot.roles?.reviewer?.skills, role.skills);
   const attempts = loaded.run.agents.flatMap((agent) => (agent.attemptDetails ?? []).map((attempt) => ({ agent, attempt })));
   assert.equal(inputs.size, 9);
   assert.equal(attempts.length, inputs.size);

@@ -3,14 +3,14 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadSettings, parseRoleMarkdown, preflight, resolveWorkflowSettings, selectResources, WorkflowAgentExecutor, WorkflowError } from "../src/index.js";
+import { loadSettings, parseRoleMarkdown, preflight, resolveWorkflowSettings, selectResourcesByLayers, WorkflowAgentExecutor, WorkflowError } from "../src/index.js";
 
 void test("resource selectors use ordered last-match-wins rules", () => {
   const candidates = ["review-skill", "experimental-skill", "/opt/reviewer.mjs", "/opt/unsafe.mjs", "read", "write"];
-  assert.deepEqual(selectResources(["review-*"], candidates), ["review-skill"]);
-  assert.deepEqual(selectResources(["*", "!experimental-*"], candidates), ["review-skill", "/opt/reviewer.mjs", "/opt/unsafe.mjs", "read", "write"]);
-  assert.deepEqual(selectResources(["!*", "review-*"], candidates), ["review-skill"]);
-  assert.deepEqual(selectResources(["*", "!write", "write"], candidates), candidates);
+  assert.deepEqual(selectResourcesByLayers([["review-*"]], candidates), ["review-skill"]);
+  assert.deepEqual(selectResourcesByLayers([["*", "!experimental-*"]], candidates), ["review-skill", "/opt/reviewer.mjs", "/opt/unsafe.mjs", "read", "write"]);
+  assert.deepEqual(selectResourcesByLayers([["!*", "review-*"]], candidates), ["review-skill"]);
+  assert.deepEqual(selectResourcesByLayers([["*", "!write", "write"]], candidates), candidates);
 });
 
 void test("settings and roles expose direct selector fields", () => {
@@ -48,4 +48,10 @@ void test("positive capability layers preserve least privilege and parent bounda
 
 void test("static selector validation is not skipped by dynamic options", () => {
   assert.throws(() => preflight("const label = process.env.LABEL; agent(\"x\", { tools: [1], label });", { models: new Set(["test/model"]), tools: new Set(["read"]), agentTypes: new Set() }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
+});
+
+void test("global and role selectors intersect inherited tools while calls cannot escape them", () => {
+  const executor = new WorkflowAgentExecutor({ cwd: "/tmp", model: { provider: "test", model: "model" }, tools: new Set(["read", "grep", "bash"]), resourceSelectors: { tools: ["read", "grep"] }, availableModels: new Set(["test/model"]) });
+  assert.deepEqual(executor.resolve({ label: "child", workflowName: "test" }, ["read"]).tools, ["read"]);
+  assert.throws(() => executor.resolve({ label: "child", workflowName: "test", tools: ["grep"] }, ["read"]), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
 });

@@ -57,15 +57,10 @@ function validateSelectorList(value: unknown, path: string, kind: "skills" | "ex
   }
   return Object.freeze(normalized);
 }
-function extensionSettingsFrom(settings: Readonly<WorkflowSettings | WorkflowSettingsOverrides>): Readonly<WorkflowExtensionSettings> | undefined {
-  const value = settings.extensions;
-  if (value === undefined || Array.isArray(value) || !object(value)) return undefined;
-  return value;
-}
 function selectorsFromSettings(settings: Readonly<WorkflowSettings | WorkflowSettingsOverrides>): AgentResourceSelectors {
   return {
     ...(settings.skills === undefined ? {} : { skills: settings.skills }),
-    ...(Array.isArray(settings.extensions) ? { extensions: settings.extensions } : {}),
+    ...(settings.extensions === undefined ? {} : { extensions: settings.extensions }),
     ...(settings.tools === undefined ? {} : { tools: settings.tools }),
   };
 }
@@ -82,7 +77,7 @@ function validateContextFileScopes(value: unknown, rolePath: string): readonly C
 }
 function validateWorkflowExtensions(value: unknown, settingsPath: string, errorCode: "INVALID_SETTINGS" | "INVALID_METADATA" = "INVALID_SETTINGS"): WorkflowExtensionSettings | undefined {
   if (value === undefined) return undefined;
-  const base = `${settingsPath}.extensions`;
+  const base = `${settingsPath}.extensionSettings`;
   if (!object(value)) fail(errorCode, `${base} must be an object`);
   if (Object.keys(value).some((key) => key !== "herdr")) fail(errorCode, `${base} contains an unsupported extension setting`);
   if (value.herdr === undefined) return Object.freeze({});
@@ -111,12 +106,11 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
   const modelAliases = parsed.modelAliases === undefined ? undefined : validateModelAliases(parsed.modelAliases, path);
   const skills = validateSelectorList(parsed.skills, path, "skills");
   const tools = validateSelectorList(parsed.tools, path, "tools");
-  const extensions = Array.isArray(parsed.extensions) ? validateSelectorList(parsed.extensions, path, "extensions") : undefined;
-  const legacyExtensionSettings = parsed.extensions === undefined || Array.isArray(parsed.extensions) ? undefined : validateWorkflowExtensions(parsed.extensions, path);
+  const extensions = validateSelectorList(parsed.extensions, path, "extensions");
   const extensionSettings = parsed.extensionSettings === undefined ? undefined : validateWorkflowExtensions(parsed.extensionSettings, path);
   return Object.freeze({
     ...(concurrency === undefined ? {} : { concurrency }), ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }),
-    ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? legacyExtensionSettings === undefined ? {} : { extensions: legacyExtensionSettings } : { extensions }),
+    ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }),
     ...(extensionSettings === undefined ? {} : { extensionSettings }), ...(tools === undefined ? {} : { tools }),
   });
 }
@@ -135,10 +129,9 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
     extensions: [...(globalSelectors.extensions ?? []), ...(projectSelectors.extensions ?? [])],
     ...(globalSelectors.tools === undefined && projectSelectors.tools === undefined ? {} : { tools: [...(globalSelectors.tools ?? []), ...(projectSelectors.tools ?? [])] }),
   });
-  const hasExtensionSelectors = Array.isArray(global.extensions) || Array.isArray(project.extensions);
-  const legacyExtensionSettings = extensionSettingsFrom(project) ?? extensionSettingsFrom(global);
+  const hasExtensionSelectors = global.extensions !== undefined || project.extensions !== undefined;
   const configuredExtensionSettings = projectHas("extensionSettings") ? project.extensionSettings : global.extensionSettings;
-  const extensionSettings = configuredExtensionSettings ?? (hasExtensionSelectors ? legacyExtensionSettings : undefined);
+  const extensionSettings = configuredExtensionSettings;
   const sources: WorkflowSettingsSources = {
     concurrency: projectHas("concurrency") ? projectSettingsPath : globalSettingsPath,
     modelAliases: projectHas("modelAliases") ? projectSettingsPath : globalSettingsPath,
@@ -150,7 +143,7 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
     backgroundWidget: global.backgroundWidget ?? true,
     ...(projectHas("modelAliases") ? { modelAliases: project.modelAliases } : global.modelAliases === undefined ? {} : { modelAliases: global.modelAliases }),
     ...(effectiveSelectors.skills.length ? { skills: effectiveSelectors.skills } : global.skills !== undefined || project.skills !== undefined ? { skills: effectiveSelectors.skills } : {}),
-    ...(hasExtensionSelectors ? { extensions: effectiveSelectors.extensions } : legacyExtensionSettings === undefined ? {} : { extensions: legacyExtensionSettings }),
+    ...(hasExtensionSelectors ? { extensions: effectiveSelectors.extensions } : {}),
     ...(extensionSettings === undefined ? {} : { extensionSettings }),
     ...(effectiveSelectors.tools?.length ? { tools: effectiveSelectors.tools } : global.tools !== undefined || project.tools !== undefined ? { tools: effectiveSelectors.tools } : {}),
   });

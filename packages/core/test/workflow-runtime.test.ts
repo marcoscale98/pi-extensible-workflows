@@ -59,7 +59,7 @@ void test("preflight rejects every static boundary before run creation", () => {
     [`agent('a',{role:{name:'reviewer',thinking:'bogus'}})`, "INVALID_METADATA"],
     [`agent('a',{role:{name:'reviewer'},model:'openai/gpt'})`, "INVALID_METADATA"],
     [`agent('a',{role:'reviewer',thinking:'low'})`, "INVALID_METADATA"],
-    [`agent('a',{role:'reviewer',tools:[]})`, "INVALID_METADATA"],
+    [`agent('a',{role:'reviewer',tools:['bash']})`, "UNKNOWN_TOOL"],
     [`agent('a',{outputSchema:[]})`, "INVALID_SCHEMA"],
     [`agent('a',{label:' '})`, "INVALID_METADATA"],
     [`agent('a',{timeoutMs:0})`, "INVALID_METADATA"],
@@ -74,7 +74,7 @@ void test("preflight rejects every static boundary before run creation", () => {
 
 void test("host rejects malformed dynamic agent options before launching", async () => {
   let launched = false;
-  for (const options of ["null", "{label:' '}", "{tools:1}", "{timeoutMs:0}", "{retries:-1}", "{role:'reviewer',model:'openai/gpt'}", "{role:'reviewer',thinking:'low'}", "{role:'reviewer',tools:[]}", "{role:{}}", "{role:{name:'reviewer',tools:1}}", "{role:{name:'reviewer',unknown:true}}", "{role:{name:'reviewer',thinking:'bogus'}}"]) {
+  for (const options of ["null", "{label:' '}", "{tools:1}", "{timeoutMs:0}", "{retries:-1}", "{role:'reviewer',model:'openai/gpt'}", "{role:'reviewer',thinking:'low'}", "{role:{}}", "{role:{name:'reviewer',tools:1}}", "{role:{name:'reviewer',unknown:true}}", "{role:{name:'reviewer',thinking:'bogus'}}"]) {
     await assert.rejects(runWorkflow(`return agent('a',${options});`, null, { agent: async () => { launched = true; return null; } }).result, (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   }
   assert.equal(launched, false);
@@ -129,15 +129,15 @@ void test("AST preflight validates combinator signatures", () => {
 });
 
 void test("launch snapshots are detached and deeply immutable", () => {
-  const input = { script: `return withWorktree("snapshot", async () => true);`, args: { nested: [1] }, metadata: { name: "x", description: "x" }, settings: { concurrency: 1 }, models: ["openai/gpt"], tools: ["read"], agentTypes: ["reviewer"], roles: { reviewer: { prompt: "original", disabledAgentResources: { skills: ["role-skill"], extensions: ["/role-extension.ts"] } } }, projectRoles: ["reviewer"], schemas: [{ type: "object" }] };
+  const input = { script: `return withWorktree("snapshot", async () => true);`, args: { nested: [1] }, metadata: { name: "x", description: "x" }, settings: { concurrency: 1 }, models: ["openai/gpt"], tools: ["read"], agentTypes: ["reviewer"], roles: { reviewer: { prompt: "original", skills: ["role-skill"], extensions: ["/role-extension.ts"] } }, projectRoles: ["reviewer"], schemas: [{ type: "object" }] };
   const snapshot = createLaunchSnapshot(input);
   input.args.nested.push(2);
   input.roles.reviewer.prompt = "mutated";
-  input.roles.reviewer.disabledAgentResources.skills.push("mutated");
+  input.roles.reviewer.skills.push("mutated");
   assert.deepEqual(snapshot.args, { nested: [1] });
   assert.equal(snapshot.identityVersion, 5);
   assert.equal(snapshot.roles?.reviewer?.prompt, "original");
-  assert.deepEqual(snapshot.roles.reviewer.disabledAgentResources, { skills: ["role-skill"], extensions: ["/role-extension.ts"] });
+  assert.deepEqual(snapshot.roles.reviewer.skills, ["role-skill"]);
   assert.ok(Object.isFrozen(snapshot.args));
   assert.ok(Object.isFrozen(snapshot.schemas[0]));
 });

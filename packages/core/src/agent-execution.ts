@@ -45,7 +45,7 @@ export interface PiResourceInspection {
   readonly diagnostics: readonly { type: "warning" | "error" | "collision"; message: string; source?: string }[];
   readonly systemPromptSource?: string;
 }
-import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceExclusions, AgentResourceInspection, AgentResourcePolicy, AgentResourceSelectors, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
+import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceInspection, AgentResourcePolicy, AgentResourceSelectors, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
 import { deepFreeze, jsonObject, jsonValue, object, modelAliasName, modelCapability, resolveModelReference, resourcePatternHasMagic, selectResourcesByLayers, unmatchedResourcePatterns } from "./utils.js";
 import { roleNameOf } from "./types.js";
 import { WorkflowError } from "./types.js";
@@ -63,7 +63,7 @@ export interface AgentBudgetHooks {
   afterTurn(accounting: AgentAccounting, final: boolean): void;
   instruction(): string | undefined;
 }
-export interface AgentDefinition { prompt?: string; description?: string; model?: string; thinking?: ThinkingLevel; tools?: readonly string[]; skills?: readonly string[]; extensions?: readonly string[]; overrideSystemPrompt?: boolean; contextFiles?: readonly ContextFileScope[]; /** @deprecated */ disabledAgentResources?: AgentResourceExclusions }
+export interface AgentDefinition { prompt?: string; description?: string; model?: string; thinking?: ThinkingLevel; tools?: readonly string[]; skills?: readonly string[]; extensions?: readonly string[]; overrideSystemPrompt?: boolean; contextFiles?: readonly ContextFileScope[] }
 export interface AgentProviderFailure { label: string; provider: string; model: string; error: string }
 export type AgentProviderRecovery = "retry" | "abort" | { model: string };
 export interface AgentExecutionOptions {
@@ -660,11 +660,24 @@ function resourcePolicySummary(policy: AgentResourcePolicy, tools: readonly stri
     ...(policy.selectorSources ? { selectorSources: policy.selectorSources } : {}),
   };
 }
+function selectorListWidened(ceiling: readonly string[], candidate: readonly string[]): boolean {
+  let candidateIndex = 0;
+  for (const pattern of ceiling) {
+    const matchIndex = candidate.indexOf(pattern, candidateIndex);
+    if (matchIndex < candidateIndex) return true;
+    if (candidate.slice(candidateIndex, matchIndex).some((entry) => !entry.startsWith("!"))) return true;
+    candidateIndex = matchIndex + 1;
+  }
+  return candidate.slice(candidateIndex).some((entry) => !entry.startsWith("!"));
+}
 function resourcePolicyWidened(ceiling: AgentResourcePolicy | undefined, candidate: AgentResourcePolicy | undefined): boolean {
   if (!ceiling) return false;
   if (!candidate) return true;
   if (!ceiling.projectTrusted && candidate.projectTrusted) return true;
-  return JSON.stringify(ceiling.effective) !== JSON.stringify(candidate.effective) || JSON.stringify(ceiling.selectorSources) !== JSON.stringify(candidate.selectorSources);
+  if (JSON.stringify(ceiling.selectorSources) !== JSON.stringify(candidate.selectorSources)) return true;
+  if (selectorListWidened(ceiling.effective.skills, candidate.effective.skills)) return true;
+  if (selectorListWidened(ceiling.effective.extensions, candidate.effective.extensions)) return true;
+  return selectorListWidened(ceiling.effective.tools ?? [], candidate.effective.tools ?? []);
 }
 function packageRoot(start: string): string | undefined {
   let current = dirname(realpathSync(start));
@@ -808,7 +821,7 @@ function errorWithAttempts(error: unknown, attempts: readonly AgentAttempt[]): E
 export function getAgentAttempts(error: unknown): readonly AgentAttempt[] | undefined {
   return error instanceof Error ? agentAttemptsByError.get(error) : undefined;
 }
-type RoleOverrideKey = Exclude<keyof RoleOverride, "name" | "disabledAgentResources">;
+type RoleOverrideKey = Exclude<keyof RoleOverride, "name">;
 type RoleOverrideValues = { [Key in RoleOverrideKey]: RoleOverride[Key] };
 const ROLE_OVERRIDE_KEYS = ["model", "thinking", "tools", "skills", "extensions", "description", "overrideSystemPrompt", "contextFiles"] as const satisfies readonly RoleOverrideKey[];
 function roleOverrideValues(override: RoleOverride): RoleOverrideValues {
@@ -839,17 +852,19 @@ export class WorkflowAgentExecutor {
     if (roleName && (options.model !== undefined || options.thinking !== undefined)) throw new WorkflowError("INVALID_METADATA", "Role agents must not specify model or thinking");
     const roleDefinition = typeof role === "object" ? applyRoleOverride(definition, role) : definition;
     const candidateTools = inheritedTools !== undefined ? [...inheritedTools] : [...this.root.tools];
+    if (inheritedTools === undefined) for (const pattern of roleDefinition?.tools ?? []) {
+      const body = pattern.startsWith("!") ? pattern.slice(1) : pattern;
+      if (!pattern.startsWith("!") && !resourcePatternHasMagic(pattern) && !this.root.tools.has(body)) throw new WorkflowError("UNKNOWN_TOOL", `Unknown tool for role ${roleName ?? "agent"}: ${body}`);
+    }
     const selectorLayers = [
       this.root.resourceSelectors?.tools,
       roleDefinition?.tools,
       options.tools,
     ];
     const hasToolSelectors = selectorLayers.some((selectors) => selectors !== undefined);
-    for (const layer of selectorLayers) {
-      for (const pattern of layer ?? []) {
-        const body = pattern.startsWith("!") ? pattern.slice(1) : pattern;
-        if (!pattern.startsWith("!") && !resourcePatternHasMagic(pattern) && !candidateTools.includes(body)) throw new WorkflowError("UNKNOWN_TOOL", `Tool is outside the launching session boundary: ${body}`);
-      }
+    for (const pattern of options.tools ?? []) {
+      const body = pattern.startsWith("!") ? pattern.slice(1) : pattern;
+      if (!pattern.startsWith("!") && !resourcePatternHasMagic(pattern) && !candidateTools.includes(body)) throw new WorkflowError("UNKNOWN_TOOL", `Tool is outside the launching session boundary: ${body}`);
     }
     const requested = hasToolSelectors ? selectResourcesByLayers(selectorLayers, candidateTools) : options.effectiveTools ?? candidateTools;
     const forbidden = requested.find((tool) => !this.root.tools.has(tool));

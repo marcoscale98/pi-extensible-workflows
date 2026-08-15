@@ -339,7 +339,7 @@ void test("resolves explicit capabilities without widening least privilege", () 
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "missing" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_AGENT_TYPE");
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "reviewer", model: "google/gemini" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "reviewer", thinking: "low" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "reviewer", tools: [] }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "reviewer", tools: [] }).tools, []);
   const broken = new WorkflowAgentExecutor({ ...root, agentDefinitions: { broken: { tools: ["write"] } } }, testTransport(async () => { throw new Error("must not launch"); }));
   assert.throws(() => broken.resolve({ label: "a", workflowName: "w", role: "broken" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
 });
@@ -356,13 +356,13 @@ void test("applies named role object overrides to the resolved role policy", () 
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", tools: ["write"] } }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", model: "missing/model" } }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_MODEL");
 });
-void test("role object overrides carry description, context files, resource exclusions, and system prompt policy", async () => {
+void test("role object overrides carry description, context files, resource selectors, and system prompt policy", async () => {
   const basePolicy: AgentResourcePolicy = { globalSettingsPath: "/g", projectSettingsPath: "/p", projectTrusted: true, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["global"], extensions: ["/global.ts"] }, unmatchedSkills: [], unmatchedExtensions: [] };
-  const roleRoot: AgentExecutionRoot = { ...root, agentDefinitions: { ...root.agentDefinitions, scoped: { prompt: "Scoped role", contextFiles: ["global", "project"], overrideSystemPrompt: true, disabledAgentResources: { skills: ["role-skill"], extensions: ["/role.ts"] } } }, agentResourcePolicy: () => structuredClone(basePolicy) };
+  const roleRoot: AgentExecutionRoot = { ...root, agentDefinitions: { ...root.agentDefinitions, scoped: { prompt: "Scoped role", contextFiles: ["global", "project"], overrideSystemPrompt: true, skills: ["role-skill"], extensions: ["/role.ts"] } }, agentResourcePolicy: () => structuredClone(basePolicy) };
   const executor = new WorkflowAgentExecutor(roleRoot, testTransport(async () => { throw new Error("unused"); }));
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scoped", description: "per-call", contextFiles: ["cwd"], overrideSystemPrompt: false } }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPromptAppend: "Scoped role", contextFiles: ["cwd"] });
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scoped", contextFiles: null, overrideSystemPrompt: null } }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPromptAppend: "Scoped role" });
-  const prepared = await prepareAgentSetupForInspection(roleRoot, "probe", { label: "a", workflowName: "w", role: { name: "scoped", disabledAgentResources: { skills: ["extra"], extensions: [] } } }, localAgentTransport);
+  const prepared = await prepareAgentSetupForInspection(roleRoot, "probe", { label: "a", workflowName: "w", role: { name: "scoped", skills: ["extra"], extensions: [] } }, localAgentTransport);
   assert.ok(prepared.setup.sessionInput.resourcePolicy);
   assert.deepEqual(prepared.setup.sessionInput.resourcePolicy.effective, { skills: ["global", "extra"], extensions: ["/global.ts"] });
 });
@@ -1851,7 +1851,7 @@ void test("scoped tools honor the root capability boundary and cancel orphan des
   await outsider.result;
 });
 
-void test("nested role policy conflicts fail before scheduler spawn", async () => {
+void test("nested role model policy conflicts fail before scheduler spawn", async () => {
   const scheduler = new FairAgentScheduler(async ({ signal }) => {
     await new Promise<void>((resolve) => { signal.addEventListener("abort", () => { resolve(); }, { once: true }); });
     throw new WorkflowError("CANCELLED", "cancelled");
@@ -1860,7 +1860,7 @@ void test("nested role policy conflicts fail before scheduler spawn", async () =
   const parent = scheduler.spawn("run", "parent", { label: "parent", cwd: "/repo", tools: ["agent", "read"] });
   const agentTool = scheduler.toolsFor(parent.id)[0];
   assert.ok(agentTool);
-  for (const extra of [{ model: "openai/gpt" }, { thinking: "low" }, { tools: ["read"] }]) {
+  for (const extra of [{ model: "openai/gpt" }, { thinking: "low" }]) {
     await assert.rejects(executeToolUnchecked(agentTool, "call", { prompt: "child", label: "child", role: "reviewer", ...extra }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   }
   assert.equal(scheduler.snapshot().length, 1);
@@ -1988,8 +1988,14 @@ void test("setup hooks cannot widen the prepared resource policy", async () => {
     assert.equal(launched, false);
   }
 });
+void test("setup hooks may narrow the prepared resource policy", async () => {
+  const policy = (): AgentResourcePolicy => ({ globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["*"], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["*"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [] });
+  const prepared = await prepareAgentSetupForInspection({ ...root, agentResourcePolicy: policy, agentSetupHooks: [{ name: "narrow", priority: 1, setup(agent) { const resourcePolicy = agent.sessionInput.resourcePolicy; if (resourcePolicy) resourcePolicy.effective = { ...resourcePolicy.effective, skills: [...resourcePolicy.effective.skills, "!secret"] }; } }] }, "work", { label: "worker", workflowName: "flow" }, localAgentTransport);
+  assert.equal(prepared.failure, undefined);
+  assert.deepEqual(prepared.setup.sessionInput.resourcePolicy?.effective.skills, ["*", "!secret"]);
+});
 
-void test("refreshes resource exclusions for every fresh attempt and inspects the effective policy", async () => {
+void test("refreshes resource selectors for every fresh attempt and inspects the effective policy", async () => {
   let policyCalls = 0;
   let sessions = 0;
   const inputs: Array<NonNullable<SessionInput["resourcePolicy"]>> = [];
@@ -2008,14 +2014,14 @@ void test("refreshes resource exclusions for every fresh attempt and inspects th
   assert.equal(result.value, "done");
   assert.equal(policyCalls, 2);
   assert.deepEqual(inputs.map(({ effective }) => effective), [{ skills: ["skill-1"], extensions: ["/extensions/extension-1.ts"] }, { skills: ["skill-2"], extensions: ["/extensions/extension-2.ts"] }]);
-  assert.deepEqual(result.attempts.map(({ setup }) => setup.disabledAgentResources?.skills), [["skill-1"], ["skill-2"]]);
+  assert.deepEqual(result.attempts.map(({ setup }) => setup.resourceSelectors?.selectors.skills), [["skill-1"], ["skill-2"]]);
 });
-void test("isolates role resource exclusions and reapplies them on retries", async () => {
+void test("composes role resource selectors and reapplies them on retries", async () => {
   const roleExtension = "/role/extension.ts";
   const basePolicy = { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["global"], extensions: ["/global.ts"] }, project: { skills: ["project"], extensions: ["/project.ts"] }, effective: { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"] }, unmatchedSkills: [], unmatchedExtensions: [] };
   const policies: Array<NonNullable<SessionInput["resourcePolicy"]>> = [];
   let sessions = 0;
-  const executor = new WorkflowAgentExecutor({ ...root, agentDefinitions: { ...root.agentDefinitions, reviewer: { ...root.agentDefinitions?.reviewer, disabledAgentResources: { skills: ["role", "global"], extensions: [roleExtension, "/global.ts"] } }, scout: { ...root.agentDefinitions?.scout } }, agentResourcePolicy: () => structuredClone(basePolicy) }, testTransport(async (input) => {
+  const executor = new WorkflowAgentExecutor({ ...root, agentDefinitions: { ...root.agentDefinitions, reviewer: { ...root.agentDefinitions?.reviewer, skills: ["role", "global"], extensions: [roleExtension, "/global.ts"] }, scout: { ...root.agentDefinitions?.scout } }, agentResourcePolicy: () => structuredClone(basePolicy) }, testTransport(async (input) => {
     assert.ok(input.resourcePolicy);
     policies.push(input.resourcePolicy);
     const session = ++sessions;
@@ -2025,14 +2031,14 @@ void test("isolates role resource exclusions and reapplies them on retries", asy
   await executor.execute("other", { label: "other", workflowName: "flow", role: "scout" });
   await executor.execute("plain", { label: "plain", workflowName: "flow" });
   assert.deepEqual(policies.map(({ effective }) => effective), [
-    { skills: ["global", "project", "role", "global"], extensions: ["/global.ts", "/project.ts", roleExtension, "/global.ts"] },
-    { skills: ["global", "project", "role", "global"], extensions: ["/global.ts", "/project.ts", roleExtension, "/global.ts"] },
-    { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"] },
+    { skills: ["global", "project", "role", "global"], extensions: ["/global.ts", "/project.ts", roleExtension, "/global.ts"], tools: ["read"] },
+    { skills: ["global", "project", "role", "global"], extensions: ["/global.ts", "/project.ts", roleExtension, "/global.ts"], tools: ["read"] },
+    { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"], tools: ["read", "grep"] },
     { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"] },
   ]);
   assert.deepEqual(basePolicy.effective, { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"] });
 });
-void test("filters disabled native extensions before factories and skills before session registration", async () => {
+void test("filters excluded native extensions before factories and skills before session registration", async () => {
   const fixtureRoot = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-resource-loader-"));
   const physicalRoot = join(fixtureRoot, "physical");
   const rootDir = join(fixtureRoot, "alias");
@@ -2070,7 +2076,7 @@ void test("filters disabled native extensions before factories and skills before
   writeFileSync(join(projectSkills, "project-kept-skill", "SKILL.md"), "---\nname: project-kept-skill\ndescription: Kept project skill\n---\nKept");
   writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: [disabledExtension, allowedExtension], skills: [skillsDir] }));
   writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ extensions: [projectDisabledExtension, projectAllowedExtension], skills: [projectSkills] }));
-  const resourcePolicy: AgentResourcePolicy = { globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted: false, global: { skills: ["disabled-skill"], extensions: [resolve(disabledExtension)] }, project: { skills: [], extensions: [] }, effective: { skills: ["disabled-skill"], extensions: [resolve(disabledExtension)] }, unmatchedSkills: [], unmatchedExtensions: [] };
+  const resourcePolicy: AgentResourcePolicy = { globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted: false, global: { skills: ["*", "!disabled-skill"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`] }, project: { skills: [], extensions: [] }, effective: { skills: ["*", "!disabled-skill"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["*", "!disabled-skill"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`] }, project: {} } };
   const session = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: ["read"], sessionLabel: "resource-filter", resourcePolicy, extensionFactories: [() => {}] });
   const loaded = (session as typeof session & { resourceLoader: { getSkills(): { skills: Array<{ name: string }> }; getExtensions(): { extensions: Array<{ resolvedPath: string }> } } }).resourceLoader;
   const resourcePaths = session.herdrResourcePaths;
@@ -2099,7 +2105,7 @@ void test("filters disabled native extensions before factories and skills before
   assert.deepEqual(resourcePolicy.unmatchedSkills, []);
   assert.deepEqual(resourcePolicy.unmatchedExtensions, []);
   await session.dispose();
-  const trustedPolicy = { globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted: true, global: { skills: ["disabled-skill"], extensions: [resolve(disabledExtension)] }, project: { skills: ["project-disabled-skill"], extensions: [resolve(projectDisabledExtension)] }, effective: { skills: ["disabled-skill", "project-disabled-skill"], extensions: [resolve(disabledExtension), resolve(projectDisabledExtension)] }, unmatchedSkills: [], unmatchedExtensions: [] };
+  const trustedPolicy = { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted: true, global: { skills: ["*", "!disabled-skill"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`] }, project: { skills: ["*", "!project-disabled-skill"], extensions: ["**/*", `!${realpathSync(projectDisabledExtension)}`] }, effective: { skills: ["*", "!disabled-skill", "*", "!project-disabled-skill"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`, "**/*", `!${realpathSync(projectDisabledExtension)}`] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["*", "!disabled-skill"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`] }, project: { skills: ["*", "!project-disabled-skill"], extensions: ["**/*", `!${realpathSync(projectDisabledExtension)}`] } } };
   const trusted = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: ["read"], sessionLabel: "resource-trusted", resourcePolicy: trustedPolicy });
   const trustedLoaded = (trusted as typeof trusted & { resourceLoader: { getSkills(): { skills: Array<{ name: string }> }; getExtensions(): { extensions: Array<{ resolvedPath: string }> } } }).resourceLoader;
   assert.equal(existsSync(projectDisabledMarker), false);
@@ -2162,7 +2168,7 @@ void test("loads workflow SYSTEM.md with project trust and precedence", async ()
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
   }
 });
-void test("applies ordered minimatch resource exclusions and records concrete matches", async () => {
+void test("applies ordered minimatch resource selectors and records concrete matches", async () => {
   const rootDir = realpathSync(mkdtempSync(join(tmpdir(), "pi-extensible-workflows-resource-globs-")));
   const agentDir = join(rootDir, "agent");
   const cwd = join(rootDir, "project");
@@ -2177,17 +2183,14 @@ void test("applies ordered minimatch resource exclusions and records concrete ma
   writeFileSync(allowedExtension, "export default function() {}");
   writeFileSync(join(agentDir, "skills", "disabled-skill", "SKILL.md"), "---\nname: disabled-skill\ndescription: Disabled\n---\nDisabled");
   writeFileSync(join(agentDir, "skills", "kept-skill", "SKILL.md"), "---\nname: kept-skill\ndescription: Kept\n---\nKept");
-  const resourcePolicy: AgentResourcePolicy = { globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted: false, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["disabled-*", "!kept-skill"], extensions: ["**/*", `!${allowedExtension}`] }, unmatchedSkills: [], unmatchedExtensions: [] };
+  const resourcePolicy: AgentResourcePolicy = { globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted: false, global: { skills: ["*", "!disabled-*"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`] }, project: { skills: [], extensions: [] }, effective: { skills: ["*", "!disabled-*"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["*", "!disabled-*"], extensions: ["**/*", `!${realpathSync(disabledExtension)}`] }, project: {} } };
   const session = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: ["read"], sessionLabel: "resource-glob", resourcePolicy });
   const loaded = (session as typeof session & { resourceLoader: { getSkills(): { skills: Array<{ name: string }> }; getExtensions(): { extensions: Array<{ resolvedPath: string }> } } }).resourceLoader;
   const skillNames = loaded.getSkills().skills.map(({ name }) => name);
   assert.ok(skillNames.includes("kept-skill"));
   assert.equal(skillNames.includes("disabled-skill"), false);
   assert.deepEqual(loaded.getExtensions().extensions.map(({ resolvedPath }) => resolve(resolvedPath)), [resolve(allowedExtension)]);
-  assert.deepEqual(resourcePolicy.excludedSkills, ["disabled-skill"]);
-  assert.deepEqual(resourcePolicy.excludedExtensions, [resolve(disabledExtension)]);
-  assert.deepEqual(resourcePolicy.unmatchedSkills, []);
-  assert.deepEqual(resourcePolicy.unmatchedExtensions, []);
+  assert.deepEqual(resourcePolicy.selectedSkills, ["kept-skill"]);
   await session.dispose();
 });
 void test("filters local context files by the role scope policy", async () => {

@@ -253,7 +253,7 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   const shutdownMarker = join(paths.root, "doctor-shutdown.marker");
   writeFileSync(join(paths.agentDir, "extensions", "doctor-hook.ts"), `import { appendFileSync } from "node:fs"; export default (pi) => { pi.on('before_agent_start', (event) => ({ systemPrompt: event.systemPrompt + '\\nHOOK:' + event.prompt })); pi.on('session_shutdown', async () => { await new Promise((resolve) => setTimeout(resolve, 25)); appendFileSync(${JSON.stringify(shutdownMarker)}, 'shutdown'); }); };
 `);
-  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nthinking: high\ntools: [read, grep]\ndisabledAgentResources:\n  skills: [review-skill]\n  extensions: [missing-extension]\n---\nReview role");
+  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nthinking: high\ntools: [read, grep]\nskills: [\"*\", \"!review-skill\"]\nextensions: [\"**/*\", \"!missing-extension\"]\n---\nReview role");
   const registry = new WorkflowRegistry();
   registry.register({ version: "1.0.0", headline: "Doctor setup", agentSetupHooks: { adjust: { setup(agent, context) { assert.equal(context.mode, "inspection"); assert.equal(agent.prepared.model.model, "fixture-model"); assert.equal(agent.prepared.model.thinking, "high"); agent.options.model = "fixture/override-model"; agent.options.thinking = "low"; agent.options.tools = ["grep"]; } } } });
   const report = await withHomeAndCwd(paths.root, paths.cwd, () => doctor({ ...paths, role: "reviewer", registry, discoverPi: async () => pi({ activeTools: ["read", "grep"], knownModels: ["fixture/fixture-model", "fixture/override-model"], availableModels: ["fixture/fixture-model", "fixture/override-model"], model: { provider: "fixture", model: "fixture-model", thinking: "medium" } }) }));
@@ -267,8 +267,8 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   assert.ok(invalidSkillDiagnostic);
   assert.equal(invalidSkillDiagnostic.severity, "warning");
   assert.equal(invalidSkillDiagnostic.source, join(paths.agentDir, "skills", "invalid_skill", "SKILL.md"));
-  assert.ok(inspection.resources.excludedSkills.includes("review-skill"));
-  assert.deepEqual(inspection.resources.unmatchedExtensions, [join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "missing-extension")]);
+  assert.equal(inspection.resources.skills.includes("review-skill"), false);
+  assert.deepEqual(inspection.resources.unmatchedExtensions, [`!${join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "missing-extension")}`]);
   assert.ok(inspection.setup.hooks.includes("adjust"));
   assert.ok(inspection.setup.diagnostics.every(({ severity }) => severity !== "error"), JSON.stringify(report.diagnostics));
   assert.ok(inspection.systemPrompt.text.includes("HOOK:"));
@@ -278,7 +278,7 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   assert.equal(doctorExitCode(report), 0);
   const formatted = formatDoctorReport(report);
   assert.match(formatted, /## Role inspection/);
-  for (const heading of ["## Environment", "## Trust/resources", "## Agent resource exclusions", "## Active tools", "## Roles", "## Model aliases", "## Reusable functions"]) assert.doesNotMatch(formatted, new RegExp(heading));
+  for (const heading of ["## Environment", "## Trust/resources", "## Workflow agent resource selectors", "## Active tools", "## Roles", "## Model aliases", "## Reusable functions"]) assert.doesNotMatch(formatted, new RegExp(heading));
   assert.match(formatted, /Role: `reviewer`/);
   assert.match(formatted, /- Tools:\n[ ]{2}- `grep`/);
   assert.match(formatted, /- Effective skills:\n(?:[ ]{2}- .+\n)+/);
@@ -346,17 +346,17 @@ void test("doctor warns about legacy agent resource selectors in active settings
   assert.match(formatDoctorReport(report), /https:\/\/github\.com\/vekexasia\/pi-extensible-workflows\/issues\/205/);
   assert.equal(doctorExitCode(report), 0);
 });
-void test("doctor reports effective resource exclusions and unmatched selectors", async () => {
+void test("doctor reports effective resource selectors and unmatched patterns", async () => {
   const paths = fixture();
   const globalSettings = join(paths.agentDir, "pi-extensible-workflows", "settings.json");
   const globalExtension = join(paths.agentDir, "extensions", "interactive.ts");
   const projectExtension = join(paths.cwd, ".pi", "project.ts");
   mkdirSync(join(paths.agentDir, "extensions"), { recursive: true });
-  writeFileSync(globalSettings, JSON.stringify({ disabledAgentResources: { skills: ["global-skill", "missing-skill"], extensions: [globalExtension] } }));
-  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ disabledAgentResources: { skills: ["project-skill"], extensions: ["../project.ts"] } }));
+  writeFileSync(globalSettings, JSON.stringify({ skills: ["global-skill"], extensions: [globalExtension] }));
+  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ skills: ["project-skill"], extensions: ["../project.ts"] }));
   const report = await withHome(paths.root, () => doctor({ ...paths, settingsPath: globalSettings, discoverPi: async () => pi({ extensions: [globalExtension, projectExtension], skills: ["global-skill", "project-skill"] }) }));
-  assert.deepEqual(report.resourcePolicy.effective.skills, ["project-skill"]);
-  assert.deepEqual(report.resourcePolicy.effective.extensions, [projectExtension]);
+  assert.deepEqual(report.resourcePolicy.selectedSkills, ["project-skill"]);
+  assert.deepEqual(report.resourcePolicy.selectedExtensions, [projectExtension]);
   assert.deepEqual(report.resourcePolicy.unmatchedSkills, []);
   assert.deepEqual(report.resourcePolicy.unmatchedExtensions, []);
   assert.equal(report.diagnostics.filter(({ code }) => code === "AGENT_RESOURCE_UNMATCHED").length, 0);
@@ -364,20 +364,20 @@ void test("doctor reports effective resource exclusions and unmatched selectors"
   assert.match(formatted, /Effective skills: project-skill/);
   assert.match(formatted, /## Pi active extensions/);
   assert.match(formatted, /## Pi active skills/);
-  assert.match(formatted, /Exposed skills:\n[ ]{2}- `global-skill`/);
-  assert.match(formatted, /Disabled skills:\n[ ]{2}- `project-skill`/);
-  assert.match(formatted, /Exposed extensions:[\s\S]*- `[^`]+interactive\.ts`/);
-  assert.match(formatted, /Disabled extensions:\n[ ]{2}- `[^`]+project\.ts`/);
+  assert.match(formatted, /Global skills: global-skill/);
+  assert.match(formatted, /Project skills: project-skill/);
+  assert.match(formatted, /Global extensions:[\s\S]*interactive\.ts/);
+  assert.match(formatted, /Project extensions:[\s\S]*project\.ts/);
 });
 void test("doctor attributes unmatched replacement selectors to the project settings field", async () => {
   const paths = fixture();
   const globalSettings = join(paths.agentDir, "pi-extensible-workflows", "settings.json");
   const projectSettings = join(paths.cwd, ".pi", "pi-extensible-workflows", "settings.json");
-  writeFileSync(globalSettings, JSON.stringify({ disabledAgentResources: { skills: ["same-selector"] } }));
-  writeFileSync(projectSettings, JSON.stringify({ disabledAgentResources: { skills: ["same-selector"] } }));
+  writeFileSync(globalSettings, JSON.stringify({ skills: ["same-selector"] }));
+  writeFileSync(projectSettings, JSON.stringify({ skills: ["same-selector"] }));
   const report = await withHome(paths.root, () => doctor({ ...paths, settingsPath: globalSettings, discoverPi: async () => pi({ skills: [] }) }));
-  assert.equal(report.settingsSources.disabledAgentResources, projectSettings);
-  assert.deepEqual(report.diagnostics.filter(({ code }) => code === "AGENT_RESOURCE_UNMATCHED").map(({ source }) => source), [`${projectSettings}.disabledAgentResources.skills`]);
+  assert.equal(report.settingsSources.skills, projectSettings);
+  assert.deepEqual(report.diagnostics.filter(({ code }) => code === "AGENT_RESOURCE_UNMATCHED").map(({ source }) => source), [`${projectSettings}.skills`, `${projectSettings}.skills`]);
 });
 void test("doctor reports matched glob exclusions and unmatched exceptions", async () => {
   const paths = fixture();
@@ -385,14 +385,13 @@ void test("doctor reports matched glob exclusions and unmatched exceptions", asy
   const globalExtension = join(paths.agentDir, "extensions", "interactive.ts");
   const projectExtension = join(paths.cwd, ".pi", "project.ts");
   mkdirSync(join(paths.agentDir, "extensions"), { recursive: true });
-  writeFileSync(globalSettings, JSON.stringify({ disabledAgentResources: { skills: ["*", "!my-project-*", "!missing-*"], extensions: ["**/*", `!${projectExtension}`, `!${join(paths.root, "missing.ts")}`] } }));
+  writeFileSync(globalSettings, JSON.stringify({ skills: ["*", "!my-project-*", "!missing-*"], extensions: ["**/*", `!${projectExtension}`, `!${join(paths.root, "missing.ts")}`] }));
   const report = await withHome(paths.root, () => doctor({ ...paths, settingsPath: globalSettings, discoverPi: async () => pi({ extensions: [globalExtension, projectExtension], skills: ["my-project-skill", "other-skill"] }) }));
-  assert.deepEqual(report.resourcePolicy.excludedSkills, ["other-skill"]);
-  assert.deepEqual(report.resourcePolicy.excludedExtensions, [globalExtension]);
+  assert.deepEqual(report.resourcePolicy.selectedSkills, ["other-skill"]);
+  assert.deepEqual(report.resourcePolicy.selectedExtensions, [globalExtension]);
   assert.deepEqual(report.resourcePolicy.unmatchedSkills, ["!missing-*"]);
   assert.deepEqual(report.resourcePolicy.unmatchedExtensions, [`!${join(paths.root, "missing.ts")}`]);
-  assert.match(formatDoctorReport(report), /Disabled skills:\n[ ]{2}- `other-skill`/);
-  assert.match(formatDoctorReport(report), /Exposed skills:\n[ ]{2}- `my-project-skill`/);
+  assert.match(formatDoctorReport(report), /Effective skills: other-skill/);
 });
 void test("doctor excludes workflow_catalog from active capabilities and output", async () => {
   const paths = fixture();
@@ -407,7 +406,7 @@ void test("package bin and CLI expose doctor and inspector commands", async () =
   let output = "";
   const exit = await withHome(paths.root, () => runCli(["doctor"], { ...paths, discoverPi: async () => pi({ knownModels: [], availableModels: [] }) }, (text) => { output += text; }));
   assert.equal(exit, 0);
-  for (const heading of ["## Environment", "## Trust/resources", "## Pi active tools", "## Pi active extensions", "## Pi active skills", "## Workflow agent resources", "## Roles", "## Reusable functions", "## Diagnostics", "## Summary"]) assert.match(output, new RegExp(heading));
+  for (const heading of ["## Environment", "## Trust/resources", "## Pi active tools", "## Pi active extensions", "## Pi active skills", "## Workflow agent resource selectors", "## Roles", "## Reusable functions", "## Diagnostics", "## Summary"]) assert.match(output, new RegExp(heading));
   assert.doesNotMatch(output, /## Role inspection/);
   output = "";
   assert.equal(await withHome(paths.root, () => runCli(["doctor", "--json"], { ...paths, discoverPi: async () => pi({ knownModels: [], availableModels: [] }) }, (text) => { output += text; })), 0);

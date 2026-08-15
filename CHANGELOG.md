@@ -2,7 +2,7 @@
 ## Unreleased
 
 - Show the core package's bundled changelog once after its installed version changes, with a startup fallback for `pi update --extensions` and `pi update --all` ([#208](https://github.com/vekexasia/pi-extensible-workflows/issues/208)).
-- Replaced `disabledAgentResources` with ordered direct `skills`, `extensions`, and `tools` selectors composed across settings, roles, and agent calls ([#205](https://github.com/vekexasia/pi-extensible-workflows/issues/205)).
+- Replaced `disabledAgentResources` with ordered direct `skills`, `extensions`, and `tools` selectors composed across settings, roles, and agent calls; Herdr configuration uses the separate `extensionSettings.herdr` namespace ([#205](https://github.com/vekexasia/pi-extensible-workflows/issues/205)).
 ## [5.4.0] - 2026-08-12
 
 ### Subagents API and migration

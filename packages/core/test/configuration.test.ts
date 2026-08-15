@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { testExtensionApi } from "./support.js";
-import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, disabledResources, formatNavigatorDashboard, formatNavigatorRun, loadAgentDefinitions, loadSettings, mergeAgentResourceExclusions, parseRoleMarkdown, preflight, registerWorkflowExtension, resourcePatternMatches, resolveAgentResourcePolicy, resolveModelReference, resolveWorkflowSettings, RunStore, runWorkflow, saveModelAliases, structuralPath, validateModelAliases, WorkflowAgentExecutor, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WorkflowError, WorkflowRegistry } from "../src/index.js";
+import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, formatNavigatorDashboard, formatNavigatorRun, loadAgentDefinitions, loadSettings, parseRoleMarkdown, preflight, registerWorkflowExtension, resourcePatternMatches, resolveAgentResourcePolicy, resolveModelReference, resolveWorkflowSettings, RunStore, runWorkflow, saveModelAliases, selectResourcesByLayers, structuralPath, validateModelAliases, WorkflowAgentExecutor, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WorkflowError, WorkflowRegistry } from "../src/index.js";
 import type { SessionInput } from "../src/agent-execution.js";
 import { listRunIds } from "../src/persistence.js";
 import { testTransport, type TestPiSession } from "./test-transport.js";
@@ -95,7 +95,7 @@ void test("parses and validates role context file scopes", () => {
   assert.deepEqual(parseRoleMarkdown("---\ncontextFiles: []\n---\nbody", true), { prompt: "body", contextFiles: [] });
   for (const content of ["---\ncontextFiles: global\n---\nbody", "---\ncontextFiles: [global, repository]\n---\nbody", "---\ncontextFiles: [2]\n---\nbody"]) assert.throws(() => parseRoleMarkdown(content, true), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
 });
-void test("strict role resource exclusions normalize relative and portable paths", () => {
+void test("strict role selectors normalize relative and portable extension paths", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-extensible-workflows-role-resources-")));
   const rolePath = join(root, "roles", "reviewer.md");
   const extension = join(root, "role-extension.ts");
@@ -104,12 +104,13 @@ void test("strict role resource exclusions normalize relative and portable paths
   const previousHome = process.env.HOME;
   process.env.HOME = root;
   try {
-    const definition = parseRoleMarkdown(`---\ndisabledAgentResources:\n  skills: [" role-skill", role-skill]\n  extensions:\n    - "../role-extension.ts"\n    - "~/role-extension.ts"\n    - "${pathToFileURL(extension).href}"\n---\nbody`, true, rolePath);
-    assert.deepEqual(definition, { prompt: "body", disabledAgentResources: { skills: ["role-skill", "role-skill"], extensions: [extension, extension, extension] } });
+    const definition = parseRoleMarkdown(`---\nskills: [role-skill, role-skill]\nextensions:\n  - "../role-extension.ts"\n  - "~/role-extension.ts"\n  - "${pathToFileURL(extension).href}"\n---\nbody`, true, rolePath);
+    assert.deepEqual(definition, { prompt: "body", skills: ["role-skill", "role-skill"], extensions: [extension, extension, extension] });
     for (const content of [
-      "---\ndisabledAgentResources: { unknown: [x] }\n---\nbody",
-      "---\ndisabledAgentResources:\n  skills: ['']\n---\nbody",
-      "---\ndisabledAgentResources:\n  extensions: [2]\n---\nbody",
+      "---\nskills: role-skill\n---\nbody",
+      "---\nskills: [role-skill, 2]\n---\nbody",
+      "---\nskills: [role-skill, '']\n---\nbody",
+      "---\nextensions: [2]\n---\nbody",
     ]) assert.throws(() => parseRoleMarkdown(content, true, rolePath), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
@@ -149,15 +150,15 @@ void test("production role policy rejects overrides before persistence and prese
   const workflow = tools.find(({ name }) => name === "workflow");
   assert.ok(workflow);
   const context = { cwd, hasUI: false, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
-  for (const [field, value] of [["model", "openai/gpt"], ["thinking", "low"], ["tools", ["read"]] ] as const) {
+  for (const [field, value] of [["model", "openai/gpt"], ["thinking", "low"]] as const) {
     await assert.rejects(workflow.execute("id", { name: `static-${field}`, script: `return agent("inspect", { role: "reviewer", ${field}: ${JSON.stringify(value)} });`, foreground: true }, new AbortController().signal, undefined, context), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   }
   assert.deepEqual(await listRunIds(cwd, "session", home), []);
-  for (const [field, value] of [["model", "openai/gpt"], ["thinking", "low"], ["tools", ["read"]] ] as const) {
+  for (const [field, value] of [["model", "openai/gpt"], ["thinking", "low"]] as const) {
     await assert.rejects(workflow.execute("id", { name: `dynamic-${field}`, script: `const options = { role: args.role }; options.${field} = args.value; return agent("inspect", options);`, args: { role: "reviewer", value }, foreground: true }, new AbortController().signal, undefined, context), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   }
   const dynamicRuns = await listRunIds(cwd, "session", home);
-  assert.equal(dynamicRuns.length, 3);
+  assert.equal(dynamicRuns.length, 2);
   for (const runId of dynamicRuns) assert.deepEqual((await new RunStore(cwd, "session", runId, home).load()).run.agents, []);
   const result = await workflow.execute("id", { name: "role-only", script: "return agent(\"inspect\", { role: \"reviewer\", retries: 1, timeoutMs: 100 });", foreground: true }, new AbortController().signal, undefined, context) as { content: Array<{ text?: string }> };
   assert.equal((JSON.parse(result.content[0]?.text ?? "null") as string), "done");
@@ -198,7 +199,7 @@ void test("strict settings use defaults and reject unknown or unsafe values", ()
   assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS");
   writeFileSync(path, JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   assert.equal(loadSettings(path).extensionSettings?.herdr?.enableFullyInspectableMode, true);
-  writeFileSync(path, JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: "yes" } } }));
+  writeFileSync(path, JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: "yes" } } }));
   assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS");
   writeFileSync(path, JSON.stringify({ agentTimeoutMs: 500 }));
   assert.throws(() => loadSettings(path), /Unknown workflow setting/);
@@ -231,7 +232,7 @@ void test("workflow extension wires the background widget from global settings",
   assert.deepEqual(install("{"), { renderers: ["workflow-log", "piewf-run-receipt"], shortcuts: ["alt+o"] });
 });
 
-void test("replaces trusted agent resource exclusions and ignores untrusted project selectors", () => {
+void test("composes trusted resource selectors and ignores untrusted project selectors", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-resources-"));
   const home = join(root, "home");
   const cwd = join(root, "project");
@@ -240,18 +241,18 @@ void test("replaces trusted agent resource exclusions and ignores untrusted proj
   const extension = join(home, "interactive-only.ts");
   mkdirSync(join(home, ".pi", "agent", "pi-extensible-workflows"), { recursive: true });
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(globalPath, JSON.stringify({ concurrency: 4, modelAliases: { reviewer: "openai/gpt" }, disabledAgentResources: { skills: [" learning-opportunities", "learning-opportunities"], extensions: ["~/interactive-only.ts", `file://${extension}`] } }));
-  writeFileSync(projectPath, JSON.stringify({ disabledAgentResources: { skills: ["project-only", "learning-opportunities"], extensions: ["../../../home/interactive-only.ts", "../project-only.ts"] } }));
+  writeFileSync(globalPath, JSON.stringify({ concurrency: 4, modelAliases: { reviewer: "openai/gpt" }, skills: ["*", "!learning-opportunities"], extensions: ["**/*", `!${extension}`] }));
+  writeFileSync(projectPath, JSON.stringify({ skills: ["*", "!project-only"], extensions: ["**/*", "!../project-only.ts"] }));
   const previousHome = process.env.HOME;
   process.env.HOME = home;
   try {
     const trusted = resolveAgentResourcePolicy(cwd, true, globalPath);
-    assert.deepEqual(trusted.effective.skills, ["project-only", "learning-opportunities"]);
-    assert.deepEqual(trusted.effective.extensions, [extension, join(cwd, ".pi", "project-only.ts")]);
+    assert.deepEqual(trusted.effective.skills, ["*", "!learning-opportunities", "*", "!project-only"]);
+    assert.deepEqual(trusted.effective.extensions, ["**/*", `!${extension}`, "**/*", `!${join(cwd, ".pi", "project-only.ts")}`]);
     assert.equal(loadSettings(globalPath).modelAliases?.reviewer, "openai/gpt");
     const untrusted = resolveAgentResourcePolicy(cwd, false, globalPath);
-    assert.deepEqual(untrusted.effective.skills, ["learning-opportunities", "learning-opportunities"]);
-    assert.deepEqual(untrusted.effective.extensions, [extension, extension]);
+    assert.deepEqual(untrusted.effective.skills, ["*", "!learning-opportunities"]);
+    assert.deepEqual(untrusted.effective.extensions, ["**/*", `!${extension}`]);
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
   }
@@ -259,20 +260,21 @@ void test("replaces trusted agent resource exclusions and ignores untrusted proj
 void test("validates minimatch resource selectors and resolves extension globs", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-globs-"));
   const path = join(root, "settings.json");
-  writeFileSync(path, JSON.stringify({ disabledAgentResources: { skills: ["*", "!my-project-*", "{one,two}"], extensions: ["**/*", "!../../extensions/**"] } }));
-  assert.deepEqual(loadSettings(path).disabledAgentResources, { skills: ["*", "!my-project-*", "{one,two}"], extensions: ["**/*", `!${resolve(root, "../../extensions/**")}`] });
-  writeFileSync(path, JSON.stringify({ disabledAgentResources: { skills: [""] } }));
-  assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS" && error.message.includes(`${path}.disabledAgentResources.skills[0]`));
-  writeFileSync(path, JSON.stringify({ disabledAgentResources: { extensions: ["!"] } }));
-  assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS" && error.message.includes(`${path}.disabledAgentResources.extensions[0]`));
+  writeFileSync(path, JSON.stringify({ skills: ["*", "!my-project-*", "{one,two}"], extensions: ["**/*", "!../../extensions/**"] }));
+  assert.deepEqual(loadSettings(path).skills, ["*", "!my-project-*", "{one,two}"]);
+  assert.deepEqual(loadSettings(path).extensions, ["**/*", `!${resolve(root, "../../extensions/**")}`]);
+  writeFileSync(path, JSON.stringify({ skills: [""] }));
+  assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS" && error.message.includes(`${path}.skills[0]`));
+  writeFileSync(path, JSON.stringify({ extensions: ["!"] }));
+  assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS" && error.message.includes(`${path}.extensions[0]`));
 });
 void test("preserves rooted extension glob selectors", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-rooted-globs-"));
   const path = join(root, "settings.json");
   const cases = [["/*.ts", "/extension.ts"], ["/?mp/**", "/tmp/extension.ts"], ["/[tv]mp/**", "/tmp/extension.ts"], ["/**/*.ts", "/tmp/extension.ts"]] as const;
   for (const [selector, resource] of cases) {
-    writeFileSync(path, JSON.stringify({ disabledAgentResources: { extensions: [selector] } }));
-    const normalized = loadSettings(path).disabledAgentResources?.extensions[0] ?? "";
+    writeFileSync(path, JSON.stringify({ extensions: [selector] }));
+    const normalized = loadSettings(path).extensions?.[0] ?? "";
     assert.equal(normalized, selector);
     assert.equal(resourcePatternMatches(resource, normalized), true);
   }
@@ -282,7 +284,7 @@ void test("matches Windows extension paths using portable glob separators", () =
   const allowed = "C:\\agent\\extensions\\allowed.ts";
   assert.equal(resourcePatternMatches(disabled, "C:\\agent\\extensions\\*.ts"), true);
   assert.equal(resourcePatternMatches(disabled, disabled), true);
-  assert.deepEqual(disabledResources(["C:\\agent\\extensions\\**\\*.ts", `!${allowed}`], [disabled, allowed]), [disabled]);
+  assert.deepEqual(selectResourcesByLayers([["C:\\agent\\extensions\\**\\*.ts", `!${allowed}`]], [disabled, allowed]), [disabled]);
 });
 void test("canonicalizes symlinked extension glob prefixes", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-extensible-workflows-symlink-globs-")));
@@ -290,22 +292,21 @@ void test("canonicalizes symlinked extension glob prefixes", () => {
   const realExtensions = join(root, "real", "extensions");
   mkdirSync(realExtensions, { recursive: true });
   symlinkSync(realExtensions, join(root, "link"));
-  writeFileSync(path, JSON.stringify({ disabledAgentResources: { extensions: ["link/*.ts"] } }));
-  const normalized = loadSettings(path).disabledAgentResources?.extensions ?? [];
+  writeFileSync(path, JSON.stringify({ extensions: ["link/*.ts"] }));
+  const normalized = loadSettings(path).extensions ?? [];
   assert.deepEqual(normalized, [join(realExtensions, "*.ts")]);
   assert.equal(resourcePatternMatches(join(realExtensions, "extension.ts"), normalized[0] ?? ""), true);
 });
 void test("accepts Minimatch character class forms", () => {
   const path = join(mkdtempSync(join(tmpdir(), "pi-extensible-workflows-character-classes-")), "settings.json");
   const selectors = ["[[:alpha:]]", "[]]"];
-  writeFileSync(path, JSON.stringify({ disabledAgentResources: { skills: selectors } }));
-  assert.deepEqual(loadSettings(path).disabledAgentResources?.skills, selectors);
+  writeFileSync(path, JSON.stringify({ skills: selectors }));
+  assert.deepEqual(loadSettings(path).skills, selectors);
   assert.equal(resourcePatternMatches("a", "[[:alpha:]]"), true);
   assert.equal(resourcePatternMatches("]", "[]]"), true);
 });
 void test("preserves ordered duplicate resource selectors", () => {
-  assert.deepEqual(mergeAgentResourceExclusions({ skills: ["*", "!*"], extensions: ["/global.ts", "!/global.ts"] }, { skills: ["*"], extensions: ["/project.ts"] }), { skills: ["*", "!*", "*"], extensions: ["/global.ts", "!/global.ts", "/project.ts"] });
-  assert.deepEqual(disabledResources(["*", "!*", "*"], ["resource"]), ["resource"]);
+  assert.deepEqual(selectResourcesByLayers([["*", "!*", "*"]], ["resource"]), ["resource"]);
 });
 void test("validates and resolves portable model aliases", () => {
   const dir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-aliases-"));
@@ -412,7 +413,7 @@ void test("resume reloads aliases for pending and retried calls while replaying 
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
   const oldAliases = { reviewer: "old/model" };
   const newAliases = { reviewer: "new/model" };
-  writeFileSync(settingsPath, JSON.stringify({ concurrency: 2, modelAliases: oldAliases, disabledAgentResources: { skills: ["old-skill"], extensions: [join(agentDir, "old.ts")] } }));
+  writeFileSync(settingsPath, JSON.stringify({ concurrency: 2, modelAliases: oldAliases, skills: ["old-skill"], extensions: [join(agentDir, "old.ts")] }));
   const script = `const replayed = await agent("replayed", { model: "reviewer" }); const pending = await agent("pending", { model: "reviewer", label: "pending", retries: 1 }); const fresh = await agent("fresh", { model: "reviewer" }); return { replayed, pending, fresh };`;
   const replayPaths: string[] = [];
   await runWorkflow(script, null, { agent: async (_prompt, _options, _signal, identity) => { replayPaths.push(structuralPath("agent", ...identity.structuralPath, `callsite:${identity.callSite}`, `occurrence:${String(identity.occurrence)}`)); return "original"; } }).result;
@@ -421,7 +422,7 @@ void test("resume reloads aliases for pending and retried calls while replaying 
   await store.complete(replayPaths[0] as string, "replayed");
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  writeFileSync(settingsPath, JSON.stringify({ concurrency: 6, modelAliases: newAliases, disabledAgentResources: { skills: ["new-skill"], extensions: [join(agentDir, "new.ts")] } }));
+  writeFileSync(settingsPath, JSON.stringify({ concurrency: 6, modelAliases: newAliases, skills: ["new-skill"], extensions: [join(agentDir, "new.ts")] }));
   const inputs: SessionInput[] = [];
   let failedPending = false;
   const createSession = async (input: SessionInput): Promise<TestPiSession> => {
@@ -538,19 +539,19 @@ void test("resolves trusted project settings with replacement and inheritance se
   const projectPath = join(cwd, ".pi", "pi-extensible-workflows", "settings.json");
   mkdirSync(join(home, "agent", "pi-extensible-workflows"), { recursive: true });
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(globalPath, JSON.stringify({ concurrency: 6, modelAliases: { reviewer: "openai/gpt" }, disabledAgentResources: { skills: ["global"], extensions: ["/global.ts"] } }));
-  writeFileSync(projectPath, JSON.stringify({ concurrency: 2, modelAliases: {}, disabledAgentResources: { skills: [], extensions: [] } }));
+  writeFileSync(globalPath, JSON.stringify({ concurrency: 6, modelAliases: { reviewer: "openai/gpt" }, skills: ["global"], extensions: ["/global.ts"] }));
+  writeFileSync(projectPath, JSON.stringify({ concurrency: 2, modelAliases: {}, skills: [], extensions: [] }));
   const trusted = resolveWorkflowSettings(cwd, true, globalPath);
   assert.equal(trusted.effective.concurrency, 2);
   assert.deepEqual(trusted.effective.modelAliases, {});
-  assert.deepEqual(trusted.effective.disabledAgentResources, { skills: [], extensions: [] });
+  assert.deepEqual(trusted.effective.skills, ["global"]);
   assert.equal(trusted.sources.modelAliases, projectPath);
   assert.equal(trusted.effective.backgroundWidget, true);
   writeFileSync(projectPath, JSON.stringify({ concurrency: 3 }));
   const partial = resolveWorkflowSettings(cwd, true, globalPath);
   assert.equal(partial.effective.concurrency, 3);
   assert.deepEqual(partial.effective.modelAliases, { reviewer: "openai/gpt" });
-  assert.deepEqual(partial.effective.disabledAgentResources, { skills: ["global"], extensions: ["/global.ts"] });
+  assert.deepEqual(partial.effective.skills, ["global"]);
   writeFileSync(projectPath, JSON.stringify({ backgroundWidget: false }));
   assert.throws(() => resolveWorkflowSettings(cwd, true, globalPath), /Unknown workflow setting/);
   writeFileSync(projectPath, "{ malformed");

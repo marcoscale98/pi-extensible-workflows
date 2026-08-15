@@ -396,7 +396,7 @@ void test("extension roles flow through host guidance, preflight, launch snapsho
   const roleDirectory = join(home, "roles");
   const roleExtension = join(home, "role-extension.ts");
   mkdirSync(roleDirectory, { recursive: true });
-  writeFileSync(join(roleDirectory, "extension-reviewer.md"), `---\ndescription: Packaged review role\nmodel: anthropic/opus\nthinking: high\ntools: [read, grep]\ndisabledAgentResources:\n  skills: [role-skill]\n  extensions: ["${roleExtension}"]\n---\nExtension prompt`);
+  writeFileSync(join(roleDirectory, "extension-reviewer.md"), `---\ndescription: Packaged review role\nmodel: anthropic/opus\nthinking: high\ntools: [read, grep]\nskills: [role-skill]\nextensions: ["${roleExtension}"]\n---\nExtension prompt`);
   const inputs: SessionInput[] = [];
   const prompts: string[] = [];
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; details?: unknown }> }> = [];
@@ -422,7 +422,7 @@ void test("extension roles flow through host guidance, preflight, launch snapsho
   assert.deepEqual(input.model, { provider: "anthropic", model: "opus", thinking: "high" });
   assert.deepEqual(input.tools, ["read", "grep"]);
   assert.equal(input.systemPromptAppend, "Extension prompt");
-  assert.deepEqual(input.resourcePolicy?.effective, { skills: ["role-skill"], extensions: [roleExtension] });
+  assert.deepEqual(input.resourcePolicy?.effective, { skills: ["role-skill"], extensions: [roleExtension], tools: ["read", "grep"] });
   const prompt = prompts[0];
   assert.ok(prompt);
   assert.match(prompt, /Task:\ndelegate/);
@@ -431,7 +431,7 @@ void test("extension roles flow through host guidance, preflight, launch snapsho
   assert.deepEqual(loaded.snapshot.models, ["openai/gpt", "anthropic/opus"]);
   assert.deepEqual(loaded.snapshot.tools, ["read", "grep"]);
   assert.deepEqual(loaded.snapshot.projectRoles, []);
-  assert.deepEqual(loaded.snapshot.roles, { "extension-reviewer": { prompt: "Extension prompt", description: "Packaged review role", model: "anthropic/opus", thinking: "high", tools: ["read", "grep"], disabledAgentResources: { skills: ["role-skill"], extensions: [roleExtension] } } });
+  assert.deepEqual(loaded.snapshot.roles, { "extension-reviewer": { prompt: "Extension prompt", description: "Packaged review role", model: "anthropic/opus", thinking: "high", tools: ["read", "grep"], skills: ["role-skill"], extensions: [roleExtension] } });
   await shutdown?.();
 });
 void test("labels standard role directory scan failures as standard roles", () => {

@@ -47,7 +47,7 @@ void test("uses the global extension setting and complete breadcrumb labels", ()
   const agentDir = join(root, "agent");
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   assert.equal(isFullyInspectableMode(agentDir), true);
   assert.equal(breadcrumbLabel({ structuralPath: ["review", "nested"], parentBreadcrumb: "reviewLoop", callSite: "function:agent/foo", occurrence: 2 }, 3), "review > nested > reviewLoop > function:agent/foo #3");
 });
@@ -66,7 +66,7 @@ void test("registers session and live actions when enabled", () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-full-action-"));
   mkdirSync(join(root, "agent"), { recursive: true });
   mkdirSync(join(root, "agent", "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(root, "agent", "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(root, "agent", "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   const fullyInspectable = createHerdrExtension({ agentDir: join(root, "agent"), env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "pane" } });
   assert.equal(fullyInspectable.agentAttemptActions.openLiveSession.visible(context), false);
   assert.equal(fullyInspectable.agentAttemptActions.openSession.visible({ ...context, liveSession: undefined }), true);
@@ -351,7 +351,7 @@ void test("resumes and terminally disposes the local session when initial Herdr 
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   const lifecycle = [];
   let sessionNumber = 0;
   const recorder = (pi) => {
@@ -387,7 +387,7 @@ void test("restores the previous local generation after an initial pane launch f
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   const lifecycle = [];
   let sessionNumber = 0;
   const recorder = (pi) => {
@@ -428,7 +428,7 @@ void test("preserves an initial pane launch error when local disposal also fails
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   const runner = async (args) => {
     if (args[0] === "workspace" && args[1] === "create") return JSON.stringify({ result: { workspace: { workspace_id: "workspace" }, tab: { tab_id: "tab-root" }, root_pane: { pane_id: "pane-root" } } });
     if (args[0] === "tab" && args[1] === "create") return JSON.stringify({ result: { tab: { tab_id: "tab-child" }, root_pane: { pane_id: "pane-child" } } });
@@ -453,7 +453,7 @@ void test("clears the active pane after a failed pane monitor so the next prompt
   const root = mkdtempSync(join(tmpdir(), "herdr-failed-resume-pane-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   let paneRuns = 0;
   let secondProcessReports = 0;
   let tabCount = 0;
@@ -495,7 +495,7 @@ void test("concurrent prompts join an in-flight pane launch rather than opening 
   const root = mkdtempSync(join(tmpdir(), "herdr-concurrent-prompt-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   let paneRuns = 0;
   let firstProcessReports = 0;
   let secondProcessReports = 0;
@@ -548,7 +548,7 @@ void test("preserves a pane monitor failure when handoff restoration fails", { t
   const root = mkdtempSync(join(tmpdir(), "herdr-monitor-error-precedence-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   let firstProcessReport = true;
   let sessionFile;
   const runner = async (args) => {
@@ -581,7 +581,7 @@ void test("serializes one replacement launch after a shared launch failure", { t
   const root = mkdtempSync(join(tmpdir(), "herdr-shared-launch-retry-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   let paneRuns = 0;
   let firstProcessReports = 0;
   let replacementProcessReports = 0;
@@ -638,7 +638,7 @@ void test("does not launch a replacement after Herdr disposal starts", { timeout
   const root = mkdtempSync(join(tmpdir(), "herdr-disposal-launch-chain-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   let paneRuns = 0;
   let firstProcessReports = 0;
   let replacementLaunches = 0;
@@ -700,7 +700,7 @@ void test("disposes a Herdr wrapper while a subsequent pane is still launching",
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(cwd, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   let server;
   let session;
   let pending;
@@ -769,7 +769,7 @@ void test("routes fully inspectable agents into one labeled workflow workspace",
   const agentDir = join(root, "agent");
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   const calls = [];
   let runCommand;
   let agentReports = 0;
@@ -817,7 +817,7 @@ void test("hands off sequential fully inspectable prompts and cleans the active 
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-sequential-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   const calls = [];
   const statusReports = new Map();
   let tabNumber = 0;
@@ -854,7 +854,7 @@ void test("hands off sequential fully inspectable prompts and cleans the active 
 void test("bridges unknown tools and aborts forwarded tool calls", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-bridge-"));
   const agentDir = join(root, "agent"); mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   let runCommand; const calls = [];
   const runner = async (args) => {
     calls.push([...args]);
@@ -910,7 +910,7 @@ void test("default workspace manager reuses one workspace and closes it once on 
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-workspace-lifecycle-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   const handlers = new Map();
   const calls = [];
   let tabNumber = 0;
@@ -946,7 +946,7 @@ void test("default workspace manager reuses one workspace and closes it once on 
 void test("relays generated tool bridge results, errors, and updates", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-extension-tool-bridge-"));
   const agentDir = join(root, "agent"); mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   let runCommand;
   const runner = async (args) => {
     if (args[0] === "pane" && args[1] === "process-info") return JSON.stringify({ result: { process_info: { foreground_processes: [{ name: "node", argv: [process.execPath, piRuntime.entrypoint] }] } } });
@@ -996,7 +996,7 @@ void test("bridges a custom tool with a model supplied only by an inline extensi
   const root = mkdtempSync(join(tmpdir(), "herdr-inline-provider-"));
   const agentDir = join(root, "agent");
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
   writeFileSync(join(agentDir, "auth.json"), "{}");
   let runCommand;
   const runner = async (args) => {

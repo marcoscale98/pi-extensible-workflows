@@ -87,7 +87,7 @@ const FAILURE_DELIVERY_STATES: ReadonlySet<RunState> = new Set(["failed", "stopp
 function snapshotResourcePolicy(snapshot: Readonly<LaunchSnapshot>, cwd: string, projectTrusted: boolean, globalSettingsPath: string): AgentResourcePolicy {
   const selectors = snapshot.settings;
   const empty = { skills: [], extensions: [] };
-  const effective = { skills: selectors.skills ?? [], extensions: Array.isArray(selectors.extensions) ? selectors.extensions : [], ...(selectors.tools === undefined ? {} : { tools: selectors.tools }) };
+  const effective = { skills: selectors.skills ?? [], extensions: selectors.extensions ?? [], ...(selectors.tools === undefined ? {} : { tools: selectors.tools }) };
   return { globalSettingsPath, projectSettingsPath: workflowProjectSettingsPath(cwd), projectTrusted, global: empty, project: empty, effective, unmatchedSkills: [], unmatchedExtensions: [], unmatchedTools: [] };
 }
 type WorkflowLaunchSettings = { settings: Readonly<WorkflowSettings>; resolution: WorkflowSettingsResolution; resourcePolicy: AgentResourcePolicy };

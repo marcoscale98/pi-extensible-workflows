@@ -381,7 +381,7 @@ void test("resuming a launched trusted-project run keeps per-run concurrency and
   mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
   writeFileSync(globalSettings, JSON.stringify({ concurrency: 1 }));
-  writeFileSync(projectSettings, JSON.stringify({ concurrency: 2, disabledAgentResources: { skills: ["project-old"], extensions: [] } }));
+  writeFileSync(projectSettings, JSON.stringify({ concurrency: 2, skills: ["project-old"], extensions: [] }));
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
   const commands: Array<{ handler: (args: string, ctx: unknown) => Promise<void> }> = [];
   const inputs: SessionInput[] = [];
@@ -407,7 +407,7 @@ void test("resuming a launched trusted-project run keeps per-run concurrency and
   assert.equal(paused.run.state, "paused");
   assert.equal(paused.snapshot.settings.concurrency, 4);
   assert.equal(paused.snapshot.settingsSources?.concurrency, "per-run options");
-  assert.deepEqual(paused.snapshot.settings.disabledAgentResources?.skills, ["project-old"]);
+  assert.deepEqual(paused.snapshot.settings.skills, ["project-old"]);
   writeFileSync(globalSettings, JSON.stringify({ concurrency: 1 }));
   writeFileSync(projectSettings, JSON.stringify({ concurrency: 2 }));
   const resumeCommand = commands[0]?.handler;
@@ -418,7 +418,7 @@ void test("resuming a launched trusted-project run keeps per-run concurrency and
   assert.equal(resumed.run.state, "completed");
   assert.equal(resumed.snapshot.settings.concurrency, 4);
   assert.equal(resumed.snapshot.settingsSources?.concurrency, "per-run options");
-  assert.equal(resumed.snapshot.settings.disabledAgentResources, undefined);
+  assert.deepEqual(resumed.snapshot.settings.skills, ["project-old"]);
   await shutdown?.();
 });
 

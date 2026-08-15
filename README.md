@@ -68,7 +68,7 @@ Launches require a non-empty `name` and exactly one of inline `script` or review
 | Durable runs | Run state, exact executed source, results, attempts, prompts, budgets, and worktree ownership are persisted. |
 | Human gates | `checkpoint(...)` pauses a workflow until an exact approval or rejection is supplied. |
 | Isolated development | `withWorktree(name, callback)` creates explicit named worktree scopes that agents and recovery can reuse. |
-| Agent policy | Roles, model aliases, tool allow-lists, structured output, retries, timeouts, and resource exclusions share one validated configuration model. |
+| Agent policy | Roles, model aliases, resource selectors, structured output, retries, and timeouts share one validated configuration model. |
 | Bounded execution | Per-run concurrency and optional aggregate token, cost, duration, and agent-launch budgets constrain work. |
 | Recovery | Failed runs can retry from their completed journal; budget-exhausted runs can resume after an approved budget change. |
 | Operations | `/workflow` and `/subagents`, the background widget, durable receipts, status tools, and `piewf` expose live and persisted state. |
@@ -134,9 +134,9 @@ See [operations and debugging](https://vekexasia.github.io/pi-extensible-workflo
 
 Global workflow settings and roles live under `<agentDir>/pi-extensible-workflows/`, normally `~/.pi/agent/pi-extensible-workflows/`. Trusted projects may override supported settings and roles under `<cwd>/.pi/pi-extensible-workflows/`. Set `PI_CODING_AGENT_DIR` to move the agent directory.
 
-Roles package stable model, thinking, tools, prompt, context-file, and resource policy. Calls can use a role name or a role override object. Subagents and workflows resolve the same role files and use the same validation rules.
+Roles package stable model, thinking, tools, prompt, context-file, and resource selector fields. Calls can use a role name or a role override object. Subagents and workflows resolve the same role files and use the same validation rules.
 
-- [Settings, model aliases, and resource exclusions](https://vekexasia.github.io/pi-extensible-workflows/developers.html#settings)
+- [Settings, model aliases, and resource selectors](https://vekexasia.github.io/pi-extensible-workflows/developers.html#settings)
 - [Role files and per-call customization](https://vekexasia.github.io/pi-extensible-workflows/roles.html)
 
 ## Extend workflows

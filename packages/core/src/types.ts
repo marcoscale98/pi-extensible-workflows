@@ -38,8 +38,6 @@ export type RoleOverride = {
   description?: string | null;
   overrideSystemPrompt?: boolean | null;
   contextFiles?: ContextFileScope[] | null;
-  /** @deprecated Use the direct selector fields. */
-  disabledAgentResources?: { skills: string[]; extensions: string[] } | null;
 };
 export function roleNameOf(value: unknown): string | undefined {
   if (typeof value === "string") return value;
@@ -90,23 +88,21 @@ export interface WorkflowModelAlias { resolve: (context: Readonly<WorkflowModelA
 export interface WorkflowMetadata { name: string; description?: string }
 export interface HerdrExtensionSettings { enableFullyInspectableMode?: boolean }
 export interface WorkflowExtensionSettings { herdr?: Readonly<HerdrExtensionSettings> }
-export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: WorkflowExtensionSelectorValue; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; /** @deprecated Unsupported; retained only for decoding old in-memory values. */ disabledAgentResources?: Readonly<AgentResourceExclusions> }
-export interface WorkflowSettingsOverrides { concurrency?: number; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: WorkflowExtensionSelectorValue; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; /** @deprecated Unsupported. */ disabledAgentResources?: Readonly<AgentResourceExclusions> }
-export interface WorkflowSettingsSources { concurrency: string; modelAliases: string; skills?: string; extensions?: string; tools?: string; extensionSettings?: string; /** @deprecated */ disabledAgentResources?: string }
+export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[] }
+export interface WorkflowSettingsOverrides { concurrency?: number; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[] }
+export interface WorkflowSettingsSources { concurrency: string; modelAliases: string; skills?: string; extensions?: string; tools?: string; extensionSettings?: string }
 export interface WorkflowSettingsResolution { globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; global: Readonly<WorkflowSettings>; project: Readonly<WorkflowSettingsOverrides>; effective: Readonly<WorkflowSettings>; sources: Readonly<WorkflowSettingsSources> }
-export interface AgentResourceExclusions { skills: readonly string[]; extensions: readonly string[] }
 export interface AgentResourceSelectors { skills?: readonly string[]; extensions?: readonly string[]; tools?: readonly string[] }
 export interface AgentResourceSelectorSet { skills: readonly string[]; extensions: readonly string[]; tools?: readonly string[] }
-export type WorkflowExtensionSelectorValue = readonly string[] | Readonly<WorkflowExtensionSettings>;
 export type ContextFileScope = "global" | "project" | "cwd";
-export interface AgentResourcePolicy { globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; global: AgentResourceSelectorSet; project: AgentResourceSelectorSet; effective: AgentResourceSelectorSet; selectedSkills?: readonly string[]; selectedExtensions?: readonly string[]; selectedTools?: readonly string[]; unmatchedSkills: readonly string[]; unmatchedExtensions: readonly string[]; unmatchedTools?: readonly string[]; /** @deprecated */ excludedSkills?: readonly string[]; /** @deprecated */ excludedExtensions?: readonly string[]; selectorSources?: Readonly<{ global: AgentResourceSelectors; project: AgentResourceSelectors; role?: AgentResourceSelectors; call?: AgentResourceSelectors }> }
+export interface AgentResourcePolicy { globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; global: AgentResourceSelectorSet; project: AgentResourceSelectorSet; effective: AgentResourceSelectorSet; selectedSkills?: readonly string[]; selectedExtensions?: readonly string[]; selectedTools?: readonly string[]; unmatchedSkills: readonly string[]; unmatchedExtensions: readonly string[]; unmatchedTools?: readonly string[]; selectorSources?: Readonly<{ global: AgentResourceSelectors; project: AgentResourceSelectors; role?: AgentResourceSelectors; call?: AgentResourceSelectors }> }
 export interface AgentResourceInspection { selectors: AgentResourceSelectorSet; skills: readonly string[]; extensions: readonly string[]; tools: readonly string[]; unmatchedSkills: readonly string[]; unmatchedExtensions: readonly string[]; unmatchedTools: readonly string[]; selectorSources?: Readonly<{ global: AgentResourceSelectors; project: AgentResourceSelectors; role?: AgentResourceSelectors; call?: AgentResourceSelectors }> }
 
 export interface ContextFile { readonly path: string; readonly content: string }
 export interface AgentActivity { kind: "reasoning" | "tool" | "text"; text: string }
 export const WORKFLOW_AGENT_STALL_THRESHOLD_MS = 10 * 60 * 1000;
 export interface AgentAccounting { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }
-export interface AgentSetupSummary { hookNames: readonly string[]; model: ModelSpec; tools: readonly string[]; cwd: string; resourceSelectors?: AgentResourceInspection; /** @deprecated */ disabledAgentResources?: { skills: readonly string[]; extensions: readonly string[]; excludedSkills?: readonly string[]; excludedExtensions?: readonly string[]; unmatchedSkills: readonly string[]; unmatchedExtensions: readonly string[] } }
+export interface AgentSetupSummary { hookNames: readonly string[]; model: ModelSpec; tools: readonly string[]; cwd: string; resourceSelectors?: AgentResourceInspection }
 
 export interface AgentAttemptError { code: string; message: string }
 export interface AgentAttemptSummary { attempt: number; transport: string; session?: WorkflowAgentSessionReference; setup: AgentSetupSummary; error?: AgentAttemptError; accounting: AgentAccounting }
@@ -123,7 +119,7 @@ export interface WorkflowPhaseShellActivity { phaseIndex: number; active: number
 export interface RunRecord { id: string; workflowName: string; cwd: string; sessionId: string; state: RunState; agentSessions: readonly WorkflowAgentSessionReference[]; parentRunId?: string; retry?: WorkflowRetryProvenance; phase?: string; phaseHistory?: readonly WorkflowPhaseRecord[]; phaseHistoryIndex?: number; agents: readonly AgentRecord[]; activeShells?: number; activeShellStartedAt?: number; activeShellsByPhase?: readonly WorkflowPhaseShellActivity[]; error?: WorkflowErrorShape; failedAt?: string; budget?: WorkflowBudget; budgetVersion?: number; usage?: WorkflowBudgetUsage; budgetEvents?: readonly BudgetEvent[]; events?: readonly WorkflowRunEvent[]; delivery?: WorkflowRunDelivery }
 export const LAUNCH_SNAPSHOT_IDENTITY_VERSION = 5;
 export type WorkflowLaunchMode = "foreground" | "background";
-export interface AgentDefinition { prompt?: string; description?: string; model?: string; thinking?: NonNullable<ModelSpec["thinking"]>; tools?: readonly string[]; skills?: readonly string[]; extensions?: readonly string[]; overrideSystemPrompt?: boolean; contextFiles?: readonly ContextFileScope[]; /** @deprecated */ disabledAgentResources?: AgentResourceExclusions }
+export interface AgentDefinition { prompt?: string; description?: string; model?: string; thinking?: NonNullable<ModelSpec["thinking"]>; tools?: readonly string[]; skills?: readonly string[]; extensions?: readonly string[]; overrideSystemPrompt?: boolean; contextFiles?: readonly ContextFileScope[] }
 export interface LaunchSnapshot { identityVersion?: number; launchMode?: WorkflowLaunchMode; script: string; args: JsonValue; metadata: WorkflowMetadata; settings: WorkflowSettings; settingsSources?: WorkflowSettingsSources; budget?: WorkflowBudget; settingsPath?: string; modelAliases?: Readonly<Record<string, string>>; phases?: readonly string[]; models: readonly string[]; tools: readonly string[]; agentTypes: readonly string[]; roles?: Readonly<Record<string, AgentDefinition>>; projectRoles?: readonly string[]; schemas: readonly JsonSchema[] }
 export interface PreflightCapabilities { models: ReadonlySet<string>; tools: ReadonlySet<string>; agentTypes: ReadonlySet<string>; modelAliases?: Readonly<Record<string, string>>; knownModels?: ReadonlySet<string>; settingsPath?: string; skipModelAvailability?: boolean }
 export interface PreflightResult { metadata: WorkflowMetadata; referenced: { phases: readonly string[]; models: readonly string[]; tools: readonly string[]; agentTypes: readonly string[] }; schemas: readonly JsonSchema[]; dynamicAgentRoles: boolean }

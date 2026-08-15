@@ -68,7 +68,7 @@ Effective precedence is:
 4. Role frontmatter.
 5. Per-agent call options.
 
-Selectors are concatenated in that order. A later matching rule wins; a positive pattern enables a candidate and a leading `!` disables it. A layer containing positive selectors acts as a whitelist for that layer; an empty explicitly configured list selects no candidates. A candidate with no matching rule remains enabled by default when no layer establishes a whitelist. `!*` clears the current selection before narrower positive patterns are applied. Trusted project settings are ignored when the project is untrusted.
+Selectors are concatenated in that order. A later matching rule wins. Within a layer, a positive pattern establishes a whitelist for that layer (an empty explicitly configured list selects no candidates); a layer containing only negated patterns modifies the current selection. A candidate with no matching rule remains enabled when no layer establishes a whitelist. `!*` clears the current selection before narrower positive patterns are applied. Trusted project settings are ignored when the project is untrusted.
 
 Supported settings shape:
 
@@ -111,7 +111,7 @@ Dynamic model aliases are resolved once per launch or resume, then captured for 
 
 ### Resource selectors
 
-The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Positive patterns enable matching discovered candidates; `!pattern` disables them, and the last match wins. A candidate with no match stays enabled. `!*` followed by a positive pattern selects only that narrower subset. Selectors are composed as global settings, trusted project settings, role frontmatter, then agent-call options.
+The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. A positive pattern makes that layer a whitelist and enables matching discovered candidates; `!pattern` disables matching candidates, and the last matching rule wins. An empty configured layer selects no candidates. A layer containing only negated patterns changes the current selection without establishing a whitelist. `!*` clears the current selection before narrower positive patterns are applied. Selectors never create unavailable resources, and child tools remain within the parent boundary.
 
 ## Standalone Subagents
 
@@ -139,7 +139,7 @@ The optional `singleAgent` registered function is workflow composition, not the 
 
 - The live action hands a transferable running session to Herdr and later returns ownership to the local SDK.
 - The completed action opens a persisted completed, failed, or cancelled attempt for inspection.
-- Global `extensions.herdr.enableFullyInspectableMode: true` launches every workflow agent in a dedicated Herdr workspace and hides manual live handoff.
+- `extensionSettings.herdr.enableFullyInspectableMode: true` launches every workflow agent in a dedicated Herdr workspace and hides manual live handoff.
 - `PI_CODING_AGENT_DIR` controls where Herdr reads workflow settings.
 
 See the [Herdr guide](herdr.html) for handoff ownership, interruption behavior, and limitations.

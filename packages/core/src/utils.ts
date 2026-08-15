@@ -1,4 +1,4 @@
-import { ERROR_CODES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WorkflowError, type AgentResourceExclusions, type JsonValue, type ModelSpec, type WorkflowErrorCode } from "./types.js";
+import { ERROR_CODES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WorkflowError, type JsonValue, type ModelSpec, type WorkflowErrorCode } from "./types.js";
 import { Minimatch } from "minimatch";
 
 export function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
@@ -142,14 +142,6 @@ export function resourcePatternMatches(resource: string, pattern: string): boole
   if (body === "*") return true;
   return new Minimatch(resourcePatternPath(body), RESOURCE_PATTERN_OPTIONS).match(resourcePatternPath(resource));
 }
-export function selectResources(patterns: readonly string[], resources: readonly string[], defaultEnabled = true): string[] {
-  const whitelist = patterns.some((pattern) => !pattern.startsWith("!"));
-  return resources.filter((resource) => {
-    let enabled = whitelist ? false : defaultEnabled;
-    for (const pattern of patterns) if (resourcePatternMatches(resource, pattern)) enabled = !pattern.startsWith("!");
-    return enabled;
-  });
-}
 export function selectResourcesByLayers(layers: readonly (readonly string[] | undefined)[], resources: readonly string[], defaultEnabled = true): string[] {
   const enabled = new Set(defaultEnabled ? resources : []);
   for (const layer of layers) {
@@ -165,22 +157,5 @@ export function selectResourcesByLayers(layers: readonly (readonly string[] | un
 }
 export function resourcePatternHasMagic(pattern: string): boolean { return /[*?\x5b\x5d{}()]/.test(resourcePatternBody(pattern)); }
 export function unmatchedResourcePatterns(patterns: readonly string[], resources: readonly string[]): string[] { return patterns.filter((pattern) => !resources.some((resource) => resourcePatternMatches(resource, pattern))); }
-export function mergeAgentResourceSelectors(...values: (import("./types.js").AgentResourceSelectors | undefined)[]): import("./types.js").AgentResourceSelectors {
-  return {
-    skills: values.flatMap((value) => value?.skills ?? []),
-    extensions: values.flatMap((value) => value?.extensions ?? []),
-    tools: values.flatMap((value) => value?.tools ?? []),
-  };
-}
-export function disabledResources(patterns: readonly string[], resources: readonly string[]): string[] {
-  const disabled = new Set<string>();
-  for (const resource of resources) {
-    let excluded = false;
-    for (const pattern of patterns) if (resourcePatternMatches(resource, pattern)) excluded = !pattern.startsWith("!");
-    if (excluded) disabled.add(resource);
-  }
-  return [...disabled];
-}
-export function mergeAgentResourceExclusions(...values: (AgentResourceExclusions | undefined)[]): AgentResourceExclusions { return { skills: values.flatMap((value) => value?.skills ?? []), extensions: values.flatMap((value) => value?.extensions ?? []) }; }
 export function createLaunchSnapshot(input: Omit<import("./types.js").LaunchSnapshot, "identityVersion"> & { identityVersion?: number }): Readonly<import("./types.js").LaunchSnapshot> { return deepFreeze(structuredClone({ ...input, identityVersion: input.identityVersion ?? LAUNCH_SNAPSHOT_IDENTITY_VERSION })); }
 export function loadLaunchSnapshot(input: import("./types.js").LaunchSnapshot): Readonly<import("./types.js").LaunchSnapshot> { return deepFreeze(structuredClone(input)); }

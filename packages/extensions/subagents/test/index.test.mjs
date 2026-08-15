@@ -1001,7 +1001,7 @@ test("opens bounded prompt and result artifacts while terminal runs hide system 
   }
 });
 test("exposes closed tool schemas and minimal prompt guidance", () => {
-  assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "mode", "label", "model", "thinking", "tools", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
+  assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "mode", "label", "model", "thinking", "tools", "skills", "extensions", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
   assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.required, ["prompt"]);
   assert.equal(SUBAGENTS_RUN_PARAMETERS.additionalProperties, false);
   assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.properties.mode.anyOf.map(({ const: value }) => value), ["background", "foreground"]);
@@ -1009,7 +1009,7 @@ test("exposes closed tool schemas and minimal prompt guidance", () => {
   assert.deepEqual(Object.keys(SUBAGENTS_INSPECT_PARAMETERS.properties), ["id"]);
   assert.equal(SUBAGENTS_INSPECT_PARAMETERS.additionalProperties, false);
   assert.equal(SUBAGENTS_INSPECT_PARAMETERS.required, undefined);
-  assert.deepEqual(Object.keys(SUBAGENTS_SINGLE_AGENT_PARAMETERS.properties), ["prompt", "label", "model", "thinking", "tools", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
+  assert.deepEqual(Object.keys(SUBAGENTS_SINGLE_AGENT_PARAMETERS.properties), ["prompt", "label", "model", "thinking", "tools", "skills", "extensions", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
   assert.equal(SUBAGENTS_SINGLE_AGENT_PARAMETERS.additionalProperties, false);
 
   for (const schema of [SUBAGENTS_ID_PARAMETERS, SUBAGENTS_STOP_PARAMETERS, SUBAGENTS_RETRY_PARAMETERS]) {
@@ -1154,9 +1154,9 @@ test("runs one background subagent with context-derived setup and execution opti
   const cwd = await mkdtemp(join(tmpdir(), "subagents-run-success-"));
   const agentDir = join(cwd, "agent");
   await mkdir(join(agentDir, "pi-extensible-workflows", "roles"), { recursive: true });
-  await writeFile(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ modelAliases: { cheap: "fixture/cheap" }, disabledAgentResources: { skills: ["global-skill"], extensions: ["global-extension"] } }));
+  await writeFile(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ modelAliases: { cheap: "fixture/cheap" }, skills: ["global-skill"], extensions: ["global-extension"] }));
   await mkdir(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
-  await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ disabledAgentResources: { skills: ["project-skill"], extensions: ["project-extension"] } }));
+  await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ skills: ["project-skill"], extensions: ["project-extension"] }));
   await writeFile(join(agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: fixture/role-model\nthinking: high\ntools: [read]\ndescription: Review work\n---\nReview carefully.");
   const sessionTransport = { id: "test", async createSession() { throw new Error("session should be supplied to the injected executor"); } };
   const controller = new AbortController();
@@ -1192,7 +1192,7 @@ test("runs one background subagent with context-derived setup and execution opti
   assert.equal(root.modelAliases.cheap, "fixture/cheap");
   assert.deepEqual(root.agentResourcePolicy().global, { skills: ["global-skill"], extensions: [join(agentDir, "pi-extensible-workflows", "global-extension")] });
   assert.deepEqual(root.agentResourcePolicy().project, { skills: ["project-skill"], extensions: [join(cwd, ".pi", "pi-extensible-workflows", "project-extension")] });
-  assert.deepEqual(root.agentResourcePolicy().effective, { skills: ["project-skill"], extensions: [join(cwd, ".pi", "pi-extensible-workflows", "project-extension")] });
+  assert.deepEqual(root.agentResourcePolicy().effective, { skills: ["global-skill", "project-skill"], extensions: [join(agentDir, "pi-extensible-workflows", "global-extension"), join(cwd, ".pi", "pi-extensible-workflows", "project-extension")] });
   assert.equal(root.agentDefinitions.reviewer.model, "fixture/role-model");
   assert.equal(execution.task, "inspect");
   const { onAttempt, onProgress, ...options } = execution.options;

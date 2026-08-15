@@ -79,8 +79,6 @@ function settings(agentDirectory = agentDir()): HerdrSettings {
 
 function herdrConfig(agentDirectory = agentDir()): HerdrConfig {
   const workflowSettings = settings(agentDirectory);
-  const extensions = workflowSettings.extensions;
-  if (extensions !== undefined && !Array.isArray(extensions) && "herdr" in extensions) return extensions.herdr;
   return workflowSettings.extensionSettings?.herdr ?? {};
 }
 
