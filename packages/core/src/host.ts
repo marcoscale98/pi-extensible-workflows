@@ -88,7 +88,8 @@ function snapshotResourcePolicy(snapshot: Readonly<LaunchSnapshot>, cwd: string,
   const selectors = snapshot.settings;
   const empty = { skills: [], extensions: [] };
   const effective = { skills: selectors.skills ?? [], extensions: selectors.extensions ?? [], ...(selectors.tools === undefined ? {} : { tools: selectors.tools }) };
-  return { globalSettingsPath, projectSettingsPath: workflowProjectSettingsPath(cwd), projectTrusted, global: empty, project: empty, effective, unmatchedSkills: [], unmatchedExtensions: [], unmatchedTools: [] };
+  const source = { ...(selectors.skills === undefined ? {} : { skills: selectors.skills }), ...(selectors.extensions === undefined ? {} : { extensions: selectors.extensions }), ...(selectors.tools === undefined ? {} : { tools: selectors.tools }) };
+  return { globalSettingsPath, projectSettingsPath: workflowProjectSettingsPath(cwd), projectTrusted, global: empty, project: empty, effective, unmatchedSkills: [], unmatchedExtensions: [], unmatchedTools: [], selectorSources: { global: source, project: {} } };
 }
 type WorkflowLaunchSettings = { settings: Readonly<WorkflowSettings>; resolution: WorkflowSettingsResolution; resourcePolicy: AgentResourcePolicy };
 function workflowLaunchSettings(cwd: string, projectTrusted: boolean, globalSettingsPath: string, concurrency?: number): WorkflowLaunchSettings {

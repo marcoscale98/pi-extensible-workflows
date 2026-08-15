@@ -1995,6 +1995,12 @@ void test("setup hooks may narrow the prepared resource policy", async () => {
   assert.deepEqual(prepared.setup.sessionInput.resourcePolicy?.effective.skills, ["*", "!secret"]);
 });
 
+void test("resource policy fallback preserves effective selectors when source metadata is absent", async () => {
+  const policy: AgentResourcePolicy = { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["global-cold"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [] };
+  const prepared = await prepareAgentSetupForInspection({ ...root, agentResourcePolicy: () => structuredClone(policy) }, "work", { label: "worker", workflowName: "flow" }, localAgentTransport);
+  assert.equal(prepared.failure, undefined);
+  assert.deepEqual(prepared.setup.sessionInput.resourcePolicy?.selectorSources, { global: { skills: ["global-cold"] }, project: {} });
+});
 void test("refreshes resource selectors for every fresh attempt and inspects the effective policy", async () => {
   let policyCalls = 0;
   let sessions = 0;

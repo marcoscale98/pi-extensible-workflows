@@ -660,6 +660,17 @@ function resourcePolicySummary(policy: AgentResourcePolicy, tools: readonly stri
     ...(policy.selectorSources ? { selectorSources: policy.selectorSources } : {}),
   };
 }
+function resourcePolicySelectorSources(policy: AgentResourcePolicy): NonNullable<AgentResourcePolicy["selectorSources"]> {
+  if (policy.selectorSources) return policy.selectorSources;
+  return {
+    global: {
+      ...(policy.effective.skills.length ? { skills: policy.effective.skills } : {}),
+      ...(policy.effective.extensions.length ? { extensions: policy.effective.extensions } : {}),
+      ...(policy.effective.tools?.length ? { tools: policy.effective.tools } : {}),
+    },
+    project: {},
+  };
+}
 function selectorListWidened(ceiling: readonly string[], candidate: readonly string[]): boolean {
   let candidateIndex = 0;
   for (const pattern of ceiling) {
@@ -756,6 +767,7 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
   const rawCallExtensions = selectorValue("extensions", options.extensions)?.map((selector) => canonicalExtensionSelector(selector, cwd));
   const rawCallTools = selectorValue("tools", options.tools);
   const callSelectors: AgentResourceSelectors = { ...(rawCallSkills === undefined ? {} : { skills: rawCallSkills }), ...(rawCallExtensions === undefined ? {} : { extensions: rawCallExtensions }), ...(rawCallTools === undefined ? {} : { tools: rawCallTools }) };
+  const baseSelectorSources = baseResourcePolicy === undefined ? undefined : resourcePolicySelectorSources(baseResourcePolicy);
   const resourcePolicy: AgentResourcePolicy | undefined = baseResourcePolicy ? {
     ...baseResourcePolicy,
     effective: {
@@ -763,7 +775,7 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
       extensions: [...baseResourcePolicy.effective.extensions, ...(roleSelectors?.extensions ?? []), ...(rawCallExtensions ?? [])],
       ...(baseResourcePolicy.effective.tools === undefined && roleSelectors?.tools === undefined && rawCallTools === undefined ? {} : { tools: [...(baseResourcePolicy.effective.tools ?? []), ...(roleSelectors?.tools ?? []), ...(rawCallTools ?? [])] }),
     },
-    selectorSources: { global: baseResourcePolicy.selectorSources?.global ?? baseResourcePolicy.global, project: baseResourcePolicy.selectorSources?.project ?? baseResourcePolicy.project, ...(roleSelectors ? { role: roleSelectors } : {}), ...(Object.keys(callSelectors).length ? { call: callSelectors } : {}) },
+    selectorSources: { global: baseSelectorSources?.global ?? {}, project: baseSelectorSources?.project ?? {}, ...(roleSelectors ? { role: roleSelectors } : {}), ...(Object.keys(callSelectors).length ? { call: callSelectors } : {}) },
   } : undefined;
   if (resourcePolicy) {
     resourcePolicy.selectedTools = resolved.tools;

@@ -281,6 +281,7 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   for (const heading of ["## Environment", "## Trust/resources", "## Workflow agent resource selectors", "## Active tools", "## Roles", "## Model aliases", "## Reusable functions"]) assert.doesNotMatch(formatted, new RegExp(heading));
   assert.match(formatted, /Role: `reviewer`/);
   assert.match(formatted, /- Tools:\n[ ]{2}- `grep`/);
+  assert.match(formatted, /- Role skill selectors:\n[ ]{2}- `\*`\n[ ]{2}- `!review-skill`/);
   assert.match(formatted, /- Effective skills:\n(?:[ ]{2}- .+\n)+/);
   assert.match(formatted, /- Effective extensions:\n(?:[ ]{2}- .+\n)+/);
   assert.match(formatted, /- Applied setup hooks:\n[ ]{2}- `adjust`/);

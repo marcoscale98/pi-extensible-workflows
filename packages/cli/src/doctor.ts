@@ -53,7 +53,7 @@ export interface DoctorRoleInspection {
   path: string;
   model: { provider: string; model: string; thinking?: string; inherited?: boolean };
   tools: readonly string[];
-  resources: { selectors: { skills: readonly string[]; extensions: readonly string[]; tools: readonly string[] }; skills: readonly string[]; extensions: readonly string[]; tools: readonly string[]; unmatchedSkills: readonly string[]; unmatchedExtensions: readonly string[]; unmatchedTools: readonly string[] };
+  resources: { selectors: { skills: readonly string[]; extensions: readonly string[]; tools: readonly string[] }; skills: readonly string[]; extensions: readonly string[]; tools: readonly string[]; unmatchedSkills: readonly string[]; unmatchedExtensions: readonly string[]; unmatchedTools: readonly string[]; selectorSources?: NonNullable<AgentResourcePolicy["selectorSources"]> };
   systemPrompt: { probe: string; expandedProbe: string; text: string; source?: string };
   setup: { hooks: readonly string[]; diagnostics: readonly DoctorDiagnostic[] };
 }
@@ -269,10 +269,10 @@ function matchResourcePolicy(policy: AgentResourcePolicy, pi: DoctorPiState): Ag
   const extensions = [...new Set((pi.extensions ?? []).map(canonical))];
   const skills = [...new Set(pi.skills ?? [])];
   const tools = [...new Set(pi.activeTools)];
-  const layers = policy.selectorSources;
-  const selectedSkills = selectResourcesByLayers(layers ? [layers.global.skills, layers.project.skills] : [policy.effective.skills], skills);
-  const selectedExtensions = selectResourcesByLayers(layers ? [layers.global.extensions, layers.project.extensions] : [policy.effective.extensions], extensions);
-  const selectedTools = selectResourcesByLayers(layers ? [layers.global.tools, layers.project.tools] : [policy.effective.tools], tools);
+  const layers = policy.selectorSources ?? { global: {}, project: {} };
+  const selectedSkills = selectResourcesByLayers([layers.global.skills, layers.project.skills], skills);
+  const selectedExtensions = selectResourcesByLayers([layers.global.extensions, layers.project.extensions], extensions);
+  const selectedTools = selectResourcesByLayers([layers.global.tools, layers.project.tools], tools);
   return { ...policy, selectedSkills, selectedExtensions, selectedTools, unmatchedSkills: unmatchedResourcePatterns(policy.effective.skills, skills), unmatchedExtensions: unmatchedResourcePatterns(policy.effective.extensions, extensions), unmatchedTools: unmatchedResourcePatterns(policy.effective.tools ?? [], tools) };
 }
 async function inspectRoleSession(cwd: string, agentDir: string, roleName: string, definition: AgentDefinition, rolePath: string, basePolicy: AgentResourcePolicy, rootModel: { provider: string; model: string; thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }, activeTools: readonly string[], aliases: Readonly<Record<string, string>>, knownModels: ReadonlySet<string>, availableModels: ReadonlySet<string>, settingsPath: string, prompt: string, hooks: NonNullable<AgentExecutionRoot["agentSetupHooks"]>, diagnostics: DoctorDiagnostic[]): Promise<DoctorRoleInspection | undefined> {
@@ -302,7 +302,7 @@ async function inspectRoleSession(cwd: string, agentDir: string, roleName: strin
     const actualModel = session.model?.provider && (session.model.model ?? session.model.id) ? { provider: session.model.provider, model: session.model.model ?? session.model.id ?? prepared.setup.sessionInput.model.model, ...(session.thinkingLevel ? { thinking: session.thinkingLevel } : {}), ...(inherited ? { inherited: true } : {}) } : { ...prepared.setup.sessionInput.model, ...(inherited ? { inherited: true } : {}) };
     const policy = prepared.setup.sessionInput.resourcePolicy ?? basePolicy;
     for (const item of [...resources.diagnostics, ...promptResult.diagnostics]) setupDiagnostics.push(diagnostic(item.type === "error" ? "error" : "warning", "ROLE_INSPECTION", item.message, item.source));
-    return { role: roleName, path: rolePath, model: actualModel, tools: state?.tools.map(({ name }) => name) ?? [...prepared.setup.sessionInput.tools], resources: { selectors: { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], tools: [...(policy.effective.tools ?? [])] }, skills: policy.selectedSkills ?? resources.skills, extensions: policy.selectedExtensions ?? resources.extensions, tools: policy.selectedTools ?? prepared.setup.sessionInput.tools, unmatchedSkills: policy.unmatchedSkills, unmatchedExtensions: policy.unmatchedExtensions, unmatchedTools: policy.unmatchedTools ?? [] }, systemPrompt: { probe: prompt, expandedProbe: promptResult.expandedPrompt, text: promptResult.systemPrompt, ...(resources.systemPromptSource ? { source: resources.systemPromptSource } : {}) }, setup: { hooks: prepared.summary.hookNames, diagnostics: setupDiagnostics } };
+    return { role: roleName, path: rolePath, model: actualModel, tools: state?.tools.map(({ name }) => name) ?? [...prepared.setup.sessionInput.tools], resources: { selectors: { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], tools: [...(policy.effective.tools ?? [])] }, skills: policy.selectedSkills ?? resources.skills, extensions: policy.selectedExtensions ?? resources.extensions, tools: policy.selectedTools ?? prepared.setup.sessionInput.tools, unmatchedSkills: policy.unmatchedSkills, unmatchedExtensions: policy.unmatchedExtensions, unmatchedTools: policy.unmatchedTools ?? [], ...(policy.selectorSources ? { selectorSources: policy.selectorSources } : {}) }, systemPrompt: { probe: prompt, expandedProbe: promptResult.expandedPrompt, text: promptResult.systemPrompt, ...(resources.systemPromptSource ? { source: resources.systemPromptSource } : {}) }, setup: { hooks: prepared.summary.hookNames, diagnostics: setupDiagnostics } };
   } catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", error instanceof Error ? error.message : String(error), rolePath)); diagnostics.push(...setupDiagnostics); return undefined; }
   finally { await session.dispose(); }
 }
@@ -460,10 +460,31 @@ export function doctorExitCode(report: DoctorReport): 0 | 1 { return count(repor
 function nestedValues(label: string, values: readonly string[]): string[] {
   return [`- ${label}:`, ...(values.length ? values.map((value) => `  - \`${value}\``) : ["  - (none)"])];
 }
+function roleSelectorSourceLines(sources: NonNullable<DoctorRoleInspection["resources"]["selectorSources"]>): string[] {
+  return [
+    ...nestedValues("Global skill selectors", sources.global.skills ?? []),
+    ...nestedValues("Global extension selectors", sources.global.extensions ?? []),
+    ...nestedValues("Global tool selectors", sources.global.tools ?? []),
+    ...nestedValues("Project skill selectors", sources.project.skills ?? []),
+    ...nestedValues("Project extension selectors", sources.project.extensions ?? []),
+    ...nestedValues("Project tool selectors", sources.project.tools ?? []),
+    ...(sources.role === undefined ? [] : [
+      ...nestedValues("Role skill selectors", sources.role.skills ?? []),
+      ...nestedValues("Role extension selectors", sources.role.extensions ?? []),
+      ...nestedValues("Role tool selectors", sources.role.tools ?? []),
+    ]),
+    ...(sources.call === undefined ? [] : [
+      ...nestedValues("Call skill selectors", sources.call.skills ?? []),
+      ...nestedValues("Call extension selectors", sources.call.extensions ?? []),
+      ...nestedValues("Call tool selectors", sources.call.tools ?? []),
+    ]),
+  ];
+}
 function roleInspectionLines(inspection: DoctorRoleInspection): string[] {
   return [
     `- Role: \`${inspection.role}\` - \`${inspection.path}\``,
     `- Model: \`${inspection.model.provider}/${inspection.model.model}\` (${inspection.model.inherited ? "inherited, " : ""}${inspection.model.thinking ?? "off"})`,
+    ...(inspection.resources.selectorSources ? roleSelectorSourceLines(inspection.resources.selectorSources) : []),
     ...nestedValues("Tools", inspection.tools),
     ...nestedValues("Configured skill selectors", inspection.resources.selectors.skills),
     ...nestedValues("Effective skills", inspection.resources.skills),
