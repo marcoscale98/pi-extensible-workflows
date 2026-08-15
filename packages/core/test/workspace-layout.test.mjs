@@ -31,6 +31,9 @@ test("the repository keeps the public package in the core workspace", () => {
     "./runtime": "./dist/src/runtime/index.js"
   });
   assert.equal(core.bin, undefined);
+  assert.ok(core.files.includes("CHANGELOG.md"));
+  assert.match(core.scripts.prepack, /stage-core-changelog\.mjs stage/);
+  assert.match(core.scripts.postpack, /stage-core-changelog\.mjs clean/);
   assert.equal(cli.name, "@piewf/cli");
   assert.equal(cli.version, root.version);
   assert.equal(cli.bin.piewf, "./dist/src/cli.js");

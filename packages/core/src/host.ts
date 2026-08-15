@@ -16,6 +16,7 @@ import { loadAgentDefinitions, loadSettings, preflight, resolveAgentResourcePoli
 import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIfIdle, retainWorkflowRegistry, type WorkflowRegistryApi } from "./registry.js";
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
 import backgroundWidget, { type BackgroundWidgetAPI } from "./background-widget.js";
+import { showChangelogNotice } from "./changelog.js";
 import { LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowFailureDiagnostics, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import {
   SETTLED_AGENT_STATES,
@@ -985,6 +986,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     if (sessionStarted) return;
     sessionStarted = true;
     try {
+    await showChangelogNotice(ctx, extensionAgentDir);
     releaseWorkflowRegistry = retainWorkflowRegistry();
     registry.freeze();
     registerCatalog(ctx.cwd, projectTrusted(ctx));

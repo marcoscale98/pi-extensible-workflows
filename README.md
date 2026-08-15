@@ -38,6 +38,10 @@ Companion packages are installed separately:
 
 For source installation and local development, see the [installation guide](https://vekexasia.github.io/pi-extensible-workflows/developers.html#installation).
 
+## Updates and release notes
+
+After `pi update --extensions` or `pi update --all`, the next Pi `session_start` checks the installed package version and shows the bundled release notes once for that version. Pi does not expose a post-update extension hook, so the startup check is the fallback for both commands. The notice is silent when the version has not changed, is not shown in print or JSON mode, and does not use the network. Its marker is stored at `<agentDir>/pi-extensible-workflows/changelog-state.json`; missing changelog data or a persistence failure does not prevent startup. A persistence failure can cause the same notice to repeat on the next start.
+
 ## Quick start
 
 Ask Pi to run a workflow. The main agent writes a named JavaScript script on demand; you do not need to maintain a workflow file for ordinary tasks.

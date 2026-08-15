@@ -20,8 +20,8 @@ For local release checks:
 ```sh
 npm install
 npm run check
-npm pack --dry-run --json --ignore-scripts --workspace=packages/core
-npm pack --dry-run --json --ignore-scripts --workspace=packages/cli
-npm pack --dry-run --json --ignore-scripts --workspace=packages/extensions/herdr
-npm pack --dry-run --json --ignore-scripts --workspace=packages/extensions/subagents
+npm pack --dry-run --json --workspace=packages/core
+npm pack --dry-run --json --workspace=packages/cli
+npm pack --dry-run --json --workspace=packages/extensions/herdr
+npm pack --dry-run --json --workspace=packages/extensions/subagents
 ```
