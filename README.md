@@ -124,6 +124,7 @@ The integration activates only in a Herdr-managed pane and registers workflow ac
 ```sh
 pi install npm:@piewf/cli
 piewf doctor
+piewf doctor --json
 piewf inspect
 ```
 

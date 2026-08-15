@@ -285,6 +285,12 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   assert.match(formatted, /- Effective extensions:\n(?:[ ]{2}- .+\n)+/);
   assert.match(formatted, /- Applied setup hooks:\n[ ]{2}- `adjust`/);
   assert.match(formatted, /Final system prompt[\s\S]*HOOK:/);
+  let jsonOutput = "";
+  assert.equal(await withHomeAndCwd(paths.root, paths.cwd, () => runCli(["doctor", "--role", "reviewer", "--json"], { ...paths, registry, discoverPi: async () => pi({ activeTools: ["read", "grep"], knownModels: ["fixture/fixture-model", "fixture/override-model"], availableModels: ["fixture/fixture-model", "fixture/override-model"], model: { provider: "fixture", model: "fixture-model", thinking: "medium" } }) }, (text) => { jsonOutput += text; })), 0);
+  const jsonReport = JSON.parse(jsonOutput) as { roleTarget?: string; roleInspection?: { role: string; model: { model: string } } };
+  assert.equal(jsonReport.roleTarget, "reviewer");
+  assert.equal(jsonReport.roleInspection?.role, "reviewer");
+  assert.equal(jsonReport.roleInspection?.model.model, "override-model");
 });
 void test("role-targeted doctor preserves role-not-found diagnostics in focused output", async () => {
   const paths = fixture();
@@ -374,12 +380,18 @@ void test("package bin and CLI expose doctor and inspector commands", async () =
   assert.equal(exit, 0);
   for (const heading of ["## Environment", "## Trust/resources", "## Pi active tools", "## Pi active extensions", "## Pi active skills", "## Workflow agent resources", "## Roles", "## Reusable functions", "## Diagnostics", "## Summary"]) assert.match(output, new RegExp(heading));
   assert.doesNotMatch(output, /## Role inspection/);
+  output = "";
+  assert.equal(await withHome(paths.root, () => runCli(["doctor", "--json"], { ...paths, discoverPi: async () => pi({ knownModels: [], availableModels: [] }) }, (text) => { output += text; })), 0);
+  const jsonReport = JSON.parse(output) as { cwd: string; activeTools: readonly string[]; diagnostics: readonly unknown[] };
+  assert.equal(jsonReport.cwd, paths.cwd);
+  assert.deepEqual(jsonReport.activeTools, ["read", "grep"]);
+  assert.ok(Array.isArray(jsonReport.diagnostics));
   let inspected: string | undefined;
   assert.equal(await runCli(["inspect", "session-a"], { inspect: async (sessionId) => { inspected = sessionId; } }), 0);
   assert.equal(inspected, "session-a");
   output = "";
   assert.equal(await runCli([], {}, (text) => { output += text; }), 1);
-  assert.equal(output, "Usage: piewf doctor [role] [--role <role>] [--prompt <text>] | inspect [session-id] [--json|--summary] [--failed] | transcript <session-file> | bundle <workflow-name> [--name <command>] [--output <path>] [--force] | run <workflow-name> [workflow arguments] | export <workflow-name> [--name <command>] [--output <path>] [--force] [--bundle]\n");
+  assert.equal(output, "Usage: piewf doctor [role] [--role <role>] [--prompt <text>] [--json] | inspect [session-id] [--json|--summary] [--failed] | transcript <session-file> | bundle <workflow-name> [--name <command>] [--output <path>] [--force] | run <workflow-name> [workflow arguments] | export <workflow-name> [--name <command>] [--output <path>] [--force] [--bundle]\n");
   const bin = join(paths.root, "bin", "piewf");
   mkdirSync(join(paths.root, "bin"), { recursive: true });
   symlinkSync(join(process.cwd(), "dist", "src", "cli.js"), bin);
@@ -388,7 +400,8 @@ void test("package bin and CLI expose doctor and inspector commands", async () =
   assert.equal(existsSync(join(paths.root, ".pi", "agent", "auth.json")), false);
 });
 void test("doctor parser accepts role and prompt probes", () => {
-  assert.deepEqual(parseDoctorArgs(["--role", "reviewer", "--prompt=check this"]), { role: "reviewer", prompt: "check this" });
+  assert.deepEqual(parseDoctorArgs(["--role", "reviewer", "--prompt=check this", "--json"]), { role: "reviewer", prompt: "check this", json: true });
+  assert.deepEqual(parseDoctorArgs(["--json"]), { json: true });
   assert.deepEqual(parseDoctorArgs(["reviewer"]), { role: "reviewer" });
   assert.throws(() => parseDoctorArgs(["--role", "reviewer", "other"]), /Unexpected argument/);
   assert.throws(() => parseDoctorArgs(["--prompt", "check this"]), /--prompt requires --role/);

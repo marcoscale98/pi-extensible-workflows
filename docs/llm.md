@@ -312,7 +312,7 @@ Dynamic roles do not create inline role definitions. The selected role name must
 
 Use a dynamic role when the choice must be made at runtime. Use a static role when possible because it gives earlier unknown-role, model, and tool errors and produces a smaller launch snapshot.
 
-`piewf doctor --role <name>` is the read-only way to inspect the effective role, model, tools, resources, setup hooks, and prepared system prompt. Add `--prompt <text>` when a prompt-dependent hook must be inspected.
+`piewf doctor --role <name>` is the read-only way to inspect the effective role, model, tools, resources, setup hooks, and prepared system prompt. Add `--prompt <text>` when a prompt-dependent hook must be inspected, or `--json` for a machine-readable `DoctorReport` that includes role inspection data.
 
 
 ## Verification checklist

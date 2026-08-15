@@ -195,13 +195,15 @@ function parseInspectArgs(rawArgs: readonly string[]): { sessionId?: string; mod
   }
   return { ...(sessionId ? { sessionId } : {}), mode: failedOnly && mode === "tui" ? "summary" : mode, failedOnly };
 }
-export function parseDoctorArgs(rawArgs: readonly string[]): { role?: string; prompt?: string } {
+export function parseDoctorArgs(rawArgs: readonly string[]): { role?: string; prompt?: string; json?: boolean } {
   let role: string | undefined;
   let prompt: string | undefined;
+  let json = false;
   for (let index = 0; index < rawArgs.length; index += 1) {
     const token = requiredArg(rawArgs, index);
     const equals = token.indexOf("=");
     const option = equals >= 0 ? token.slice(0, equals) : token;
+    if (option === "--json" && equals < 0) { json = true; continue; }
     if (option === "--role" || option === "--prompt") {
       const value = equals >= 0 ? token.slice(equals + 1) : rawArgs[++index];
       if (!value) throw new Error(`Missing value for ${option}`);
@@ -215,7 +217,7 @@ export function parseDoctorArgs(rawArgs: readonly string[]): { role?: string; pr
     role = token;
   }
   if (prompt !== undefined && role === undefined) throw new Error("--prompt requires --role");
-  return { ...(role === undefined ? {} : { role }), ...(prompt === undefined ? {} : { prompt }) };
+  return { ...(role === undefined ? {} : { role }), ...(prompt === undefined ? {} : { prompt }), ...(json ? { json: true } : {}) };
 }
 
 export function parseDoctorCleanupArgs(rawArgs: readonly string[]): Required<Pick<DoctorCleanupOptions, "olderThanDays" | "yes">> {
@@ -590,11 +592,11 @@ async function bundleWorkflowCli(rawArgs: readonly string[], options: WorkflowIo
 export async function runCli(args: readonly string[], options: CliOptions = {}, write: (text: string) => void = (text) => { process.stdout.write(text); }): Promise<number> {
   const stderr = options.stderr ?? ((text: string) => { process.stderr.write(text); });
   if (args[0] === "doctor" && args[1] !== "cleanup") {
-    if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) { write("Usage: piewf doctor [role] [--role <role>] [--prompt <text>]\n"); return 0; }
+    if (args.slice(1).some((arg) => arg === "--help" || arg === "-h")) { write("Usage: piewf doctor [role] [--role <role>] [--prompt <text>] [--json]\n"); return 0; }
     try {
-      const parsed = parseDoctorArgs(args.slice(1));
+      const { json, ...parsed } = parseDoctorArgs(args.slice(1));
       const report = await doctor({ ...options, ...parsed });
-      write(formatDoctorReport(report));
+      write(json ? `${JSON.stringify(report)}\n` : formatDoctorReport(report));
       return doctorExitCode(report);
     } catch (error) { stderr(`Error: ${error instanceof Error ? error.message : String(error)}\n`); return 1; }
   }
@@ -632,7 +634,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}, 
       return args[0] === "run" ? await runWorkflowCli(args.slice(1), workflowOptions) : await exportWorkflowCli(args.slice(1), workflowOptions);
     } catch (error) { stderr(`Error: ${error instanceof Error ? error.message : String(error)}\n`); return 1; }
   }
-  write("Usage: piewf doctor [role] [--role <role>] [--prompt <text>] | inspect [session-id] [--json|--summary] [--failed] | transcript <session-file> | bundle <workflow-name> [--name <command>] [--output <path>] [--force] | run <workflow-name> [workflow arguments] | export <workflow-name> [--name <command>] [--output <path>] [--force] [--bundle]\n");
+  write("Usage: piewf doctor [role] [--role <role>] [--prompt <text>] [--json] | inspect [session-id] [--json|--summary] [--failed] | transcript <session-file> | bundle <workflow-name> [--name <command>] [--output <path>] [--force] | run <workflow-name> [workflow arguments] | export <workflow-name> [--name <command>] [--output <path>] [--force] [--bundle]\n");
   return 1;
 }
 

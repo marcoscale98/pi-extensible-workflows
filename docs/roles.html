@@ -107,8 +107,9 @@ Focus on correctness and regressions.</code></pre>
       <section id="doctor">
         <h2>Inspect a role</h2>
         <pre><code class="language-shell"><span class="tok-command">npx</span> piewf doctor --role reviewer
-<span class="tok-command">npx</span> piewf doctor --role reviewer --prompt <span class="tok-string">"Review the current change"</span></code></pre>
-        <p>The role inspection is read-only. It resolves the active role and reports its effective resources and prepared prompt. The optional probe prompt is useful when prompt hooks depend on the agent request.</p>
+<span class="tok-command">npx</span> piewf doctor --role reviewer --prompt <span class="tok-string">"Review the current change"</span>
+<span class="tok-command">npx</span> piewf doctor --role reviewer --json</code></pre>
+        <p>The role inspection is read-only. It resolves the active role and reports its effective resources and prepared prompt. The optional probe prompt is useful when prompt hooks depend on the agent request. Add <code>--json</code> to emit the structured report for machine consumers, including the role inspection data.</p>
         <p>See <a href="developers.html#tool-api">workflow tool usage</a>, <a href="developers.html#settings">settings</a> for model aliases and global exclusions, and <a href="extensions.html#resources">extension resources</a> for packaged role directories.</p>
       </section>
       <p class="back-link"><a href="index.html">&lt; Back to documentation home</a></p>
