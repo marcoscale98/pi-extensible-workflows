@@ -335,6 +335,7 @@ export class PiRuntimeAgentRunner implements RuntimeAgentRunner {
         const recovered = await recoverTerminal();
         const preHandoffAssistant = handoffBoundaryAssistant;
         handoffBoundaryAssistant = undefined;
+        const handoffWasAttempted = runtimeHandoff.state !== "local-running";
         throwIfCancelled();
         await runtimeHandoff.waitForResume();
         throwIfCancelled();
@@ -343,12 +344,17 @@ export class PiRuntimeAgentRunner implements RuntimeAgentRunner {
         if (preservePreHandoffResult) lastAssistant = preHandoffAssistant;
         else acceptAssistant(resumed);
         let handoffError: unknown;
+        let handoffRecovered = false;
         if (runtimeHandoff.transferred && !preservePreHandoffResult && !hasResult() && (!resumed || resumed.stopReason === "aborted" || hasToolCall(resumed))) {
           try { await promptOnce(handoffContinuationPrompt); }
           catch (error) { handoffError = error; }
         }
+        if (handoffWasAttempted && !runtimeHandoff.transferred && promptFailed && !hasResult()) {
+          try { await promptOnce(handoffContinuationPrompt); handoffRecovered = true; }
+          catch (error) { handoffError = error; }
+        }
         if (handoffError && !hasResult()) throw handoffError instanceof Error ? handoffError : new Error(errorText(handoffError));
-        if (promptFailed && !hasResult() && !recovered && !runtimeHandoff.transferred) throw promptError instanceof Error ? promptError : new Error(errorText(promptError));
+        if (promptFailed && !hasResult() && !recovered && !handoffRecovered && !runtimeHandoff.transferred) throw promptError instanceof Error ? promptError : new Error(errorText(promptError));
       };
 
       beginTurn(false);

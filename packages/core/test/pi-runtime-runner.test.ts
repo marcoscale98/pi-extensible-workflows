@@ -6,7 +6,7 @@ import { createLiveSessionHandoff } from "../src/session-handoff.js";
 import { createRuntimeHandoffAdapter } from "../src/pi-runtime-adapter.js";
 import { createPiRuntimeAgentRunner, runtimeToolFromPiDefinition } from "../src/pi-runtime-runner.js";
 import type { RuntimeAgentRunRequest, RuntimeTool } from "../src/runtime/agent-runner.js";
-import type { AgentTransport, AgentTransportContext, PreparedAgentSession, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentTurnResult } from "../src/types.js";
+import { WorkflowError, type AgentTransport, type AgentTransportContext, type PreparedAgentSession, type WorkflowAgentMessage, type WorkflowAgentSession, type WorkflowAgentSessionEvent, type WorkflowAgentTurnResult } from "../src/types.js";
 import { testExtensionContext } from "./support.js";
 type SessionPrompt = (text: string, emit: (event: WorkflowAgentSessionEvent) => void) => Promise<WorkflowAgentTurnResult>;
 function sessionFor(prompt: SessionPrompt, options: { tools?: readonly string[]; lastAssistant?: () => WorkflowAgentMessage | undefined; abort?: () => Promise<void>; steer?: (message: string) => Promise<void>; dispose?: () => Promise<void>; stats?: { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number }; getStats?: () => { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number } } ): WorkflowAgentSession {
@@ -147,6 +147,32 @@ void test("Pi runtime runner exposes the prepared result tool during handoff tak
   }));
   assert.equal(nativeAccepted, true);
   assert.deepEqual(result.value, { answer: 42 });
+});
+void test("continues locally when a live handoff fails before takeover", async () => {
+  const prompts: string[] = [];
+  let handoff: import("../src/types.js").LiveSessionHandoff | undefined;
+  let opening: Promise<void> | undefined;
+  let rejectPrompt!: (error: unknown) => void;
+  const aborted = { role: "assistant", content: [], stopReason: "aborted" };
+  const session = sessionFor(async (text, emit) => {
+    prompts.push(text);
+    if (prompts.length === 1) {
+      const promptAborted = new Promise<never>((_, reject) => { rejectPrompt = reject; });
+      emit({ type: "turn_start" });
+      if (!handoff) throw new Error("runtime handoff is missing");
+      opening = handoff.request(async () => { throw new Error("pane launch failed"); });
+      void opening.catch(() => undefined);
+      emit({ type: "turn_end", message: aborted });
+      return await promptAborted;
+    }
+    return { assistant: { role: "assistant", content: [{ type: "text", text: "continued" }] } };
+  }, { abort: async () => { rejectPrompt(new WorkflowError("CANCELLED", "Agent cancelled")); }, lastAssistant: () => aborted });
+  const { runner, controller } = runnerFor(session, undefined, undefined, { onSession: async (_session, current) => { handoff = current; } });
+  const result = await runner.run(requestFor(controller.signal));
+  if (!opening) throw new Error("handoff launch was not started");
+  await assert.rejects(opening, /pane launch failed/);
+  assert.equal(result.value, "continued");
+  assert.deepEqual(prompts, ["work", "Continue the task from the current session state."]);
 });
 void test("Pi runtime runner maps a neutral result schema to a Pi result tool", async () => {
   let preparedWithResult: PreparedAgentSession | undefined;
