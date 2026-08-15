@@ -53,7 +53,7 @@ import { createLiveSessionHandoff } from "./session-handoff.js";
 import { normalizePiMessage, normalizePiSessionEvent, runtimeProgressToAgentProgress } from "./pi-runtime-adapter.js";
 import { createPiRuntimeAgentRunner, isRuntimeAgentProviderError, normalizePiRuntimeError } from "./pi-runtime-runner.js";
 import type { RuntimeAgentProgress, RuntimeUsage } from "./runtime/agent-runner.js";
-import { validateSchema } from "./validation.js";
+import { validateAgentOptions, validateSchema } from "./validation.js";
 import type { RunStore } from "./persistence.js";
 type AgentExecutionRunStore = Pick<RunStore, "recordSystemPrompt" | "validateWorktree" | "worktree" | "snapshotWorktree">;
 export type { AgentAccounting, AgentActivity, AgentInspectionMode, AgentSetup, AgentSetupContext, AgentSetupHook, AgentTransport, AgentTransportContext, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult } from "./types.js";
@@ -1330,7 +1330,7 @@ export class FairAgentScheduler {
       parameters: Type.Object({ prompt: Type.String(), label: Type.String(), tools: Type.Optional(Type.Array(Type.String())), skills: Type.Optional(Type.Array(Type.String())), extensions: Type.Optional(Type.Array(Type.String())), model: Type.Optional(Type.String()), thinking: Type.Optional(Type.String()), role: Type.Optional(Type.Union([Type.String(), Type.Object({ name: Type.String(), model: Type.Optional(Type.Union([Type.String(), Type.Null()])), thinking: Type.Optional(Type.Union([Type.String(), Type.Null()])), tools: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])), skills: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])), extensions: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])), description: Type.Optional(Type.Union([Type.String(), Type.Null()])), overrideSystemPrompt: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])), contextFiles: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])) }, { additionalProperties: true })])), outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())), retries: Type.Optional(Type.Integer({ minimum: 0 })), timeoutMs: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])) }, { additionalProperties: true }),
       execute: async (_id, params) => {
         if (!isChildAgentToolParams(params)) throw new WorkflowError("INVALID_METADATA", "Invalid child agent parameters");
-        if (params.role !== undefined && (params.model !== undefined || params.thinking !== undefined)) throw new WorkflowError("INVALID_METADATA", "Role agents must not specify model or thinking");
+        validateAgentOptions(params);
         const outputSchema = params.outputSchema;
         if (outputSchema !== undefined) validateSchema(outputSchema, "agent outputSchema");
         const tools = (params.tools !== undefined || params.role !== undefined || params.skills !== undefined || params.extensions !== undefined ? resolveTools?.(params.role, params.tools, params.model, parent.options.tools, params.thinking, params.skills, params.extensions) : undefined) ?? params.tools ?? parent.options.tools;

@@ -1873,7 +1873,7 @@ void test("child tool validates raw input and preserves extension options", asyn
   const parent = scheduler.spawn("run", "parent", { label: "parent", cwd: "/repo", tools: ["agent", "read"] });
   const agentTool = scheduler.toolsFor(parent.id)[0];
   assert.ok(agentTool);
-  for (const params of [{ prompt: "child", label: "child", thinking: "invalid" }, { prompt: "child", label: "child", providerOptions: () => undefined }]) {
+  for (const params of [{ prompt: "child", label: "child", thinking: "invalid" }, { prompt: "child", label: "child", skills: ["!"] }, { prompt: "child", label: "child", providerOptions: () => undefined }]) {
     await assert.rejects(executeToolUnchecked(agentTool, "call", params), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   }
   assert.equal(scheduler.snapshot().length, 1);
