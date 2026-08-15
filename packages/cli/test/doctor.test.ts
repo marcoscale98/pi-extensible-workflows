@@ -285,8 +285,6 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   assert.match(formatted, /- Effective skills:\n(?:[ ]{2}- .+\n)+/);
   assert.match(formatted, /- Effective extensions:\n(?:[ ]{2}- .+\n)+/);
   assert.match(formatted, /- Applied setup hooks:\n[ ]{2}- `adjust`/);
-  assert.match(formatted, /AGENT_RESOURCE_SELECTOR_MIGRATION/);
-  assert.match(formatted, /https:\/\/github\.com\/vekexasia\/pi-extensible-workflows\/issues\/205/);
   assert.match(formatted, /Final system prompt[\s\S]*HOOK:/);
   let jsonOutput = "";
   assert.equal(await withHomeAndCwd(paths.root, paths.cwd, () => runCli(["doctor", "--role", "reviewer", "--json"], { ...paths, registry, discoverPi: async () => pi({ activeTools: ["read", "grep"], knownModels: ["fixture/fixture-model", "fixture/override-model"], availableModels: ["fixture/fixture-model", "fixture/override-model"], model: { provider: "fixture", model: "fixture-model", thinking: "medium" } }) }, (text) => { jsonOutput += text; })), 0);

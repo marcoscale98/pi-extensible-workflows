@@ -99,7 +99,18 @@ export interface DoctorOptions {
 
 const THINKING_HINT = "Use off, minimal, low, medium, high, xhigh, or max.";
 const AGENT_RESOURCE_SELECTOR_MIGRATION_ISSUE = "https://github.com/vekexasia/pi-extensible-workflows/issues/205";
-const AGENT_RESOURCE_SELECTOR_MIGRATION_MESSAGE = `\`disabledAgentResources\` uses the legacy agent resource selector format and will change in #205. Migrate to direct \`skills\`, \`extensions\`, and \`tools\` selectors: legacy patterns exclude resources and \`!pattern\` re-enables them, while new selectors include matches and \`!pattern\` excludes them. See ${AGENT_RESOURCE_SELECTOR_MIGRATION_ISSUE}`;
+const AGENT_RESOURCE_SELECTOR_MIGRATION_MESSAGE = `\`disabledAgentResources\` is no longer supported by #205. Migrate to direct \`skills\`, \`extensions\`, and \`tools\` selectors: legacy patterns exclude resources and \`!pattern\` re-enables them, while new selectors include matches and \`!pattern\` excludes them. See ${AGENT_RESOURCE_SELECTOR_MIGRATION_ISSUE}`;
+
+function usesLegacySettings(path: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return isObject(parsed) && Object.prototype.hasOwnProperty.call(parsed, "disabledAgentResources");
+  } catch { return false; }
+}
+function usesLegacyRoleSelectors(path: string): boolean {
+  try { return /^\s*disabledAgentResources\s*:/m.test(readFileSync(path, "utf8")); }
+  catch { return false; }
+}
 
 function canonical(path: string): string {
   const absolute = resolve(path);
@@ -252,6 +263,10 @@ function inspectRole(path: string, activeTools: ReadonlySet<string>, knownModels
   let definition: AgentDefinition;
   try { definition = parseRoleMarkdown(readFileSync(path, "utf8"), true, path); }
   catch (error) {
+    if (usesLegacyRoleSelectors(path)) {
+      diagnostics.push(legacyAgentResourceSelectorDiagnostic(path));
+      return undefined;
+    }
     const message = error instanceof Error ? error.message : String(error);
     diagnostics.push(diagnostic("error", "ROLE_FRONTMATTER", source ? `${roleProvenance(source)} contains invalid role at "${path}": ${message}` : message, path, "Fix the role YAML frontmatter."));
     return undefined;
@@ -311,12 +326,13 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   const cwd = canonical(options.cwd ?? process.cwd());
   const agentDir = canonical(options.agentDir ?? getAgentDir());
   const settingsPath = canonical(options.settingsPath ?? workflowSettingsPath(agentDir));
+  const projectSettingsPath = workflowProjectSettingsPath(cwd);
+  const legacyGlobalSettings = usesLegacySettings(settingsPath);
   const diagnostics: DoctorDiagnostic[] = [];
   let settings = DEFAULT_SETTINGS;
   try { settings = loadSettings(settingsPath); }
-  catch (error) { diagnostics.push(diagnostic("error", "SETTINGS_INVALID", errorText(error), settingsPath, "Fix or remove the invalid workflow settings file.")); }
+  catch (error) { if (!legacyGlobalSettings) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", errorText(error), settingsPath, "Fix or remove the invalid workflow settings file.")); }
   let settingsSources: WorkflowSettingsSources = { concurrency: settingsPath, modelAliases: settingsPath, skills: settingsPath, extensions: settingsPath, tools: settingsPath };
-  const projectSettingsPath = workflowProjectSettingsPath(cwd);
 
   let pi: DoctorPiState;
   try { pi = await (options.discoverPi ?? discoverPi)(cwd, agentDir); }
@@ -326,17 +342,19 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   }
   if (options.activeTools) pi = { ...pi, activeTools: options.activeTools.filter((tool) => tool !== "workflow" && tool !== "workflow_respond" && tool !== "workflow_catalog") };
   if (pi.trust.required && !pi.trust.trusted) diagnostics.push(diagnostic("warning", "PROJECT_UNTRUSTED", "Pi project resources are inactive because the project is not trusted", cwd, "Open this project in Pi, choose Trust, then rerun doctor."));
+  const legacyProjectSettings = pi.trust.trusted && usesLegacySettings(projectSettingsPath);
+  if (legacyGlobalSettings) diagnostics.push(legacyAgentResourceSelectorDiagnostic(`${settingsPath}.disabledAgentResources`));
+  if (legacyProjectSettings) diagnostics.push(legacyAgentResourceSelectorDiagnostic(`${projectSettingsPath}.disabledAgentResources`));
   for (const error of pi.extensionErrors) diagnostics.push(diagnostic("error", "EXTENSION_LOAD", error.message, error.path, "Fix or disable the failing Pi extension."));
   try {
     const resolved = resolveWorkflowSettings(cwd, pi.trust.trusted, settingsPath);
     settings = resolved.effective;
     settingsSources = resolved.sources;
-    if (resolved.global.disabledAgentResources !== undefined) diagnostics.push(legacyAgentResourceSelectorDiagnostic(`${resolved.globalSettingsPath}.disabledAgentResources`));
-    if (resolved.projectTrusted && resolved.project.disabledAgentResources !== undefined) diagnostics.push(legacyAgentResourceSelectorDiagnostic(`${resolved.projectSettingsPath}.disabledAgentResources`));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const source = message.includes(projectSettingsPath) ? projectSettingsPath : settingsPath;
-    if (!diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
+    const legacySource = source === projectSettingsPath ? legacyProjectSettings : legacyGlobalSettings;
+    if (!legacySource && !diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
   }
   let resourcePolicy: AgentResourcePolicy;
   try {
@@ -344,7 +362,8 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const source = message.includes(projectSettingsPath) ? projectSettingsPath : settingsPath;
-    if (!diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
+    const legacySource = source === projectSettingsPath ? legacyProjectSettings : legacyGlobalSettings;
+    if (!legacySource && !diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
     resourcePolicy = emptyResourcePolicy(settingsPath, cwd, pi.trust.trusted);
   }
   for (const skill of resourcePolicy.unmatchedSkills) diagnostics.push(diagnostic("warning", "AGENT_RESOURCE_UNMATCHED", `Skill selector currently matches no discovered skill: ${skill}`, `${resourcePolicySource(settingsSources.skills ?? settingsPath)}.skills`));
@@ -416,9 +435,6 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
     }
     const definition = inspectRole(path, activeTools, knownModels, availableModels, diagnostics, aliases, dynamicAliases, settingsPath);
     if (definition) definitions.set(name, definition); else definitions.delete(name);
-  }
-  for (const role of roles) {
-    if (role.active && definitions.get(role.name)?.disabledAgentResources !== undefined) diagnostics.push(legacyAgentResourceSelectorDiagnostic(role.path));
   }
   let roleInspection: DoctorRoleInspection | undefined;
   if (options.role !== undefined) {
