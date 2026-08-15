@@ -136,9 +136,9 @@ void test("production role policy rejects overrides before persistence and prese
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-role-execution-"));
   const cwd = join(home, "project");
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows", "roles"), { recursive: true });
-  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: openai/gpt\nthinking: high\ntools: [read]\n---\nReview role");
+  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: openai/gpt\nthinking: high\ntools: [\"!*\", read]\n---\nReview role");
   for (const role of Object.keys(loadAgentDefinitions(cwd, undefined, false))) {
-    if (role !== "reviewer") writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", `${role}.md`), "---\nmodel: openai/gpt\ntools: [read]\n---\nTest role");
+    if (role !== "reviewer") writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", `${role}.md`), "---\nmodel: openai/gpt\ntools: [\"!*\", read]\n---\nTest role");
   }
   const inputs: SessionInput[] = [];
   const createSession = async (input: SessionInput): Promise<TestPiSession> => {

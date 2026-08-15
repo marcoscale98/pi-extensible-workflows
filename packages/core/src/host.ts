@@ -626,9 +626,9 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const existing = new Map(current.agents.map((agent) => [agent.id, agent]));
       const agents = ownership.map((node) => {
         const previous = existing.get(node.id);
-        const requested = { label: node.options.label, workflowName: run.metadata.name, tools: node.options.tools, ...(node.options.skills ? { skills: node.options.skills } : {}), ...(node.options.extensions ? { extensions: node.options.extensions } : {}), ...(node.options.model ? { model: node.options.model } : {}), ...(node.options.thinking ? { thinking: node.options.thinking } : {}), ...(node.options.role ? { role: node.options.role } : {}) };
+        const requested = { label: node.options.label, workflowName: run.metadata.name, ...(node.options.skills ? { skills: node.options.skills } : {}), ...(node.options.extensions ? { extensions: node.options.extensions } : {}), ...(node.options.model ? { model: node.options.model } : {}), ...(node.options.thinking ? { thinking: node.options.thinking } : {}), ...(node.options.role ? { role: node.options.role } : {}) };
         let effective: { model: ModelSpec; requestedModel?: string; tools: readonly string[] };
-        try { effective = run.executor.resolve(requested); }
+        try { effective = { ...run.executor.resolve({ ...requested, effectiveTools: node.options.tools }), tools: node.options.tools }; }
         catch { effective = previous ? { model: previous.model, ...(previous.requestedModel ? { requestedModel: previous.requestedModel } : {}), tools: previous.tools } : { model: node.options.model ? modelSpec(node.options.model, run.model) : { ...run.model, ...(node.options.thinking ? { thinking: node.options.thinking } : {}) }, ...(node.options.model ? { requestedModel: node.options.model } : {}), tools: node.options.tools }; }
         const resultPath = !node.parentId && node.options.agentIdentity ? agentIdentityPath(node.options.agentIdentity) : undefined;
         const nodeRole = roleNameOf(node.options.role);

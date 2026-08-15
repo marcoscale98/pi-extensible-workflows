@@ -353,8 +353,8 @@ void test("doctor reports effective resource selectors and unmatched patterns", 
   const globalExtension = join(paths.agentDir, "extensions", "interactive.ts");
   const projectExtension = join(paths.cwd, ".pi", "project.ts");
   mkdirSync(join(paths.agentDir, "extensions"), { recursive: true });
-  writeFileSync(globalSettings, JSON.stringify({ skills: ["global-skill"], extensions: [globalExtension] }));
-  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ skills: ["project-skill"], extensions: ["../project.ts"] }));
+  writeFileSync(globalSettings, JSON.stringify({ skills: ["!*", "global-skill"], extensions: ["!*", globalExtension] }));
+  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ skills: ["!*", "project-skill"], extensions: ["!*", "../project.ts"] }));
   const report = await withHome(paths.root, () => doctor({ ...paths, settingsPath: globalSettings, discoverPi: async () => pi({ extensions: [globalExtension, projectExtension], skills: ["global-skill", "project-skill"] }) }));
   assert.deepEqual(report.resourcePolicy.selectedSkills, ["project-skill"]);
   assert.deepEqual(report.resourcePolicy.selectedExtensions, [projectExtension]);
@@ -365,8 +365,8 @@ void test("doctor reports effective resource selectors and unmatched patterns", 
   assert.match(formatted, /Effective skills: project-skill/);
   assert.match(formatted, /## Pi active extensions/);
   assert.match(formatted, /## Pi active skills/);
-  assert.match(formatted, /Global skills: global-skill/);
-  assert.match(formatted, /Project skills: project-skill/);
+  assert.match(formatted, /Global skills: !\*, global-skill/);
+  assert.match(formatted, /Project skills: !\*, project-skill/);
   assert.match(formatted, /Global extensions:[\s\S]*interactive\.ts/);
   assert.match(formatted, /Project extensions:[\s\S]*project\.ts/);
 });

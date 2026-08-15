@@ -899,7 +899,9 @@ export class WorkflowAgentExecutor {
       const body = pattern.startsWith("!") ? pattern.slice(1) : pattern;
       if (!pattern.startsWith("!") && !resourcePatternHasMagic(pattern) && !candidateTools.includes(body)) throw new WorkflowError("UNKNOWN_TOOL", `Tool is outside the launching session boundary: ${body}`);
     }
-    const requested = hasToolSelectors ? selectResourcesByLayers(selectorLayers, candidateTools) : options.effectiveTools ?? candidateTools;
+    const outsideEffectiveTool = options.effectiveTools?.find((tool) => !candidateTools.includes(tool));
+    if (outsideEffectiveTool) throw new WorkflowError("UNKNOWN_TOOL", `Tool is outside the launching session boundary: ${outsideEffectiveTool}`);
+    const requested = options.effectiveTools ?? (hasToolSelectors ? selectResourcesByLayers(selectorLayers, candidateTools) : candidateTools);
     const forbidden = requested.find((tool) => !this.root.tools.has(tool));
     if (forbidden) throw new WorkflowError("UNKNOWN_TOOL", `Tool is outside the launching session boundary: ${forbidden}`);
     const requestedModel = options.model ?? roleDefinition?.model;

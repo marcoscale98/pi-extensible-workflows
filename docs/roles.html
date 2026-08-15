@@ -71,7 +71,7 @@ Focus on correctness and regressions.</code></pre>
             <tr><td><code>description</code></td><td>Role description shown in role discovery and Pi guidance.</td></tr>
             <tr><td><code>model</code></td><td>Configured alias or concrete <code>provider/model[:thinking]</code>.</td></tr>
             <tr><td><code>thinking</code></td><td>Default thinking level for the role.</td></tr>
-            <tr><td><code>tools</code>, <code>skills</code>, <code>extensions</code></td><td>Ordered Minimatch selectors. Positive patterns enable discovered candidates, <code>!pattern</code> disables them, and later layers override earlier layers.</td></tr>
+            <tr><td><code>tools</code>, <code>skills</code>, <code>extensions</code></td><td>Ordered Minimatch selectors. Positive patterns enable discovered candidates, <code>!pattern</code> disables them, later layers override earlier layers, and <code>!*</code> clears the current selection before narrower additions.</td></tr>
             <tr><td><code>overrideSystemPrompt</code></td><td>When true, use the role body instead of appending it to the native system prompt.</td></tr>
             <tr><td><code>contextFiles</code></td><td>Choose which Pi context-file scopes reach the role.</td></tr>
           </tbody>

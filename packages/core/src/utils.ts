@@ -146,7 +146,6 @@ export function selectResourcesByLayers(layers: readonly (readonly string[] | un
   const enabled = new Set(defaultEnabled ? resources : []);
   for (const layer of layers) {
     if (layer === undefined) continue;
-    if (layer.length === 0 || layer.some((pattern) => !pattern.startsWith("!"))) enabled.clear();
     for (const resource of resources) {
       for (const pattern of layer) if (resourcePatternMatches(resource, pattern)) {
         if (pattern.startsWith("!")) enabled.delete(resource); else enabled.add(resource);

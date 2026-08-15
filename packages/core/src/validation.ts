@@ -9,7 +9,7 @@ import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition, AgentResourceSelectors, AgentResourceSelectorSet, AgentResourcePolicy, CheckpointInput, ContextFileScope, JsonSchema, JsonValue, PreflightCapabilities, PreflightResult, RoleOverride, ShellOptions, StaticWorkflowCall, StaticWorkflowExecution, StaticWorkflowScope, ValidatedWorkflowLaunch, WorkflowCallKind, WorkflowErrorCode, WorkflowExtensionMetadata, WorkflowExtensionSettings, WorkflowMetadata, WorkflowRoleDirectoryRegistration, WorkflowSettings, WorkflowSettingsOverrides, WorkflowSettingsResolution, WorkflowSettingsSources, WorkflowValidationContext, WorkflowValidationParameters } from "./types.js";
 import type { WorkflowRegistryApi } from "./registry.js";
 import { registeredWorkflowRoleDirectoryRegistrations } from "./registry.js";
-import { annotateModelAliasError, deepFreeze, errorText, fail, isNodeError, jsonObject, jsonValue, modelAliasName, modelCapability, object, parseThinking, positiveInteger, resolveModelReference, unknownModel, validateModelAliases, validateResourcePattern } from "./utils.js";
+import { annotateModelAliasError, deepFreeze, errorText, fail, isNodeError, jsonObject, jsonValue, modelAliasName, modelCapability, object, parseThinking, positiveInteger, resolveModelReference, resourcePatternHasMagic, unknownModel, validateModelAliases, validateResourcePattern } from "./utils.js";
 import { WORKFLOW_CALL_KINDS } from "./types.js";
 
 export const DEFAULT_SETTINGS: Readonly<WorkflowSettings> = Object.freeze({ concurrency: 8, backgroundWidget: true });
@@ -22,7 +22,6 @@ export function validateCheckpoint(value: unknown): CheckpointInput {
 
 export function workflowSettingsPath(agentDir = getAgentDir()): string { return join(agentDir, ROLE_DIRECTORY, "settings.json"); }
 export function workflowProjectSettingsPath(cwd: string): string { return join(cwd, ".pi", ROLE_DIRECTORY, "settings.json"); }
-function resourcePatternHasMagic(value: string): boolean { return /[*?\x5b\x5d{}()]/.test(value); }
 function normalizedResourcePath(value: string, settingsPath: string): string {
   if (value === "*") return value;
   let expanded = value === "~" ? homedir() : value.startsWith("~/") || value.startsWith("~\\") ? join(homedir(), value.slice(2)) : value;
@@ -98,6 +97,7 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
   if (!object(parsed)) fail("INVALID_SETTINGS", `Workflow settings at ${path} must be an object`);
   const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", ...(partial ? [] : ["backgroundWidget"]) ]);
   const unknown = Object.keys(parsed).find((key) => !allowed.has(key));
+  if (unknown === "disabledAgentResources") fail("INVALID_SETTINGS", `disabledAgentResources is no longer supported; use skills, extensions, and tools selectors (settings: ${path})`);
   if (unknown) fail("INVALID_SETTINGS", `Unknown workflow setting at ${path}: ${unknown}`);
   const concurrency = parsed.concurrency === undefined ? (partial ? undefined : DEFAULT_SETTINGS.concurrency) : parsed.concurrency;
   if (concurrency !== undefined && (!positiveInteger(concurrency) || concurrency > 16)) fail("INVALID_SETTINGS", `${path}.concurrency must be an integer from 1 to 16`);

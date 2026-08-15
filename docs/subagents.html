@@ -96,7 +96,7 @@
       </section>
       <section id="roles">
         <h2>Agent options, roles, and settings</h2>
-        <p><code>subagents_run</code> accepts the same execution options as workflow <code>agent(...)</code>: <code>label</code>, <code>model</code>, <code>thinking</code>, <code>tools</code>, <code>role</code>, <code>worktree</code>, <code>outputSchema</code>, <code>retries</code>, and <code>timeoutMs</code>. A named role or role override cannot be combined with top-level <code>model</code>, <code>thinking</code>, or <code>tools</code>; put those overrides inside the role object.</p>
+        <p><code>subagents_run</code> accepts the same execution options as workflow <code>agent(...)</code>: <code>label</code>, <code>model</code>, <code>thinking</code>, <code>skills</code>, <code>extensions</code>, <code>tools</code>, <code>role</code>, <code>worktree</code>, <code>outputSchema</code>, <code>retries</code>, and <code>timeoutMs</code>. A named role or role override may combine with top-level capability selectors, which are the final overlay; <code>model</code> and <code>thinking</code> remain role-only when a role is selected.</p>
         <pre><code class="language-javascript"><span class="tok-function">subagents_run</span><span class="tok-punctuation">({</span>
   <span class="tok-property">prompt</span><span class="tok-punctuation">:</span> <span class="tok-string">"Review the release."</span><span class="tok-punctuation">,</span>
   <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>

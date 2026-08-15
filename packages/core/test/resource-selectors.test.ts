@@ -4,13 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { loadSettings, parseRoleMarkdown, preflight, resolveWorkflowSettings, selectResourcesByLayers, WorkflowAgentExecutor, WorkflowError } from "../src/index.js";
+import { decodeLaunchSnapshot } from "../src/decoders.js";
 
 void test("resource selectors use ordered last-match-wins rules", () => {
   const candidates = ["review-skill", "experimental-skill", "/opt/reviewer.mjs", "/opt/unsafe.mjs", "read", "write"];
-  assert.deepEqual(selectResourcesByLayers([["review-*"]], candidates), ["review-skill"]);
+  assert.deepEqual(selectResourcesByLayers([["review-*"]], candidates), candidates);
   assert.deepEqual(selectResourcesByLayers([["*", "!experimental-*"]], candidates), ["review-skill", "/opt/reviewer.mjs", "/opt/unsafe.mjs", "read", "write"]);
   assert.deepEqual(selectResourcesByLayers([["!*", "review-*"]], candidates), ["review-skill"]);
   assert.deepEqual(selectResourcesByLayers([["*", "!write", "write"]], candidates), candidates);
+  const layeredCandidates = ["security-skill", "other-skill", "experimental-skill"];
+  assert.deepEqual(selectResourcesByLayers([["*", "!experimental-*"], ["!security-skill"], ["security-skill"]], layeredCandidates), ["security-skill", "other-skill"]);
 });
 
 void test("settings and roles expose direct selector fields", () => {
@@ -30,20 +33,26 @@ void test("settings and roles expose direct selector fields", () => {
   assert.deepEqual(parseRoleMarkdown("---\nskills: [review-*]\nextensions: [\"**/*\"]\ntools: [\"!*\", read]\n---\nReview", true, join(root, "reviewer.md")), { prompt: "Review", skills: ["review-*"], extensions: ["**/*"], tools: ["!*", "read"] });
   const legacyPath = join(root, "legacy.json");
   writeFileSync(legacyPath, JSON.stringify({ disabledAgentResources: { skills: ["old"] } }));
-  assert.throws(() => loadSettings(legacyPath), (error: unknown) => error instanceof WorkflowError);
+  assert.throws(() => loadSettings(legacyPath), (error: unknown) => error instanceof WorkflowError && error.message.includes("use skills, extensions, and tools selectors"));
+});
+
+void test("decodes legacy extension settings in launch snapshots", () => {
+  const snapshot = decodeLaunchSnapshot({ script: "return null;", args: null, metadata: { name: "legacy" }, settings: { concurrency: 1, extensions: { herdr: { enableFullyInspectableMode: true } } }, models: [], tools: [], agentTypes: [], schemas: [] });
+  assert.deepEqual(snapshot?.settings, { concurrency: 1, extensionSettings: { herdr: { enableFullyInspectableMode: true } } });
 });
 
 void test("tool selectors cannot widen the root boundary", () => {
   const executor = new WorkflowAgentExecutor({ cwd: "/tmp", model: { provider: "test", model: "model" }, tools: new Set(["read", "grep"]), resourceSelectors: { tools: ["!*", "read"] }, availableModels: new Set(["test/model"]) });
   assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", tools: ["!*", "grep"] }).tools, ["grep"]);
   assert.throws(() => executor.resolve({ label: "agent", workflowName: "test", tools: ["!*", "/not-a-tool"] }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
+  assert.throws(() => executor.resolve({ label: "agent", workflowName: "test", effectiveTools: ["/not-a-tool"] }, ["read"]), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
 });
 
-void test("positive capability layers preserve least privilege and parent boundaries", () => {
+void test("capability layers preserve default-enabled candidates and parent boundaries", () => {
   const executor = new WorkflowAgentExecutor({ cwd: "/tmp", model: { provider: "test", model: "model" }, tools: new Set(["read", "grep", "bash"]), resourceSelectors: { tools: ["*", "!bash"] }, agentDefinitions: { reviewer: { tools: ["read"] } }, availableModels: new Set(["test/model"]) });
-  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", role: "reviewer" }).tools, ["read"]);
-  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", role: "reviewer", tools: ["grep"] }).tools, ["grep"]);
-  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", tools: [] }).tools, []);
+  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", role: "reviewer" }).tools, ["read", "grep"]);
+  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", role: "reviewer", tools: ["grep"] }).tools, ["read", "grep"]);
+  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", tools: [] }).tools, ["read", "grep"]);
 });
 
 void test("static selector validation is not skipped by dynamic options", () => {

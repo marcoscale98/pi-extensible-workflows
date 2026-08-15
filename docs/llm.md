@@ -68,7 +68,7 @@ Effective precedence is:
 4. Role frontmatter.
 5. Per-agent call options.
 
-Selectors are concatenated in that order. A later matching rule wins. Within a layer, a positive pattern establishes a whitelist for that layer (an empty explicitly configured list selects no candidates); a layer containing only negated patterns modifies the current selection. A candidate with no matching rule remains enabled when no layer establishes a whitelist. `!*` clears the current selection before narrower positive patterns are applied. Trusted project settings are ignored when the project is untrusted.
+Selectors are concatenated in that order. A later matching rule wins over earlier rules. Every candidate starts enabled; a matching positive pattern enables it and `!pattern` disables it. `!*` clears the current selection before narrower positive patterns are applied. Candidates with no matching rule remain enabled, and selectors cannot create unavailable resources. Trusted project settings are ignored when the project is untrusted.
 
 Supported settings shape:
 
@@ -111,7 +111,7 @@ Dynamic model aliases are resolved once per launch or resume, then captured for 
 
 ### Resource selectors
 
-The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. A positive pattern makes that layer a whitelist and enables matching discovered candidates; `!pattern` disables matching candidates, and the last matching rule wins. An empty configured layer selects no candidates. A layer containing only negated patterns changes the current selection without establishing a whitelist. `!*` clears the current selection before narrower positive patterns are applied. Selectors never create unavailable resources, and child tools remain within the parent boundary.
+The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. Every discovered candidate starts enabled; a matching positive pattern enables it, `!pattern` disables it, and the last matching rule wins. `!*` clears the current selection before narrower positive patterns are applied. Selectors never create unavailable resources or bypass trust filtering. Child capability calls may re-enable discovered skills and extensions through their final overlay, while child tools remain within the parent boundary.
 
 ## Standalone Subagents
 
@@ -127,7 +127,7 @@ The model-facing surface is exactly:
 | `subagents_stop` | Stop one run and clean its worktree. |
 | `subagents_retry` | Start a fresh run from a failed or stopped request, with a new ID and the original mode. |
 
-`subagents_run` accepts the same `label`, `model`, `thinking`, `tools`, `role`, `worktree`, `outputSchema`, `retries`, and `timeoutMs` options as workflow agents. It discovers the same settings, aliases, and role files. Do not combine `role` with top-level `model`, `thinking`, or `tools`; put those overrides inside the role object.
+`subagents_run` accepts the same `label`, `model`, `thinking`, `skills`, `extensions`, `tools`, `role`, `worktree`, `outputSchema`, `retries`, and `timeoutMs` options as workflow agents. A named role or role override may combine with top-level capability selectors, which are the final overlay; `model` and `thinking` remain role-only when a role is selected.
 
 Background calls return an ID immediately. Foreground calls return a terminal envelope and do not produce a background completion follow-up. Do not poll a running ID; call `subagents_inspect({ id })` only when current state or output is needed. Cross-session retry starts fresh and does not restore the old native conversation.
 

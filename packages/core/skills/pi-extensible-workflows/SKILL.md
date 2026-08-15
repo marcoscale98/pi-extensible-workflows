@@ -74,6 +74,8 @@ export interface AgentOptions {
   label?: string;
   model?: string;
   role?: string;
+  skills?: string[];
+  extensions?: string[];
   tools?: string[];
   thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   outputSchema?: JsonSchema;
@@ -130,7 +132,7 @@ Registered extension functions receive `withWorktree` in context and can compose
 ## Rules
 
 - Use `log(messageString)` for brief operator status.
-- A role can be a name string or an object with a required `name` and frontmatter overrides. Omitted fields inherit from the role file, `null` unsets them, and explicit values replace them. Keep top-level `model`, `thinking`, and `tools` out of calls with a role; put overrides inside the role object.
+- A role can be a name string or an object with a required `name` and frontmatter overrides. Omitted fields inherit from the role file, `null` unsets them, and explicit values replace them. Top-level `skills`, `extensions`, and `tools` are final capability selector overlays; `model` and `thinking` remain role-only when a role is selected.
 - Use `parallel()` for independent tasks with different flows and `pipeline()` when every keyed item follows the same ordered stages; do not duplicate identical chains in `parallel()`. Signatures are `parallel(operationName, tasksRecord)` and `pipeline(operationName, itemsRecord, stagesRecord)`; keys are stable task, item, and stage names.
 - Preserve item metadata in workflow code between pipeline stages instead of making agents echo it through `outputSchema`.
 - Use a JavaScript loop for repeated work; each direct `agent(...)` call gets deterministic call-site and occurrence identity.

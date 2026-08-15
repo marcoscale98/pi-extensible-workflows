@@ -34,7 +34,7 @@ void test("public agent execution result types remain exported", () => {
   assert.equal(progress.state, "completed");
 });
 
-const root: AgentExecutionRoot = { cwd: "/repo", model: { provider: "openai", model: "gpt", thinking: "medium" }, availableModels: new Set(["openai/gpt", "anthropic/opus", "google/gemini"]), tools: new Set(["read", "grep", "find", "bash"]), agentDefinitions: { reviewer: { prompt: "Review carefully", model: "anthropic/opus", thinking: "high", tools: ["read"] }, scout: { prompt: "Inspect broadly", model: "google/gemini", thinking: "low", tools: ["read", "grep"] } } };
+const root: AgentExecutionRoot = { cwd: "/repo", model: { provider: "openai", model: "gpt", thinking: "medium" }, availableModels: new Set(["openai/gpt", "anthropic/opus", "google/gemini"]), tools: new Set(["read", "grep", "find", "bash"]), agentDefinitions: { reviewer: { prompt: "Review carefully", model: "anthropic/opus", thinking: "high", tools: ["!*", "read"] }, scout: { prompt: "Inspect broadly", model: "google/gemini", thinking: "low", tools: ["!*", "read", "grep"] } } };
 const usage = { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: { total: 0.25 } };
 function assistant(text: string) { return { role: "assistant", content: [{ type: "text", text }], usage }; }
 function terminalAssistant(errorMessage: string) { return { ...assistant(""), stopReason: "error", errorMessage }; }
@@ -332,22 +332,22 @@ void test("resolves explicit capabilities without widening least privilege", () 
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "reviewer" }), { model: { provider: "anthropic", model: "opus", thinking: "high" }, tools: ["read"], systemPromptAppend: "Review carefully" });
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "scout" }).tools, ["read", "grep"]);
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", model: "google/gemini" }), { model: { provider: "google", model: "gemini", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPromptAppend: "" });
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", model: "google/gemini", tools: [] }).tools, []);
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", tools: ["read", "grep"] }).tools, ["read", "grep"]);
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", model: "google/gemini", tools: ["!*"] }).tools, []);
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", tools: ["!*", "read", "grep"] }).tools, ["read", "grep"]);
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", tools: ["read", "write"] }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", model: "missing/model" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_MODEL");
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "missing" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_AGENT_TYPE");
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "reviewer", model: "google/gemini" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "reviewer", thinking: "low" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "reviewer", tools: [] }).tools, []);
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "reviewer", tools: ["!*"] }).tools, []);
   const broken = new WorkflowAgentExecutor({ ...root, agentDefinitions: { broken: { tools: ["write"] } } }, testTransport(async () => { throw new Error("must not launch"); }));
   assert.throws(() => broken.resolve({ label: "a", workflowName: "w", role: "broken" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
 });
 void test("applies named role object overrides to the resolved role policy", () => {
   const executor = new WorkflowAgentExecutor(root, testTransport(async () => { throw new Error("unused"); }));
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer" } }), { model: { provider: "anthropic", model: "opus", thinking: "high" }, tools: ["read"], systemPromptAppend: "Review carefully" });
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", model: "google/gemini", thinking: "low", tools: ["read", "grep"] } }), { model: { provider: "google", model: "gemini", thinking: "low" }, tools: ["read", "grep"], systemPromptAppend: "Review carefully" });
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", tools: [] } }).tools, []);
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", model: "google/gemini", thinking: "low", tools: ["!*", "read", "grep"] } }), { model: { provider: "google", model: "gemini", thinking: "low" }, tools: ["read", "grep"], systemPromptAppend: "Review carefully" });
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", tools: ["!*"] } }).tools, []);
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", tools: null } }).tools, ["read", "grep", "find", "bash"]);
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scout", tools: null } }).tools, ["read", "grep", "find", "bash"]);
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scout", model: null, thinking: null } }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep"], systemPromptAppend: "Inspect broadly" });
@@ -372,7 +372,7 @@ void test("passes role prompt as system append, not task text", async () => {
   const executor = new WorkflowAgentExecutor(root, testTransport(async (sessionInput) => { input = sessionInput; return { transport: "local", session: { transport: "local", sessionId: "role", locator: { sessionFile: "/sessions/role.jsonl" } }, messages: [assistant("done")], getSessionStats: sessionStats, prompt: async (text) => { prompt = text; }, dispose() {} }; }));
   await executor.execute("Do work", { label: "worker", workflowName: "flow", role: "reviewer", effectiveTools: ["read", "grep"] });
   assert.equal((input as { systemPromptAppend?: string }).systemPromptAppend, "Review carefully");
-  assert.deepEqual((input as { tools?: readonly string[] }).tools, ["read"]);
+  assert.deepEqual((input as { tools?: readonly string[] }).tools, ["read", "grep"]);
   assert.doesNotMatch(prompt, /Review carefully/);
   assert.match(prompt, /Task:\nDo work/);
 });
@@ -386,7 +386,7 @@ void test("carries role context file scope policy into session preparation", asy
   assert.deepEqual(input?.contextFiles, ["global", "project"]);
 });
 void test("uses a role body as the full system prompt when requested", async () => {
-  const roleRoot: AgentExecutionRoot = { ...root, agentDefinitions: { ...root.agentDefinitions, override: { prompt: "Replace the system prompt", model: "anthropic/opus", thinking: "high", tools: ["read"], overrideSystemPrompt: true } } };
+  const roleRoot: AgentExecutionRoot = { ...root, agentDefinitions: { ...root.agentDefinitions, override: { prompt: "Replace the system prompt", model: "anthropic/opus", thinking: "high", tools: ["!*", "read"], overrideSystemPrompt: true } } };
   let input: unknown;
   const executor = new WorkflowAgentExecutor(roleRoot, testTransport(async (sessionInput) => { input = sessionInput; return { transport: "local", session: { transport: "local", sessionId: "override", locator: { sessionFile: "/sessions/override.jsonl" } }, messages: [assistant("done")], getSessionStats: sessionStats, prompt: async () => {}, dispose() {} }; }));
   assert.deepEqual(executor.resolve({ label: "worker", workflowName: "flow", role: "override" }), { model: { provider: "anthropic", model: "opus", thinking: "high" }, tools: ["read"], systemPrompt: "Replace the system prompt", systemPromptAppend: "" });
@@ -2054,9 +2054,9 @@ void test("composes role resource selectors and reapplies them on retries", asyn
   await executor.execute("other", { label: "other", workflowName: "flow", role: "scout" });
   await executor.execute("plain", { label: "plain", workflowName: "flow" });
   assert.deepEqual(policies.map(({ effective }) => effective), [
-    { skills: ["global", "project", "role", "global"], extensions: ["/global.ts", "/project.ts", roleExtension, "/global.ts"], tools: ["read"] },
-    { skills: ["global", "project", "role", "global"], extensions: ["/global.ts", "/project.ts", roleExtension, "/global.ts"], tools: ["read"] },
-    { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"], tools: ["read", "grep"] },
+    { skills: ["global", "project", "role", "global"], extensions: ["/global.ts", "/project.ts", roleExtension, "/global.ts"], tools: ["!*", "read"] },
+    { skills: ["global", "project", "role", "global"], extensions: ["/global.ts", "/project.ts", roleExtension, "/global.ts"], tools: ["!*", "read"] },
+    { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"], tools: ["!*", "read", "grep"] },
     { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"] },
   ]);
   assert.deepEqual(basePolicy.effective, { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"] });
