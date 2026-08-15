@@ -284,6 +284,8 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   assert.match(formatted, /- Effective skills:\n(?:[ ]{2}- .+\n)+/);
   assert.match(formatted, /- Effective extensions:\n(?:[ ]{2}- .+\n)+/);
   assert.match(formatted, /- Applied setup hooks:\n[ ]{2}- `adjust`/);
+  assert.match(formatted, /AGENT_RESOURCE_SELECTOR_MIGRATION/);
+  assert.match(formatted, /https:\/\/github\.com\/vekexasia\/pi-extensible-workflows\/issues\/205/);
   assert.match(formatted, /Final system prompt[\s\S]*HOOK:/);
   let jsonOutput = "";
   assert.equal(await withHomeAndCwd(paths.root, paths.cwd, () => runCli(["doctor", "--role", "reviewer", "--json"], { ...paths, registry, discoverPi: async () => pi({ activeTools: ["read", "grep"], knownModels: ["fixture/fixture-model", "fixture/override-model"], availableModels: ["fixture/fixture-model", "fixture/override-model"], model: { provider: "fixture", model: "fixture-model", thinking: "medium" } }) }, (text) => { jsonOutput += text; })), 0);
@@ -307,7 +309,8 @@ void test("role-targeted doctor preserves role-not-found diagnostics in focused 
 void test("doctor respects untrusted projects and does not mutate fixtures", async () => {
   const paths = fixture();
   writeFileSync(join(paths.agentDir, "pi-extensible-workflows", "roles", "same.md"), "Global");
-  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "same.md"), "---\ntools: [cat]\n---\nProject");
+  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "same.md"), "---\ntools: [cat]\ndisabledAgentResources: {}\n---\nProject");
+  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ disabledAgentResources: {} }));
   const before = readdirSync(paths.root, { recursive: true }).map(String).sort();
   const report = await withHome(paths.root, () => doctor({ ...paths, discoverPi: async () => pi({ trust: { required: true, trusted: false, source: "saved Pi trust decision" } }) }));
   const after = readdirSync(paths.root, { recursive: true }).map(String).sort();
@@ -315,6 +318,32 @@ void test("doctor respects untrusted projects and does not mutate fixtures", asy
   assert.ok(report.diagnostics.some(({ code }) => code === "PROJECT_UNTRUSTED"));
   assert.ok(!report.diagnostics.some(({ code }) => code === "ROLE_TOOL_INACTIVE"));
   assert.equal(report.roles.find((role) => role.scope === "project")?.active, false);
+  assert.equal(report.diagnostics.some(({ code }) => code === "AGENT_RESOURCE_SELECTOR_MIGRATION"), false);
+  assert.equal(doctorExitCode(report), 0);
+});
+void test("doctor warns about legacy agent resource selectors in active settings and roles", async () => {
+  const paths = fixture();
+  const globalSettings = join(paths.agentDir, "pi-extensible-workflows", "settings.json");
+  const projectSettings = join(paths.cwd, ".pi", "pi-extensible-workflows", "settings.json");
+  const globalRole = join(paths.agentDir, "pi-extensible-workflows", "roles", "global.md");
+  const projectRole = join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "project.md");
+  const directRole = join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "direct.md");
+  writeFileSync(globalSettings, JSON.stringify({ disabledAgentResources: {} }));
+  writeFileSync(projectSettings, JSON.stringify({ disabledAgentResources: { skills: [], extensions: [] } }));
+  writeFileSync(globalRole, "---\ndisabledAgentResources: {}\n---\nGlobal role");
+  writeFileSync(projectRole, "---\ndisabledAgentResources:\n  skills: []\n  extensions: []\n---\nProject role");
+  writeFileSync(directRole, "---\nskills: []\nextensions: []\ntools: [read]\n---\nDirect selectors");
+  const report = await withHome(paths.root, () => doctor({ ...paths, settingsPath: globalSettings, discoverPi: async () => pi() }));
+  const migrations = report.diagnostics.filter(({ code }) => code === "AGENT_RESOURCE_SELECTOR_MIGRATION");
+  assert.deepEqual(migrations.map(({ source }) => source).sort(), [
+    `${globalSettings}.disabledAgentResources`,
+    `${projectSettings}.disabledAgentResources`,
+    globalRole,
+    projectRole,
+  ].sort());
+  assert.ok(migrations.every(({ severity, message }) => severity === "warning" && message.includes("#205") && message.includes("pattern") && message.includes("skills") && message.includes("extensions") && message.includes("tools")));
+  assert.doesNotMatch(formatDoctorReport(report), /direct\.md.*AGENT_RESOURCE_SELECTOR_MIGRATION/);
+  assert.match(formatDoctorReport(report), /https:\/\/github\.com\/vekexasia\/pi-extensible-workflows\/issues\/205/);
   assert.equal(doctorExitCode(report), 0);
 });
 void test("doctor reports effective resource exclusions and unmatched selectors", async () => {
@@ -654,7 +683,7 @@ void test("doctor diagnoses extension role directories with extension provenance
   mkdirSync(first);
   mkdirSync(second);
   writeFileSync(join(first, "same.md"), "First role");
-  writeFileSync(join(first, "unique.md"), "Unique role");
+  writeFileSync(join(first, "unique.md"), "---\ndisabledAgentResources: {}\n---\nUnique role");
   writeFileSync(join(second, "same.md"), "Second role");
   writeFileSync(join(second, "broken.md"), "---\ndescription: [broken\n---\nBroken");
   registerWorkflowExtension({ version: "1.0.0", headline: "Role package", roleDirectories: [missing, empty, first, pathToFileURL(second)] });
@@ -666,6 +695,7 @@ void test("doctor diagnoses extension role directories with extension provenance
   assert.ok(codes.includes("ROLE_FRONTMATTER"));
   assert.ok(report.diagnostics.every(({ message }) => !message.includes("scandir") || message.includes("Role package")));
   assert.equal(report.roles.find(({ name, scope }) => name === "unique" && scope === "extension")?.extension?.headline, "Role package");
+  assert.ok(report.diagnostics.some(({ code, source }) => code === "AGENT_RESOURCE_SELECTOR_MIGRATION" && source === join(first, "unique.md")));
   assert.equal(doctorExitCode(report), 1);
   const formatted = formatDoctorReport({ ...report, diagnostics: [] });
   assert.ok(formatted.includes(`Extension "Role package" (1.0.0) role directory "${first}"`));

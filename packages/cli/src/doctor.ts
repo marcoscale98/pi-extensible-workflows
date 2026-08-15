@@ -99,6 +99,8 @@ export interface DoctorOptions {
 }
 
 const THINKING_HINT = "Use off, minimal, low, medium, high, xhigh, or max.";
+const AGENT_RESOURCE_SELECTOR_MIGRATION_ISSUE = "https://github.com/vekexasia/pi-extensible-workflows/issues/205";
+const AGENT_RESOURCE_SELECTOR_MIGRATION_MESSAGE = `\`disabledAgentResources\` uses the legacy agent resource selector format and will change in #205. Migrate to direct \`skills\`, \`extensions\`, and \`tools\` selectors: legacy patterns exclude resources and \`!pattern\` re-enables them, while new selectors include matches and \`!pattern\` excludes them. See ${AGENT_RESOURCE_SELECTOR_MIGRATION_ISSUE}`;
 
 function canonical(path: string): string {
   const absolute = resolve(path);
@@ -228,6 +230,9 @@ function roleProvenance(source?: { directory: string; extension: WorkflowExtensi
 function diagnostic(severity: DoctorSeverity, code: string, message: string, source?: string, hint?: string): DoctorDiagnostic {
   return { severity, code, message, ...(source ? { source } : {}), ...(hint ? { hint } : {}) };
 }
+function legacyAgentResourceSelectorDiagnostic(source: string): DoctorDiagnostic {
+  return diagnostic("warning", "AGENT_RESOURCE_SELECTOR_MIGRATION", AGENT_RESOURCE_SELECTOR_MIGRATION_MESSAGE, source);
+}
 function emptyResourcePolicy(globalSettingsPath: string, cwd: string, projectTrusted: boolean): AgentResourcePolicy {
   const empty: AgentResourceExclusions = { skills: [], extensions: [] };
   return { globalSettingsPath, projectSettingsPath: workflowProjectSettingsPath(cwd), projectTrusted, global: empty, project: empty, effective: empty, unmatchedSkills: [], unmatchedExtensions: [] };
@@ -322,6 +327,8 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
     const resolved = resolveWorkflowSettings(cwd, pi.trust.trusted, settingsPath);
     settings = resolved.effective;
     settingsSources = resolved.sources;
+    if (resolved.global.disabledAgentResources !== undefined) diagnostics.push(legacyAgentResourceSelectorDiagnostic(`${resolved.globalSettingsPath}.disabledAgentResources`));
+    if (resolved.projectTrusted && resolved.project.disabledAgentResources !== undefined) diagnostics.push(legacyAgentResourceSelectorDiagnostic(`${resolved.projectSettingsPath}.disabledAgentResources`));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const source = message.includes(projectSettingsPath) ? projectSettingsPath : settingsPath;
@@ -404,6 +411,9 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
     }
     const definition = inspectRole(path, activeTools, knownModels, availableModels, diagnostics, aliases, dynamicAliases, settingsPath);
     if (definition) definitions.set(name, definition); else definitions.delete(name);
+  }
+  for (const role of roles) {
+    if (role.active && definitions.get(role.name)?.disabledAgentResources !== undefined) diagnostics.push(legacyAgentResourceSelectorDiagnostic(role.path));
   }
   let roleInspection: DoctorRoleInspection | undefined;
   if (options.role !== undefined) {
