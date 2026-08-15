@@ -395,7 +395,8 @@ function roleMarkdown(role: AgentDefinition): string {
   if (role.tools !== undefined) metadata.push(`tools: ${JSON.stringify(role.tools)}`);
   if (role.overrideSystemPrompt !== undefined) metadata.push(`overrideSystemPrompt: ${String(role.overrideSystemPrompt)}`);
   if (role.contextFiles !== undefined) metadata.push(`contextFiles: ${JSON.stringify(role.contextFiles)}`);
-  if (role.disabledAgentResources !== undefined) metadata.push(`disabledAgentResources: ${JSON.stringify(role.disabledAgentResources)}`);
+  if (role.skills !== undefined) metadata.push(`skills: ${JSON.stringify(role.skills)}`);
+  if (role.extensions !== undefined) metadata.push(`extensions: ${JSON.stringify(role.extensions)}`);
   metadata.push("---");
   return `${metadata.join("\n")}\n${role.prompt ?? ""}\n`;
 }

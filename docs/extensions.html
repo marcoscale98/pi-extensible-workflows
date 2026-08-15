@@ -110,7 +110,7 @@
           <thead><tr><th>Member</th><th>Behavior</th></tr></thead>
           <tbody>
             <tr><td><code>run</code></td><td>Read-only <code>WorkflowRunContext</code> for this launch.</td></tr>
-            <tr><td><code>agent(prompt, options?)</code></td><td>Launches an agent and returns its bare JSON value. Options include <code>label</code>, <code>model</code>, <code>thinking</code>, <code>tools</code>, <code>role</code>, <code>outputSchema</code>, <code>retries</code>, <code>timeoutMs</code>, and JSON-compatible extension options. <code>role</code> may be a name string or an object with a required <code>name</code> plus frontmatter overrides. Omitted fields inherit from the role file, <code>null</code> unsets them, and explicit values replace them. Top-level model, thinking, and tools remain incompatible with any role form.</td></tr>
+            <tr><td><code>agent(prompt, options?)</code></td><td>Launches an agent and returns its bare JSON value. Options include <code>label</code>, <code>model</code>, <code>thinking</code>, <code>tools</code>, <code>skills</code>, <code>extensions</code>, <code>role</code>, <code>outputSchema</code>, <code>retries</code>, <code>timeoutMs</code>, and JSON-compatible extension options. <code>role</code> may be a name string or an object with a required <code>name</code> plus frontmatter overrides. Omitted fields inherit from the role file, <code>null</code> unsets them, and explicit selector values are appended after role selectors. Top-level model and thinking remain incompatible with any role form.</td></tr>
             <tr><td><code>shell(command, options?)</code></td><td>Runs a host command and returns <code>{ exitCode, stdout, stderr }</code>. Options are <code>timeoutMs</code> and string-valued <code>env</code>.</td></tr>
             <tr><td><code>prompt(template, values)</code></td><td>Interpolates a plain object of JSON values into a prompt. Await agent results before passing them here.</td></tr>
             <tr><td><code>parallel(name, tasks)</code></td><td>Runs stable keyed tasks concurrently and returns an object of bare values.</td></tr>
@@ -263,7 +263,7 @@
       <section id="resources">
         <h2>Other extension-provided resources</h2>
         <p>The shipped <code>WorkflowExtension</code> has five capability fields: functions, dynamic model aliases, agent setup hooks, latest-attempt actions, and packaged role directories. Role directories use absolute filesystem paths or <code>file:</code> URLs and provide default role files; standard global and trusted project roles override matching names.</p>
-        <p>Do not document proposed or lower-level resources as extension capabilities. A role may restrict workflow-agent skills and extension sources through its <code>disabledAgentResources</code> frontmatter, but that is role policy, not a <code>WorkflowExtension</code> field.</p>
+        <p>Do not document proposed or lower-level resources as extension capabilities. A role may select workflow-agent skills and extension sources through direct <code>skills</code> and <code>extensions</code> frontmatter fields, but that is role policy, not a <code>WorkflowExtension</code> field.</p>
       </section>
       <section id="catalog">
         <h2>Catalog and host integration</h2>

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import * as acorn from "acorn";
 import { Script } from "node:vm";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { AgentDefinition, AgentResourceExclusions, AgentResourcePolicy, CheckpointInput, ContextFileScope, JsonSchema, JsonValue, PreflightCapabilities, PreflightResult, RoleOverride, ShellOptions, StaticWorkflowCall, StaticWorkflowExecution, StaticWorkflowScope, ValidatedWorkflowLaunch, WorkflowCallKind, WorkflowErrorCode, WorkflowExtensionMetadata, WorkflowExtensionSettings, WorkflowMetadata, WorkflowRoleDirectoryRegistration, WorkflowSettings, WorkflowSettingsOverrides, WorkflowSettingsResolution, WorkflowSettingsSources, WorkflowValidationContext, WorkflowValidationParameters } from "./types.js";
+import type { AgentDefinition, AgentResourceSelectors, AgentResourceSelectorSet, AgentResourcePolicy, CheckpointInput, ContextFileScope, JsonSchema, JsonValue, PreflightCapabilities, PreflightResult, RoleOverride, ShellOptions, StaticWorkflowCall, StaticWorkflowExecution, StaticWorkflowScope, ValidatedWorkflowLaunch, WorkflowCallKind, WorkflowErrorCode, WorkflowExtensionMetadata, WorkflowExtensionSettings, WorkflowMetadata, WorkflowRoleDirectoryRegistration, WorkflowSettings, WorkflowSettingsOverrides, WorkflowSettingsResolution, WorkflowSettingsSources, WorkflowValidationContext, WorkflowValidationParameters } from "./types.js";
 import type { WorkflowRegistryApi } from "./registry.js";
 import { registeredWorkflowRoleDirectoryRegistrations } from "./registry.js";
 import { annotateModelAliasError, deepFreeze, errorText, fail, isNodeError, jsonObject, jsonValue, modelAliasName, modelCapability, object, parseThinking, positiveInteger, resolveModelReference, unknownModel, validateModelAliases, validateResourcePattern } from "./utils.js";
@@ -22,9 +22,9 @@ export function validateCheckpoint(value: unknown): CheckpointInput {
 
 export function workflowSettingsPath(agentDir = getAgentDir()): string { return join(agentDir, ROLE_DIRECTORY, "settings.json"); }
 export function workflowProjectSettingsPath(cwd: string): string { return join(cwd, ".pi", ROLE_DIRECTORY, "settings.json"); }
-const EMPTY_AGENT_RESOURCE_EXCLUSIONS: AgentResourceExclusions = Object.freeze({ skills: [], extensions: [] });
 function resourcePatternHasMagic(value: string): boolean { return /[*?\x5b\x5d{}()]/.test(value); }
 function normalizedResourcePath(value: string, settingsPath: string): string {
+  if (value === "*") return value;
   let expanded = value === "~" ? homedir() : value.startsWith("~/") || value.startsWith("~\\") ? join(homedir(), value.slice(2)) : value;
   if (expanded.startsWith("file://")) expanded = fileURLToPath(expanded);
   const resolved = resolve(dirname(settingsPath), expanded);
@@ -39,31 +39,32 @@ function normalizedResourcePath(value: string, settingsPath: string): string {
   }
   try { return realpathSync(resolved); } catch { return resolved; }
 }
-function validateAgentResourceExclusions(value: unknown, settingsPath: string, errorCode: "INVALID_SETTINGS" | "INVALID_METADATA" = "INVALID_SETTINGS"): AgentResourceExclusions | undefined {
+function validateSelectorList(value: unknown, path: string, kind: "skills" | "extensions" | "tools", errorCode: "INVALID_SETTINGS" | "INVALID_METADATA" = "INVALID_SETTINGS"): readonly string[] | undefined {
   if (value === undefined) return undefined;
-  const base = `${settingsPath}.disabledAgentResources`;
-  if (!object(value)) fail(errorCode, `${base} must be an object`);
-  for (const key of Object.keys(value)) if (key !== "skills" && key !== "extensions") fail(errorCode, `${base}.${key} is not supported`);
-  const normalized: { skills: string[]; extensions: string[] } = { skills: [], extensions: [] };
-  for (const kind of ["skills", "extensions"] as const) {
-    const entries = value[kind];
-    if (entries === undefined) continue;
-    if (!Array.isArray(entries)) fail(errorCode, `${base}.${kind} must be an array`);
-    for (const [index, entry] of entries.entries()) {
-      if (typeof entry !== "string" || !entry.trim()) fail(errorCode, `${base}.${kind}[${String(index)}] must be a non-empty string`);
-      let selector = entry.trim();
-      if (kind === "extensions") {
-        const negated = selector.startsWith("!");
-        const body = negated ? selector.slice(1) : selector;
-        if (!body) fail(errorCode, `${base}.${kind}[${String(index)}] must be a valid minimatch pattern: Empty minimatch pattern ${JSON.stringify(selector)}`);
-        try { selector = `${negated ? "!" : ""}${normalizedResourcePath(body, settingsPath)}`; } catch (error) { fail(errorCode, `${base}.${kind}[${String(index)}] must be a valid path: ${errorText(error)}`); }
-      }
-      try { validateResourcePattern(selector); } catch (error) { fail(errorCode, `${base}.${kind}[${String(index)}] must be a valid minimatch pattern: ${errorText(error)}`); }
-      normalized[kind].push(selector);
+  if (!Array.isArray(value)) fail(errorCode, `${path}.${kind} must be an array`);
+  const normalized: string[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || !entry.trim()) fail(errorCode, `${path}.${kind}[${String(index)}] must be a non-empty string`);
+    let selector = entry.trim();
+    if (kind === "extensions") {
+      const negated = selector.startsWith("!");
+      const body = negated ? selector.slice(1) : selector;
+      if (!body) fail(errorCode, `${path}.${kind}[${String(index)}] must be a valid minimatch pattern: Empty minimatch pattern ${JSON.stringify(selector)}`);
+      try { selector = `${negated ? "!" : ""}${normalizedResourcePath(body, path)}`; } catch (error) { fail(errorCode, `${path}.${kind}[${String(index)}] must be a valid path: ${errorText(error)}`); }
     }
+    try { validateResourcePattern(selector); } catch (error) { fail(errorCode, `${path}.${kind}[${String(index)}] must be a valid minimatch pattern: ${errorText(error)}`); }
+    normalized.push(selector);
   }
-  return Object.freeze({ skills: Object.freeze(normalized.skills), extensions: Object.freeze(normalized.extensions) });
+  return Object.freeze(normalized);
 }
+function selectorsFromSettings(settings: Readonly<WorkflowSettings | WorkflowSettingsOverrides>): AgentResourceSelectors {
+  return {
+    ...(settings.skills === undefined ? {} : { skills: settings.skills }),
+    ...(Array.isArray(settings.extensions) ? { extensions: settings.extensions } : {}),
+    ...(settings.tools === undefined ? {} : { tools: settings.tools }),
+  };
+}
+function selectorSet(value: AgentResourceSelectors | undefined): AgentResourceSelectorSet { return { skills: [...(value?.skills ?? [])], extensions: [...(value?.extensions ?? [])], tools: [...(value?.tools ?? [])] }; }
 const CONTEXT_FILE_SCOPES = ["global", "project", "cwd"] as const;
 function isContextFileScope(value: unknown): value is ContextFileScope { return CONTEXT_FILE_SCOPES.some((scope) => scope === value); }
 function validateContextFileScopes(value: unknown, rolePath: string): readonly ContextFileScope[] | undefined {
@@ -95,7 +96,7 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
     fail("CONFIG_ERROR", `Invalid workflow settings JSON at ${path}: ${errorText(error)}`);
   }
   if (!object(parsed)) fail("INVALID_SETTINGS", `Workflow settings at ${path} must be an object`);
-  const allowed = new Set(["concurrency", "modelAliases", "disabledAgentResources", "extensions", ...(partial ? [] : ["backgroundWidget"])]);
+  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "tools", ...(partial ? [] : ["backgroundWidget"]) ]);
   const unknown = Object.keys(parsed).find((key) => !allowed.has(key));
   if (unknown) fail("INVALID_SETTINGS", `Unknown workflow setting at ${path}: ${unknown}`);
   const concurrency = parsed.concurrency === undefined ? (partial ? undefined : DEFAULT_SETTINGS.concurrency) : parsed.concurrency;
@@ -103,9 +104,11 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
   const backgroundWidget = parsed.backgroundWidget === undefined ? (partial ? undefined : DEFAULT_SETTINGS.backgroundWidget) : parsed.backgroundWidget;
   if (backgroundWidget !== undefined && typeof backgroundWidget !== "boolean") fail("INVALID_SETTINGS", `${path}.backgroundWidget must be a boolean`);
   const modelAliases = parsed.modelAliases === undefined ? undefined : validateModelAliases(parsed.modelAliases, path);
-  const disabledAgentResources = validateAgentResourceExclusions(parsed.disabledAgentResources, path);
-  const extensions = validateWorkflowExtensions(parsed.extensions, path);
-  return Object.freeze({ ...(concurrency === undefined ? {} : { concurrency }), ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }), ...(disabledAgentResources === undefined ? {} : { disabledAgentResources }), ...(extensions === undefined ? {} : { extensions }) });
+  const skills = validateSelectorList(parsed.skills, path, "skills");
+  const tools = validateSelectorList(parsed.tools, path, "tools");
+  const extensions = Array.isArray(parsed.extensions) ? validateSelectorList(parsed.extensions, path, "extensions") : undefined;
+  const extensionSettings = parsed.extensions === undefined || Array.isArray(parsed.extensions) ? undefined : validateWorkflowExtensions(parsed.extensions, path);
+  return Object.freeze({ ...(concurrency === undefined ? {} : { concurrency }), ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }), ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? extensionSettings === undefined ? {} : { extensions: extensionSettings } : { extensions }), ...(tools === undefined ? {} : { tools }) });
 }
 export function loadSettings(path = workflowSettingsPath()): Readonly<WorkflowSettings> { return parseSettings(path, false); }
 export function loadSettingsOverrides(path: string): Readonly<WorkflowSettingsOverrides> { return parseSettings(path, true); }
@@ -114,17 +117,26 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
   const global = loadSettings(globalSettingsPath);
   const project: Readonly<WorkflowSettingsOverrides> = projectTrusted ? loadSettingsOverrides(projectSettingsPath) : Object.freeze({});
   const projectHas = (key: keyof WorkflowSettingsOverrides): boolean => Object.prototype.hasOwnProperty.call(project, key);
+  const sourceFor = (key: "skills" | "extensions" | "tools"): string => projectHas(key) ? projectSettingsPath : globalSettingsPath;
+  const globalSelectors = selectorsFromSettings(global);
+  const projectSelectors = selectorsFromSettings(project);
+  const effectiveSelectors = selectorSet({
+    skills: [...(globalSelectors.skills ?? []), ...(projectSelectors.skills ?? [])],
+    extensions: [...(globalSelectors.extensions ?? []), ...(projectSelectors.extensions ?? [])],
+    tools: [...(globalSelectors.tools ?? []), ...(projectSelectors.tools ?? [])],
+  });
   const sources: WorkflowSettingsSources = {
     concurrency: projectHas("concurrency") ? projectSettingsPath : globalSettingsPath,
     modelAliases: projectHas("modelAliases") ? projectSettingsPath : globalSettingsPath,
-    disabledAgentResources: projectHas("disabledAgentResources") ? projectSettingsPath : globalSettingsPath,
+    skills: sourceFor("skills"), extensions: sourceFor("extensions"), tools: sourceFor("tools"),
   };
   const effective = Object.freeze({
     concurrency: project.concurrency ?? global.concurrency,
     backgroundWidget: global.backgroundWidget ?? true,
     ...(projectHas("modelAliases") ? { modelAliases: project.modelAliases } : global.modelAliases === undefined ? {} : { modelAliases: global.modelAliases }),
-    ...(projectHas("disabledAgentResources") ? { disabledAgentResources: project.disabledAgentResources } : global.disabledAgentResources === undefined ? {} : { disabledAgentResources: global.disabledAgentResources }),
-    ...(global.extensions === undefined ? {} : { extensions: global.extensions }),
+    ...(effectiveSelectors.skills.length ? { skills: effectiveSelectors.skills } : global.skills !== undefined || project.skills !== undefined ? { skills: effectiveSelectors.skills } : {}),
+    ...(effectiveSelectors.extensions.length ? { extensions: effectiveSelectors.extensions } : (globalSelectors.extensions ?? []).length || (projectSelectors.extensions ?? []).length ? { extensions: effectiveSelectors.extensions } : {}),
+    ...((effectiveSelectors.tools ?? []).length ? { tools: effectiveSelectors.tools } : global.tools !== undefined || project.tools !== undefined ? { tools: effectiveSelectors.tools } : {}),
   });
   return { globalSettingsPath, projectSettingsPath, projectTrusted, global, project, effective, sources };
 }
@@ -138,11 +150,10 @@ export function validateModelAliasAvailability(aliases: Readonly<Record<string, 
 }
 export function resolveAgentResourcePolicy(cwd: string, projectTrusted: boolean, globalSettingsPath = workflowSettingsPath()): AgentResourcePolicy {
   const resolved = resolveWorkflowSettings(cwd, projectTrusted, globalSettingsPath);
-  const empty = EMPTY_AGENT_RESOURCE_EXCLUSIONS;
-  const global = resolved.global.disabledAgentResources ?? empty;
-  const project = resolved.project.disabledAgentResources ?? empty;
-  const effective = resolved.effective.disabledAgentResources ?? empty;
-  return { globalSettingsPath: resolved.globalSettingsPath, projectSettingsPath: resolved.projectSettingsPath, projectTrusted, global, project, effective, unmatchedSkills: [], unmatchedExtensions: [] };
+  const global = selectorSet(selectorsFromSettings(resolved.global));
+  const project = selectorSet(selectorsFromSettings(resolved.project));
+  const effective = selectorSet(selectorsFromSettings(resolved.effective));
+  return { globalSettingsPath: resolved.globalSettingsPath, projectSettingsPath: resolved.projectSettingsPath, projectTrusted, global, project, effective, unmatchedSkills: [], unmatchedExtensions: [], unmatchedTools: [], selectorSources: { global: selectorsFromSettings(resolved.global), project: selectorsFromSettings(resolved.project) } };
 }
 export function saveModelAliases(path = workflowSettingsPath(), aliases: Readonly<Record<string, string>> = {}): void {
   const normalized = validateModelAliases(aliases, path);
@@ -190,7 +201,8 @@ export function parseRoleMarkdown(content: string, strict = false, rolePath?: st
   try { parsed = parseFrontmatter(content); }
   catch (error) { fail("INVALID_METADATA", `Invalid role frontmatter: ${errorText(error)}`); }
   if (!object(parsed.frontmatter)) fail("INVALID_METADATA", "Role frontmatter must be an object");
-  const { model, thinking, tools, description, disabledAgentResources, contextFiles } = parsed.frontmatter;
+  const { model, thinking, tools, skills, extensions, description, contextFiles } = parsed.frontmatter;
+  if (Object.prototype.hasOwnProperty.call(parsed.frontmatter, "disabledAgentResources")) fail("INVALID_METADATA", "disabledAgentResources is no longer supported; use skills, extensions, and tools selectors");
   const overrideSystemPrompt = parsed.frontmatter.overrideSystemPrompt ?? parsed.frontmatter.override_system_prompt ?? parsed.frontmatter.is_system_prompt;
   if (model !== undefined && (typeof model !== "string" || model.trim() === "")) fail("INVALID_METADATA", "Role model must be a non-empty string");
   const normalizedThinking = thinking === undefined ? undefined : parseThinking(thinking);
@@ -198,19 +210,21 @@ export function parseRoleMarkdown(content: string, strict = false, rolePath?: st
   if (description !== undefined && (typeof description !== "string" || description.trim() === "" || description.length > 1024 || /[\r\n]/.test(description))) fail("INVALID_METADATA", "Role description must be a non-empty single-line string of at most 1024 characters");
   if (overrideSystemPrompt !== undefined && typeof overrideSystemPrompt !== "boolean") fail("INVALID_METADATA", "Role overrideSystemPrompt must be a boolean");
   const normalizedContextFiles = validateContextFileScopes(contextFiles, rolePath ?? "<role>");
-  if (tools !== undefined && (!Array.isArray(tools) || tools.some((tool) => typeof tool !== "string" || tool.trim() === ""))) fail("INVALID_METADATA", "Role tools must be an array of non-empty strings");
-  const normalizedResources = validateAgentResourceExclusions(disabledAgentResources, rolePath ?? "<role>", "INVALID_METADATA");
+  const rolePathValue = rolePath ?? "<role>";
+  const normalizedTools = validateSelectorList(tools, rolePathValue, "tools", "INVALID_METADATA");
+  const normalizedSkills = validateSelectorList(skills, rolePathValue, "skills", "INVALID_METADATA");
+  const normalizedExtensions = validateSelectorList(extensions, rolePathValue, "extensions", "INVALID_METADATA");
   const normalizedDescription = typeof description === "string" ? description.trim() : undefined;
   const normalizedModel = typeof model === "string" ? model.trim() : undefined;
-  const normalizedTools = Array.isArray(tools) ? tools.map((tool) => typeof tool === "string" ? tool.trim() : fail("INVALID_METADATA", "Role tools must be an array of non-empty strings")) : undefined;
   const definition: AgentDefinition = { prompt: parsed.body };
   if (normalizedDescription !== undefined) definition.description = normalizedDescription;
   if (normalizedModel !== undefined) definition.model = normalizedModel;
   if (normalizedThinking !== undefined) definition.thinking = normalizedThinking;
   if (normalizedTools !== undefined) definition.tools = normalizedTools;
+  if (normalizedSkills !== undefined) definition.skills = normalizedSkills;
+  if (normalizedExtensions !== undefined) definition.extensions = normalizedExtensions;
   if (typeof overrideSystemPrompt === "boolean") definition.overrideSystemPrompt = overrideSystemPrompt;
   if (normalizedContextFiles !== undefined) definition.contextFiles = normalizedContextFiles;
-  if (normalizedResources !== undefined) definition.disabledAgentResources = normalizedResources;
   return definition;
 }
 
@@ -277,7 +291,7 @@ function readRoleDefinitions(dirs: readonly WorkflowRoleDirectoryInput[], extens
 export function loadAgentDefinitions(cwd: string, agentDir = getAgentDir(), projectTrusted = true, extensionRoleDirectories: readonly WorkflowRoleDirectoryInput[] = registeredWorkflowRoleDirectoryRegistrations()): Readonly<Record<string, AgentDefinition>> {
   return deepFreeze({ ...readRoleDefinitions(extensionRoleDirectories, true), ...readRoleDefinitions(workflowRoleDirectories(agentDir)), ...(projectTrusted ? readRoleDefinitions(projectRoleDirectories(join(cwd, ".pi"))) : {}) });
 }
-function validateRolePolicies(definitions: Readonly<Record<string, AgentDefinition>>, roles: readonly string[], availableModels: ReadonlySet<string>, rootTools: ReadonlySet<string>, aliases: Readonly<Record<string, string>> = {}, knownModels = availableModels, settingsPath?: string): void {
+function validateRolePolicies(definitions: Readonly<Record<string, AgentDefinition>>, roles: readonly string[], availableModels: ReadonlySet<string>, aliases: Readonly<Record<string, string>> = {}, knownModels = availableModels, settingsPath?: string): void {
   for (const role of roles) {
     const definition = definitions[role];
     if (!definition) continue;
@@ -288,8 +302,7 @@ function validateRolePolicies(definitions: Readonly<Record<string, AgentDefiniti
         fail("UNKNOWN_MODEL", `Unknown model for role ${role}: ${resolved}`);
       }
     }
-    const missingTool = (definition.tools ?? [...rootTools]).find((tool) => !rootTools.has(tool));
-    if (missingTool) fail("UNKNOWN_TOOL", `Unknown tool for role ${role}: ${missingTool}`);
+    // Capability selectors are evaluated against the launching root's available tool set. Unmatched patterns do not create tools.
   }
 }
 
@@ -526,35 +539,34 @@ export function validateSchema(schema: unknown, at = "schema"): asserts schema i
   if (schema.properties !== undefined && !object(schema.properties)) fail("INVALID_SCHEMA", `${at}.properties must be an object`);
 }
 
-const AGENT_OPTION_KEYS = new Set(["label", "model", "thinking", "tools", "role", "outputSchema", "retries", "timeoutMs"]);
-const ROLE_OVERRIDE_KEYS = new Set(["name", "model", "thinking", "tools", "description", "overrideSystemPrompt", "contextFiles", "disabledAgentResources"]);
+const AGENT_OPTION_KEYS = new Set(["label", "model", "thinking", "tools", "skills", "extensions", "role", "outputSchema", "retries", "timeoutMs"]);
+const ROLE_OVERRIDE_KEYS = new Set(["name", "model", "thinking", "tools", "skills", "extensions", "description", "overrideSystemPrompt", "contextFiles"]);
 export function validateRoleOverride(value: unknown, aliases?: Readonly<Record<string, string>>, knownModels?: ReadonlySet<string>, settingsPath?: string): RoleOverride {
   if (!object(value) || Array.isArray(value)) fail("INVALID_METADATA", "agent role must be a string or an object with a non-empty name and optional frontmatter overrides");
   for (const key of Object.keys(value)) if (!ROLE_OVERRIDE_KEYS.has(key)) fail("INVALID_METADATA", `agent role override ${key} is not supported`);
   if (typeof value.name !== "string" || !value.name.trim()) fail("INVALID_METADATA", "agent role object requires a non-empty name");
-  const { name, model, thinking, tools, description, overrideSystemPrompt, contextFiles, disabledAgentResources } = value;
+  const { name, model, thinking, tools, skills, extensions, description, overrideSystemPrompt, contextFiles } = value;
   if (model !== undefined && model !== null && (typeof model !== "string" || !model.trim())) fail("INVALID_METADATA", "agent role override model must be a non-empty string or null");
   if (model !== undefined && model !== null && aliases !== undefined) resolveModelReference(model, aliases, knownModels, settingsPath);
   if (thinking !== undefined && thinking !== null && (typeof thinking !== "string" || !parseThinking(thinking))) fail("INVALID_METADATA", "agent role override thinking must be off, minimal, low, medium, high, xhigh, or max, or null");
-  if (tools !== undefined && tools !== null && (!Array.isArray(tools) || tools.some((tool) => typeof tool !== "string" || !tool.trim()))) fail("INVALID_METADATA", "agent role override tools must be an array of non-empty strings or null");
+  const normalizedTools = tools === undefined || tools === null ? tools : validateSelectorList(tools, "role override", "tools", "INVALID_METADATA");
+  const normalizedSkills = skills === undefined || skills === null ? skills : validateSelectorList(skills, "role override", "skills", "INVALID_METADATA");
+  const normalizedExtensions = extensions === undefined || extensions === null ? extensions : validateSelectorList(extensions, "role override", "extensions", "INVALID_METADATA");
   if (description !== undefined && description !== null && (typeof description !== "string" || description.trim() === "" || description.length > 1024 || /[\r\n]/.test(description))) fail("INVALID_METADATA", "agent role override description must be a non-empty single-line string of at most 1024 characters or null");
   if (overrideSystemPrompt !== undefined && overrideSystemPrompt !== null && typeof overrideSystemPrompt !== "boolean") fail("INVALID_METADATA", "agent role override overrideSystemPrompt must be a boolean or null");
   const normalizedContextFiles = contextFiles === undefined || contextFiles === null ? contextFiles : validateContextFileScopes(contextFiles, "role override");
-  const normalizedResources = disabledAgentResources === undefined || disabledAgentResources === null ? disabledAgentResources : validateAgentResourceExclusions(disabledAgentResources, "role override", "INVALID_METADATA");
-  const normalizedModel = model === undefined || model === null ? model : typeof model === "string" ? model : fail("INVALID_METADATA", "agent role override model must be a non-empty string or null");
-  const normalizedThinking = thinking === undefined || thinking === null ? thinking : parseThinking(thinking) ?? fail("INVALID_METADATA", "agent role override thinking must be off, minimal, low, medium, high, xhigh, or max, or null");
-  const normalizedTools = tools === undefined || tools === null ? tools : Array.isArray(tools) ? tools.map((tool: unknown) => typeof tool === "string" && tool.trim() ? tool.trim() : fail("INVALID_METADATA", "agent role override tools must be an array of non-empty strings or null")) : fail("INVALID_METADATA", "agent role override tools must be an array of non-empty strings or null");
-  const normalizedDescription = description === undefined || description === null ? description : typeof description === "string" ? description : fail("INVALID_METADATA", "agent role override description must be a non-empty single-line string of at most 1024 characters or null");
-  const normalizedOverrideSystemPrompt = overrideSystemPrompt === undefined || overrideSystemPrompt === null ? overrideSystemPrompt : typeof overrideSystemPrompt === "boolean" ? overrideSystemPrompt : fail("INVALID_METADATA", "agent role override overrideSystemPrompt must be a boolean or null");
+  const normalizedThinking = thinking === undefined || thinking === null ? thinking : parseThinking(thinking);
+  if (thinking !== undefined && thinking !== null && normalizedThinking === undefined) fail("INVALID_METADATA", "agent role override thinking is invalid");
   return {
     name,
-    ...(normalizedModel === undefined ? {} : { model: normalizedModel }),
+    ...(model === undefined ? {} : { model: model === null ? null : model.trim() }),
     ...(normalizedThinking === undefined ? {} : { thinking: normalizedThinking }),
-    ...(normalizedTools === undefined ? {} : { tools: normalizedTools }),
-    ...(normalizedDescription === undefined ? {} : { description: normalizedDescription }),
-    ...(normalizedOverrideSystemPrompt === undefined ? {} : { overrideSystemPrompt: normalizedOverrideSystemPrompt }),
+    ...(normalizedTools === undefined ? {} : { tools: normalizedTools === null ? null : [...normalizedTools] }),
+    ...(normalizedSkills === undefined ? {} : { skills: normalizedSkills === null ? null : [...normalizedSkills] }),
+    ...(normalizedExtensions === undefined ? {} : { extensions: normalizedExtensions === null ? null : [...normalizedExtensions] }),
+    ...(description === undefined ? {} : { description: description === null ? null : description.trim() }),
+    ...(overrideSystemPrompt === undefined ? {} : { overrideSystemPrompt }),
     ...(normalizedContextFiles === undefined ? {} : { contextFiles: normalizedContextFiles === null ? null : [...normalizedContextFiles] }),
-    ...(normalizedResources === undefined ? {} : { disabledAgentResources: normalizedResources === null ? null : { skills: [...normalizedResources.skills], extensions: [...normalizedResources.extensions] } }),
   };
 }
 function validateAgentOption(key: string, value: unknown, aliases?: Readonly<Record<string, string>>, knownModels?: ReadonlySet<string>, settingsPath?: string): void {
@@ -570,7 +582,9 @@ function validateAgentOption(key: string, value: unknown, aliases?: Readonly<Rec
       if (typeof value !== "string" || !parseThinking(value)) fail("INVALID_METADATA", "agent thinking must be off, minimal, low, medium, high, xhigh, or max");
       break;
     case "tools":
-      if (!Array.isArray(value) || value.some((tool) => typeof tool !== "string")) fail("INVALID_METADATA", "agent tools must be an array of strings");
+    case "skills":
+    case "extensions":
+      validateSelectorList(value, "agent options", key, "INVALID_METADATA");
       break;
     case "role":
       if (typeof value === "string") {
@@ -593,7 +607,7 @@ function validateAgentOption(key: string, value: unknown, aliases?: Readonly<Rec
 export function validateAgentOptions(value: unknown): Readonly<Record<string, JsonValue>> {
   if (!object(value) || !jsonValue(value)) fail("INVALID_METADATA", "agent options must be a JSON object");
   for (const [key, option] of Object.entries(value)) if (AGENT_OPTION_KEYS.has(key)) validateAgentOption(key, option);
-  if (value.role !== undefined && ["model", "thinking", "tools"].some((key) => Object.prototype.hasOwnProperty.call(value, key))) fail("INVALID_METADATA", "Role agents must not specify model, thinking, or tools");
+  if (value.role !== undefined && ["model", "thinking"].some((key) => Object.prototype.hasOwnProperty.call(value, key))) fail("INVALID_METADATA", "Role agents must not specify model or thinking; capability selectors are final call overlays");
   return value;
 }
 const SHELL_OPTION_KEYS = new Set(["timeoutMs", "env"]);
@@ -697,14 +711,13 @@ function validateStaticAgentOptions(node: acorn.AnyNode | undefined, aliases: Re
   const options = staticValue(node);
   if (options.known && object(options.value)) {
     const optionValues = options.value;
-    if (optionValues.role !== undefined && ["model", "thinking", "tools"].some((key) => Object.prototype.hasOwnProperty.call(optionValues, key))) fail("INVALID_METADATA", "Role agents must not specify model, thinking, or tools");
-  }
+    if (optionValues.role !== undefined && ["model", "thinking"].some((key) => Object.prototype.hasOwnProperty.call(optionValues, key))) fail("INVALID_METADATA", "Role agents must not specify model or thinking; capability selectors are final call overlays");
   for (const key of AGENT_OPTION_KEYS) {
     const value = staticValue(propertyNode(node, key));
     if (value.known) validateAgentOption(key, value.value, aliases, knownModels, settingsPath);
   }
 }
-
+}
 function hasDynamicAgentRole(node: acorn.AnyNode | undefined): boolean {
   if (!node) return false;
   if (node.type !== "ObjectExpression") return true;
@@ -788,8 +801,6 @@ export function preflight(script: string, capabilities: PreflightCapabilities, s
     if (modelAliasName(missingModel.requested, capabilities.modelAliases ?? {})) unknownModel(missingModel.requested, missingModel.resolved, capabilities.settingsPath);
     fail("UNKNOWN_MODEL", `Unknown model: ${missingModel.resolved}`);
   }
-  const missingTool = tools.find((tool) => !capabilities.tools.has(tool));
-  if (missingTool) fail("UNKNOWN_TOOL", `Unknown tool: ${missingTool}`);
   const missingType = agentTypes.find((type) => !capabilities.agentTypes.has(type));
   if (missingType) fail("UNKNOWN_AGENT_TYPE", `Unknown agent type: ${missingType}`);
   return Object.freeze({ metadata: deepFreeze(checkedMetadata), referenced: deepFreeze({ phases, models, tools, agentTypes }), schemas: deepFreeze(checkedSchemas), dynamicAgentRoles });
@@ -823,7 +834,7 @@ export function validateWorkflowLaunchWithRegistry(params: WorkflowValidationPar
   const knownModels = context.knownModels ?? context.availableModels;
   const checked = preflight(script, { models: context.availableModels, tools: context.rootTools, agentTypes: new Set(Object.keys(agentDefinitions)), modelAliases: aliases, knownModels, ...(context.settingsPath ? { settingsPath: context.settingsPath } : {}) }, [], metadata);
   const roleNames = checked.dynamicAgentRoles ? Object.keys(agentDefinitions) : checked.referenced.agentTypes;
-  validateRolePolicies(agentDefinitions, roleNames, context.availableModels, context.rootTools, aliases, knownModels, context.settingsPath);
+  validateRolePolicies(agentDefinitions, roleNames, context.availableModels, aliases, knownModels, context.settingsPath);
   return { script, checked, agentDefinitions, projectAgentDefinitions, roleNames };
 }
 

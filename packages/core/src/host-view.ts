@@ -707,7 +707,7 @@ export function formatNavigatorRun(loaded: { run: PersistedRun; snapshot: Readon
   if (run.events?.length) lines.push(...run.events.filter((event) => event.type === "warning").map((event) => `Warning: ${event.message}`));
   const aliases = snapshot.modelAliases ?? snapshot.settings.modelAliases;
   if (aliases && Object.keys(aliases).length) lines.push(`Model aliases: ${Object.entries(aliases).map(([name, target]) => `${name}=${target}`).join(", ")}`);
-  if (snapshot.settingsSources) lines.push(`Settings sources: concurrency=${snapshot.settingsSources.concurrency}, modelAliases=${snapshot.settingsSources.modelAliases}, disabledAgentResources=${snapshot.settingsSources.disabledAgentResources}`);
+  if (snapshot.settingsSources) lines.push(`Settings sources: concurrency=${snapshot.settingsSources.concurrency}, modelAliases=${snapshot.settingsSources.modelAliases}, skills=${snapshot.settingsSources.skills ?? "(none)"}, extensions=${snapshot.settingsSources.extensions ?? "(none)"}, tools=${snapshot.settingsSources.tools ?? "(none)"}`);
   lines.push("Agents / ownership:");
   if (!run.agents.length) lines.push("  (none)");
   const byId = new Map(run.agents.map((agent) => [agent.id, agent]));

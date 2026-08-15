@@ -180,6 +180,7 @@ function executionRoot(context: Readonly<SubagentManagerContext>, dependencies: 
     cwd: extensionContext.cwd,
     model,
     tools,
+    resourceSelectors: resourcePolicy.effective,
     ...(worktree === undefined ? {} : { runStore: worktree.runStore }),
     agentDir,
     availableModels,
@@ -211,6 +212,8 @@ function executionOptions(request: Readonly<SubagentRunRequest>, onAttempt: NonN
     ...(request.model === undefined ? {} : { model: request.model }),
     ...(request.thinking === undefined ? {} : { thinking: request.thinking as NonNullable<AgentExecutionOptions["thinking"]> }),
     ...(request.tools === undefined ? {} : { tools: request.tools }),
+    ...(request.skills === undefined ? {} : { skills: request.skills }),
+    ...(request.extensions === undefined ? {} : { extensions: request.extensions }),
     ...(role === undefined ? {} : { role: role as NonNullable<AgentExecutionOptions["role"]> }),
     ...(request.worktree === undefined ? {} : { worktreeOwner: structuralPath("worktree", "named", request.worktree) }),
     ...(request.outputSchema === undefined ? {} : { schema: request.outputSchema as JsonSchema }),
@@ -400,13 +403,13 @@ function boundedAttemptLocator(value: JsonValue | undefined): JsonValue | undefi
   return serialized.length > MAX_PERSISTED_ATTEMPT_LOCATOR_CHARS ? undefined : structuredClone(value);
 }
 function boundedAttemptSetup(setup: AgentAttempt["setup"]): AgentAttemptSummary["setup"] {
-  const resources = setup.disabledAgentResources;
+  const resources = setup.resourceSelectors;
   return {
     hookNames: boundedAttemptStrings(setup.hookNames),
     model: { provider: boundedAttemptText(setup.model.provider), model: boundedAttemptText(setup.model.model), ...(setup.model.thinking === undefined ? {} : { thinking: setup.model.thinking }) },
     tools: boundedAttemptStrings(setup.tools),
     cwd: boundedAttemptText(setup.cwd),
-    ...(resources === undefined ? {} : { disabledAgentResources: { skills: boundedAttemptStrings(resources.skills), extensions: boundedAttemptStrings(resources.extensions), unmatchedSkills: boundedAttemptStrings(resources.unmatchedSkills), unmatchedExtensions: boundedAttemptStrings(resources.unmatchedExtensions), ...(resources.excludedSkills === undefined ? {} : { excludedSkills: boundedAttemptStrings(resources.excludedSkills) }), ...(resources.excludedExtensions === undefined ? {} : { excludedExtensions: boundedAttemptStrings(resources.excludedExtensions) }) } }),
+    ...(resources === undefined ? {} : { resourceSelectors: { selectors: { skills: boundedAttemptStrings(resources.selectors.skills), extensions: boundedAttemptStrings(resources.selectors.extensions), tools: boundedAttemptStrings(resources.selectors.tools ?? []) }, skills: boundedAttemptStrings(resources.skills), extensions: boundedAttemptStrings(resources.extensions), tools: boundedAttemptStrings(resources.tools), unmatchedSkills: boundedAttemptStrings(resources.unmatchedSkills), unmatchedExtensions: boundedAttemptStrings(resources.unmatchedExtensions), unmatchedTools: boundedAttemptStrings(resources.unmatchedTools) } }),
   };
 }
 type ProgressSnapshotInput = Pick<AgentProgress, "accounting" | "toolCalls" | "state" | "activity" | "lastEventAt">;
@@ -530,17 +533,22 @@ function sessionReferenceValue(value: unknown): AgentAttemptSummary["session"] |
   const locator = rawLocator === undefined ? undefined : boundedAttemptLocator(rawLocator);
   return { transport: boundedAttemptText(transport), sessionId: boundedAttemptText(sessionId), ...(locator === undefined ? {} : { locator }) };
 }
-function resourceSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["setup"]["disabledAgentResources"]> | undefined {
+function resourceSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["setup"]["resourceSelectors"]> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
+  const selectorRecord = record.selectors;
+  if (typeof selectorRecord !== "object" || selectorRecord === null || Array.isArray(selectorRecord)) return undefined;
   const skills = stringArrayValue(record.skills);
   const extensions = stringArrayValue(record.extensions);
+  const tools = stringArrayValue(record.tools);
+  const selectorSkills = stringArrayValue((selectorRecord as Record<string, unknown>).skills);
+  const selectorExtensions = stringArrayValue((selectorRecord as Record<string, unknown>).extensions);
+  const selectorTools = stringArrayValue((selectorRecord as Record<string, unknown>).tools);
   const unmatchedSkills = stringArrayValue(record.unmatchedSkills);
   const unmatchedExtensions = stringArrayValue(record.unmatchedExtensions);
-  const excludedSkills = record.excludedSkills === undefined ? undefined : stringArrayValue(record.excludedSkills);
-  const excludedExtensions = record.excludedExtensions === undefined ? undefined : stringArrayValue(record.excludedExtensions);
-  if (!skills || !extensions || !unmatchedSkills || !unmatchedExtensions || record.excludedSkills !== undefined && !excludedSkills || record.excludedExtensions !== undefined && !excludedExtensions) return undefined;
-  return { skills, extensions, unmatchedSkills, unmatchedExtensions, ...(excludedSkills === undefined ? {} : { excludedSkills }), ...(excludedExtensions === undefined ? {} : { excludedExtensions }) };
+  const unmatchedTools = stringArrayValue(record.unmatchedTools);
+  if (!skills || !extensions || !tools || !selectorSkills || !selectorExtensions || !selectorTools || !unmatchedSkills || !unmatchedExtensions || !unmatchedTools) return undefined;
+  return { selectors: { skills: selectorSkills, extensions: selectorExtensions, tools: selectorTools }, skills, extensions, tools, unmatchedSkills, unmatchedExtensions, unmatchedTools };
 }
 function setupSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["setup"]> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -548,9 +556,9 @@ function setupSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["set
   const hookNames = stringArrayValue(record.hookNames);
   const tools = stringArrayValue(record.tools);
   const model = modelValue(record.model);
-  const resources = record.disabledAgentResources === undefined ? undefined : resourceSummaryValue(record.disabledAgentResources);
-  if (!hookNames || !tools || !model || typeof record.cwd !== "string" || !record.cwd.trim() || record.disabledAgentResources !== undefined && !resources) return undefined;
-  return { hookNames, model, tools, cwd: record.cwd, ...(resources === undefined ? {} : { disabledAgentResources: resources }) };
+  const resources = record.resourceSelectors === undefined ? undefined : resourceSummaryValue(record.resourceSelectors);
+  if (!hookNames || !tools || !model || typeof record.cwd !== "string" || !record.cwd.trim() || record.resourceSelectors !== undefined && !resources) return undefined;
+  return { hookNames, model, tools, cwd: record.cwd, ...(resources === undefined ? {} : { resourceSelectors: resources }) };
 }
 function attemptSummaryValue(value: unknown): AgentAttemptSummary | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;

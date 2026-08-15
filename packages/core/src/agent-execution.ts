@@ -45,8 +45,8 @@ export interface PiResourceInspection {
   readonly diagnostics: readonly { type: "warning" | "error" | "collision"; message: string; source?: string }[];
   readonly systemPromptSource?: string;
 }
-import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceExclusions, AgentResourcePolicy, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
-import { deepFreeze, jsonObject, jsonValue, object, disabledResources, mergeAgentResourceExclusions, modelAliasName, modelCapability, resolveModelReference, unmatchedResourcePatterns } from "./utils.js";
+import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceExclusions, AgentResourceInspection, AgentResourcePolicy, AgentResourceSelectors, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
+import { deepFreeze, jsonObject, jsonValue, object, modelAliasName, modelCapability, resolveModelReference, selectResources, unmatchedResourcePatterns } from "./utils.js";
 import { roleNameOf } from "./types.js";
 import { WorkflowError } from "./types.js";
 import { createLiveSessionHandoff } from "./session-handoff.js";
@@ -63,7 +63,7 @@ export interface AgentBudgetHooks {
   afterTurn(accounting: AgentAccounting, final: boolean): void;
   instruction(): string | undefined;
 }
-export interface AgentDefinition { prompt?: string; description?: string; model?: string; thinking?: ThinkingLevel; tools?: readonly string[]; overrideSystemPrompt?: boolean; contextFiles?: readonly ContextFileScope[]; disabledAgentResources?: AgentResourceExclusions }
+export interface AgentDefinition { prompt?: string; description?: string; model?: string; thinking?: ThinkingLevel; tools?: readonly string[]; skills?: readonly string[]; extensions?: readonly string[]; overrideSystemPrompt?: boolean; contextFiles?: readonly ContextFileScope[]; /** @deprecated */ disabledAgentResources?: AgentResourceExclusions }
 export interface AgentProviderFailure { label: string; provider: string; model: string; error: string }
 export type AgentProviderRecovery = "retry" | "abort" | { model: string };
 export interface AgentExecutionOptions {
@@ -80,6 +80,8 @@ export interface AgentExecutionOptions {
   providerErrorRecovery?: (failure: AgentProviderFailure) => Promise<AgentProviderRecovery>;
   modelOverride?: ModelSpec;
   tools?: readonly string[];
+  skills?: readonly string[];
+  extensions?: readonly string[];
   effectiveTools?: readonly string[];
   role?: string | RoleOverride;
   schema?: JsonSchema;
@@ -96,6 +98,7 @@ export interface AgentExecutionRoot {
   cwd: string;
   model: ModelSpec;
   tools: ReadonlySet<string>;
+  resourceSelectors?: AgentResourceSelectors;
   agentDefinitions?: Readonly<Record<string, AgentDefinition>>;
   agentDir?: string;
   additionalSkillPaths?: readonly string[];
@@ -266,16 +269,16 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     const resolved = await packageManager.resolve();
     const discoveredExtensions = [...new Set(resolved.extensions.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => canonicalSourcePath(path)))];
     const extensionSelectors = policy.effective.extensions.map((selector) => ({ original: selector, matching: canonicalExtensionSelector(selector) }));
-    const excludedExtensions = new Set(disabledResources(extensionSelectors.map(({ matching }) => matching), discoveredExtensions));
-    const extensionPaths = discoveredExtensions.filter((path) => !excludedExtensions.has(path) && !WORKFLOW_HOST_ENTRIES.has(path));
+    const selectedExtensions = selectResources(extensionSelectors.map(({ matching }) => matching), discoveredExtensions);
+    const extensionPaths = selectedExtensions.filter((path) => !WORKFLOW_HOST_ENTRIES.has(path));
     const unmatchedExtensions = extensionSelectors.filter(({ matching }) => unmatchedResourcePatterns([matching], discoveredExtensions).length > 0).map(({ original }) => original);
-    Object.assign(policy, { excludedExtensions: [...excludedExtensions], unmatchedExtensions });
+    Object.assign(policy, { selectedExtensions, unmatchedExtensions });
     const skillPaths = [...new Set(resolved.skills.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => path))];
     const updateSkillMatches = (skills: readonly { name: string }[]): Set<string> => {
       const names = [...new Set(skills.map(({ name }) => name))];
-      const excludedSkills = disabledResources(policy.effective.skills, names);
-      Object.assign(policy, { excludedSkills, unmatchedSkills: unmatchedResourcePatterns(policy.effective.skills, names) });
-      return new Set(excludedSkills);
+      const selectedSkills = selectResources(policy.effective.skills, names);
+      Object.assign(policy, { selectedSkills, unmatchedSkills: unmatchedResourcePatterns(policy.effective.skills, names) });
+      return new Set(names.filter((name) => !selectedSkills.includes(name)));
     };
     resourceLoader = new DefaultResourceLoader({
       cwd: input.cwd,
@@ -601,6 +604,8 @@ interface ChildAgentToolParams {
   prompt: string;
   label: string;
   tools?: string[];
+  skills?: string[];
+  extensions?: string[];
   model?: string;
   thinking?: ThinkingLevel;
   role?: string | RoleOverride;
@@ -612,6 +617,8 @@ interface ChildAgentToolParams {
 function isChildAgentToolParams(value: unknown): value is ChildAgentToolParams & Record<string, JsonValue> {
   if (!jsonObject(value) || typeof value.prompt !== "string" || typeof value.label !== "string") return false;
   if (value.tools !== undefined && (!Array.isArray(value.tools) || value.tools.some((tool) => typeof tool !== "string"))) return false;
+  if (value.skills !== undefined && (!Array.isArray(value.skills) || value.skills.some((skill) => typeof skill !== "string"))) return false;
+  if (value.extensions !== undefined && (!Array.isArray(value.extensions) || value.extensions.some((extension) => typeof extension !== "string"))) return false;
   if (value.model !== undefined && typeof value.model !== "string") return false;
   if (value.thinking !== undefined && !validThinking(value.thinking)) return false;
   if (value.role !== undefined && !validRoleOverride(value.role)) return false;
@@ -629,12 +636,8 @@ function validRoleOverride(value: unknown): boolean {
   if (value.description !== undefined && value.description !== null && typeof value.description !== "string") return false;
   if (value.overrideSystemPrompt !== undefined && value.overrideSystemPrompt !== null && typeof value.overrideSystemPrompt !== "boolean") return false;
   if (value.contextFiles !== undefined && value.contextFiles !== null && (!Array.isArray(value.contextFiles) || value.contextFiles.some((scope) => typeof scope !== "string" || !["global", "project", "cwd"].includes(scope)))) return false;
-  if (value.disabledAgentResources !== undefined && value.disabledAgentResources !== null) {
-    if (!jsonObject(value.disabledAgentResources)) return false;
-    const exclusions = value.disabledAgentResources;
-    if (exclusions.skills !== undefined && (!Array.isArray(exclusions.skills) || exclusions.skills.some((entry) => typeof entry !== "string"))) return false;
-    if (exclusions.extensions !== undefined && (!Array.isArray(exclusions.extensions) || exclusions.extensions.some((entry) => typeof entry !== "string"))) return false;
-  }
+  if (value.skills !== undefined && value.skills !== null && (!Array.isArray(value.skills) || value.skills.some((entry) => typeof entry !== "string"))) return false;
+  if (value.extensions !== undefined && value.extensions !== null && (!Array.isArray(value.extensions) || value.extensions.some((entry) => typeof entry !== "string"))) return false;
   return true;
 }
 function fallbackSetupContext(root: AgentExecutionRoot, options: AgentExecutionOptions, signal: AbortSignal): { run: Readonly<WorkflowRunContext>; identity: Readonly<AgentIdentity>; tuiIndex?: number; tuiLabel?: string } {
@@ -642,14 +645,19 @@ function fallbackSetupContext(root: AgentExecutionRoot, options: AgentExecutionO
   const run = root.runContext ?? Object.freeze({ cwd: root.cwd, sessionId: "", runId: "", workflow: Object.freeze({ name: options.workflowName }), args: null, signal });
   return { run, identity: Object.freeze({ ...identity, structuralPath: Object.freeze([...identity.structuralPath]) }), ...(options.tuiIndex === undefined ? {} : { tuiIndex: options.tuiIndex }), ...(options.tuiLabel === undefined ? {} : { tuiLabel: options.tuiLabel }) };
 }
-function resourcePolicySummary(policy: AgentResourcePolicy): NonNullable<AgentSetupSummary["disabledAgentResources"]> {
-  return { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], excludedSkills: [...(policy.excludedSkills ?? [])], excludedExtensions: [...(policy.excludedExtensions ?? [])], unmatchedSkills: [...policy.unmatchedSkills], unmatchedExtensions: [...policy.unmatchedExtensions] };
+function resourcePolicySummary(policy: AgentResourcePolicy, tools: readonly string[] = policy.selectedTools ?? []): AgentResourceInspection {
+  return {
+    selectors: { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], tools: [...(policy.effective.tools ?? [])] },
+    skills: [...(policy.selectedSkills ?? [])], extensions: [...(policy.selectedExtensions ?? [])], tools: [...tools],
+    unmatchedSkills: [...policy.unmatchedSkills], unmatchedExtensions: [...policy.unmatchedExtensions], unmatchedTools: [...(policy.unmatchedTools ?? [])],
+    ...(policy.selectorSources ? { selectorSources: policy.selectorSources } : {}),
+  };
 }
 function resourcePolicyWidened(ceiling: AgentResourcePolicy | undefined, candidate: AgentResourcePolicy | undefined): boolean {
   if (!ceiling) return false;
   if (!candidate) return true;
   if (!ceiling.projectTrusted && candidate.projectTrusted) return true;
-  return ceiling.effective.skills.some((pattern) => !candidate.effective.skills.includes(pattern)) || ceiling.effective.extensions.some((pattern) => !candidate.effective.extensions.includes(pattern));
+  return (["skills", "extensions", "tools"] as const).some((kind) => (ceiling.effective[kind] ?? []).some((pattern) => !(candidate.effective[kind] ?? []).includes(pattern)));
 }
 function packageRoot(start: string): string | undefined {
   let current = dirname(realpathSync(start));
@@ -704,7 +712,7 @@ function preparedAgentSession(input: SessionInput, initialPrompt?: string): Read
 }
 function agentSetupSummary(setup: AgentSetup, hookNames: readonly string[]): AgentSetupSummary {
   const model = setup.sessionInput.model;
-  return { hookNames: [...hookNames], model: { provider: model.provider, model: model.model, ...(model.thinking ? { thinking: model.thinking } : {}) }, tools: [...setup.sessionInput.tools], cwd: setup.sessionInput.cwd, ...(setup.sessionInput.resourcePolicy ? { disabledAgentResources: resourcePolicySummary(setup.sessionInput.resourcePolicy) } : {}) };
+  return { hookNames: [...hookNames], model: { provider: model.provider, model: model.model, ...(model.thinking ? { thinking: model.thinking } : {}) }, tools: [...setup.sessionInput.tools], cwd: setup.sessionInput.cwd, ...(setup.sessionInput.resourcePolicy ? { resourceSelectors: resourcePolicySummary(setup.sessionInput.resourcePolicy, setup.sessionInput.tools) } : {}) };
 }
 export type PreparedAgentSetup = { setup: AgentSetup; summary: AgentSetupSummary; failure?: { error: unknown; hook?: string } };
 async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTransport, task: string, options: AgentExecutionOptions, resolved: { model: ModelSpec; tools: readonly string[]; systemPrompt?: string; systemPromptAppend: string; contextFiles?: readonly ContextFileScope[] }, cwd: string, attempt: number, signal: AbortSignal | undefined, customTools: readonly ToolDefinition[], resultTool: ToolDefinition | undefined, inspection = false): Promise<PreparedAgentSetup> {
@@ -713,8 +721,23 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
   const baseResourcePolicy = await root.agentResourcePolicy?.();
   const roleName = roleNameOf(options.role);
   const roleDefinition = roleName ? root.agentDefinitions?.[roleName] : undefined;
-  const roleExclusions = roleDefinition ? (typeof options.role === "object" ? applyRoleOverride(roleDefinition, options.role) : roleDefinition)?.disabledAgentResources : undefined;
-  const resourcePolicy = baseResourcePolicy && roleExclusions ? { ...baseResourcePolicy, effective: mergeAgentResourceExclusions(baseResourcePolicy.effective, roleExclusions) } : baseResourcePolicy;
+  const effectiveRoleDefinition = roleDefinition && typeof options.role === "object" ? applyRoleOverride(roleDefinition, options.role) : roleDefinition;
+  const roleSelectors: AgentResourceSelectors | undefined = effectiveRoleDefinition ? { ...(effectiveRoleDefinition.skills === undefined ? {} : { skills: effectiveRoleDefinition.skills }), ...(effectiveRoleDefinition.extensions === undefined ? {} : { extensions: effectiveRoleDefinition.extensions }), ...(effectiveRoleDefinition.tools === undefined ? {} : { tools: effectiveRoleDefinition.tools }) } : undefined;
+  const selectorValue = (key: "skills" | "extensions" | "tools", fallback: readonly string[] | undefined): readonly string[] | undefined => {
+    const value = baselineOptions[key];
+    return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : fallback;
+  };
+  const rawCallSkills = selectorValue("skills", options.skills);
+  const rawCallExtensions = selectorValue("extensions", options.extensions);
+  const rawCallTools = selectorValue("tools", options.tools);
+  const callSelectors: AgentResourceSelectors = { ...(rawCallSkills === undefined ? {} : { skills: rawCallSkills }), ...(rawCallExtensions === undefined ? {} : { extensions: rawCallExtensions }), ...(rawCallTools === undefined ? {} : { tools: rawCallTools }) };
+  const hasCallSelectors = Object.values(callSelectors).some((value) => value !== undefined);
+  const resourcePolicy: AgentResourcePolicy | undefined = baseResourcePolicy ? {
+    ...baseResourcePolicy,
+    effective: { skills: [...baseResourcePolicy.effective.skills, ...(roleSelectors?.skills ?? []), ...(hasCallSelectors ? rawCallSkills ?? [] : [])], extensions: [...baseResourcePolicy.effective.extensions, ...(roleSelectors?.extensions ?? []), ...(hasCallSelectors ? rawCallExtensions ?? [] : [])], tools: [...(baseResourcePolicy.effective.tools ?? []), ...(roleSelectors?.tools ?? []), ...(hasCallSelectors ? rawCallTools ?? [] : [])] },
+    selectorSources: { global: baseResourcePolicy.selectorSources?.global ?? baseResourcePolicy.global, project: baseResourcePolicy.selectorSources?.project ?? baseResourcePolicy.project, ...(roleSelectors ? { role: roleSelectors } : {}), ...(hasCallSelectors ? { call: callSelectors } : {}) },
+  } : undefined;
+  if (resourcePolicy) Object.assign(resourcePolicy, { selectedTools: resolved.tools, unmatchedTools: unmatchedResourcePatterns(resourcePolicy.effective.tools ?? [], [...root.tools]) });
   const resourcePolicyCeiling = resourcePolicy ? structuredClone(resourcePolicy) : undefined;
   const sessionInput: SessionInput = { cwd, model: { ...resolved.model }, tools: [...resolved.tools], sessionLabel: `${options.workflowName}:${options.label}:attempt-${String(attempt)}`, ...(root.agentDir ? { agentDir: root.agentDir } : {}), ...(root.additionalSkillPaths?.length ? { additionalSkillPaths: [...root.additionalSkillPaths] } : {}), ...(resolved.contextFiles === undefined ? {} : { contextFiles: [...resolved.contextFiles] }), ...(customTools.length ? { customTools: [...customTools] } : {}), ...(resultTool ? { resultTool } : {}), ...(resolved.systemPrompt !== undefined ? { systemPrompt: resolved.systemPrompt } : {}), systemPromptAppend: resolved.systemPromptAppend, ...(resourcePolicy ? { resourcePolicy } : {}), options: structuredClone(baselineOptions) };
   const setup = { prompt: task, options: sessionInput.options ?? {}, sessionInput, prepared: preparedAgentSession(sessionInput, task), transport };
@@ -767,11 +790,11 @@ function errorWithAttempts(error: unknown, attempts: readonly AgentAttempt[]): E
 export function getAgentAttempts(error: unknown): readonly AgentAttempt[] | undefined {
   return error instanceof Error ? agentAttemptsByError.get(error) : undefined;
 }
-type RoleOverrideKey = Exclude<keyof RoleOverride, "name">;
+type RoleOverrideKey = Exclude<keyof RoleOverride, "name" | "disabledAgentResources">;
 type RoleOverrideValues = { [Key in RoleOverrideKey]: RoleOverride[Key] };
-const ROLE_OVERRIDE_KEYS = ["model", "thinking", "tools", "description", "overrideSystemPrompt", "contextFiles", "disabledAgentResources"] as const satisfies readonly RoleOverrideKey[];
+const ROLE_OVERRIDE_KEYS = ["model", "thinking", "tools", "skills", "extensions", "description", "overrideSystemPrompt", "contextFiles"] as const satisfies readonly RoleOverrideKey[];
 function roleOverrideValues(override: RoleOverride): RoleOverrideValues {
-  return { model: override.model, thinking: override.thinking, tools: override.tools, description: override.description, overrideSystemPrompt: override.overrideSystemPrompt, contextFiles: override.contextFiles, disabledAgentResources: override.disabledAgentResources };
+  return { model: override.model, thinking: override.thinking, tools: override.tools, skills: override.skills, extensions: override.extensions, description: override.description, overrideSystemPrompt: override.overrideSystemPrompt, contextFiles: override.contextFiles };
 }
 function applyRoleOverride(definition: AgentDefinition | undefined, override: RoleOverride): AgentDefinition | undefined {
   if (!definition) return definition;
@@ -795,9 +818,15 @@ export class WorkflowAgentExecutor {
     const roleName = roleNameOf(role);
     const definition = roleName ? this.root.agentDefinitions?.[roleName] : undefined;
     if (roleName && !definition) throw new WorkflowError("UNKNOWN_AGENT_TYPE", `Unknown agent role: ${roleName}`);
-    if (roleName && (options.model !== undefined || options.thinking !== undefined || options.tools !== undefined)) throw new WorkflowError("INVALID_METADATA", "Role agents must not specify model, thinking, or tools");
+    if (roleName && (options.model !== undefined || options.thinking !== undefined)) throw new WorkflowError("INVALID_METADATA", "Role agents must not specify model or thinking");
     const roleDefinition = typeof role === "object" ? applyRoleOverride(definition, role) : definition;
-    const requested = options.tools !== undefined ? options.tools : roleDefinition?.tools !== undefined ? roleDefinition.tools : options.effectiveTools !== undefined ? options.effectiveTools : inheritedTools !== undefined ? inheritedTools : [...this.root.tools];
+    const candidateTools = inheritedTools !== undefined ? [...inheritedTools] : [...this.root.tools];
+    const selectorLayers = [
+      this.root.resourceSelectors?.tools,
+      roleDefinition?.tools,
+      options.tools,
+    ].flatMap((selectors) => selectors ?? []);
+    const requested = selectResources(selectorLayers, candidateTools);
     const forbidden = requested.find((tool) => !this.root.tools.has(tool));
     if (forbidden) throw new WorkflowError("UNKNOWN_TOOL", `Tool is outside the launching session boundary: ${forbidden}`);
     const requestedModel = options.model ?? roleDefinition?.model;
@@ -809,7 +838,7 @@ export class WorkflowAgentExecutor {
     const availableModels = this.root.knownModels ?? this.root.availableModels ?? new Set([modelCapability(this.root.model)]);
     if (!availableModels.has(modelCapability(model))) throw new WorkflowError("UNKNOWN_MODEL", `Unknown model${requestedModel ? ` ${requestedModel} resolved to ${modelCapability(model)}` : ""}${this.root.settingsPath ? ` (settings: ${this.root.settingsPath})` : ""}`);
     const overrideSystemPrompt = roleDefinition?.overrideSystemPrompt === true;
-    return { model, ...(alias && requestedModel ? { requestedModel } : {}), tools: [...requested], ...(overrideSystemPrompt ? { systemPrompt: roleDefinition.prompt ?? "" } : {}), systemPromptAppend: overrideSystemPrompt ? "" : roleDefinition?.prompt ?? "", ...(roleDefinition?.contextFiles === undefined ? {} : { contextFiles: [...roleDefinition.contextFiles] }) };
+    return { model, ...(alias && requestedModel ? { requestedModel } : {}), tools: requested, ...(overrideSystemPrompt ? { systemPrompt: roleDefinition.prompt ?? "" } : {}), systemPromptAppend: overrideSystemPrompt ? "" : roleDefinition?.prompt ?? "", ...(roleDefinition?.contextFiles === undefined ? {} : { contextFiles: [...roleDefinition.contextFiles] }) };
   }
 
   async execute(task: string, options: AgentExecutionOptions, signal?: AbortSignal, customTools: readonly ToolDefinition[] = [], setSteer?: (handler: (message: string) => void | Promise<void>) => void, beforeRetry?: () => void): Promise<AgentExecutionResult> {
@@ -926,7 +955,7 @@ export class WorkflowAgentExecutor {
               await options.onAttempt?.(activeAttempt);
             },
             onSessionReady: async () => {
-              if (attemptSetup.sessionInput.resourcePolicy) setupSummary = { ...setupSummary, disabledAgentResources: resourcePolicySummary(attemptSetup.sessionInput.resourcePolicy) };
+              if (attemptSetup.sessionInput.resourcePolicy) setupSummary = { ...setupSummary, resourceSelectors: resourcePolicySummary(attemptSetup.sessionInput.resourcePolicy, attemptSetup.sessionInput.tools) };
             },
             onBeforeComplete: async () => {
               if (options.worktreeOwner) await runStore?.snapshotWorktree(options.worktreeOwner);
@@ -1026,6 +1055,8 @@ export interface ScheduledAgentOptions {
   parentBreadcrumb?: string;
   cwd: string;
   tools: readonly string[];
+  skills?: readonly string[];
+  extensions?: readonly string[];
   worktreeOwner?: string;
   model?: string;
   thinking?: ThinkingLevel;
@@ -1218,21 +1249,21 @@ export class FairAgentScheduler {
     this.#dispatch();
   }
 
-  toolsFor(parentId: string, resolveTools?: (role: string | RoleOverride | undefined, tools: readonly string[] | undefined, model: string | undefined, inheritedTools: readonly string[], thinking: ThinkingLevel | undefined) => readonly string[]): ToolDefinition[] {
+  toolsFor(parentId: string, resolveTools?: (role: string | RoleOverride | undefined, tools: readonly string[] | undefined, model: string | undefined, inheritedTools: readonly string[], thinking: ThinkingLevel | undefined, skills: readonly string[] | undefined, extensions: readonly string[] | undefined) => readonly string[]): ToolDefinition[] {
     const parent = this.#node(parentId);
     if (!parent.options.tools.includes("agent")) return [];
     const agentTool = defineTool({
       name: "agent", label: "Child Agent", description: "Start a direct child agent",
-      parameters: Type.Object({ prompt: Type.String(), label: Type.String(), tools: Type.Optional(Type.Array(Type.String())), model: Type.Optional(Type.String()), thinking: Type.Optional(Type.String()), role: Type.Optional(Type.Union([Type.String(), Type.Object({ name: Type.String(), model: Type.Optional(Type.Union([Type.String(), Type.Null()])), thinking: Type.Optional(Type.Union([Type.String(), Type.Null()])), tools: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])), description: Type.Optional(Type.Union([Type.String(), Type.Null()])), overrideSystemPrompt: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])), contextFiles: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])), disabledAgentResources: Type.Optional(Type.Union([Type.Object({ skills: Type.Optional(Type.Array(Type.String())), extensions: Type.Optional(Type.Array(Type.String())) }), Type.Null()])) }, { additionalProperties: true })])), outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())), retries: Type.Optional(Type.Integer({ minimum: 0 })), timeoutMs: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])) }, { additionalProperties: true }),
+      parameters: Type.Object({ prompt: Type.String(), label: Type.String(), tools: Type.Optional(Type.Array(Type.String())), skills: Type.Optional(Type.Array(Type.String())), extensions: Type.Optional(Type.Array(Type.String())), model: Type.Optional(Type.String()), thinking: Type.Optional(Type.String()), role: Type.Optional(Type.Union([Type.String(), Type.Object({ name: Type.String(), model: Type.Optional(Type.Union([Type.String(), Type.Null()])), thinking: Type.Optional(Type.Union([Type.String(), Type.Null()])), tools: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])), skills: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])), extensions: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])), description: Type.Optional(Type.Union([Type.String(), Type.Null()])), overrideSystemPrompt: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])), contextFiles: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])) }, { additionalProperties: true })])), outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())), retries: Type.Optional(Type.Integer({ minimum: 0 })), timeoutMs: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])) }, { additionalProperties: true }),
       execute: async (_id, params) => {
         if (!isChildAgentToolParams(params)) throw new WorkflowError("INVALID_METADATA", "Invalid child agent parameters");
-        if (params.role !== undefined && (params.model !== undefined || params.thinking !== undefined || params.tools !== undefined)) throw new WorkflowError("INVALID_METADATA", "Role agents must not specify model, thinking, or tools");
+        if (params.role !== undefined && (params.model !== undefined || params.thinking !== undefined)) throw new WorkflowError("INVALID_METADATA", "Role agents must not specify model or thinking");
         const outputSchema = params.outputSchema;
         if (outputSchema !== undefined) validateSchema(outputSchema, "agent outputSchema");
-        const tools = (params.tools !== undefined || params.role !== undefined ? resolveTools?.(params.role, params.tools, params.model, parent.options.tools, params.thinking) : undefined) ?? params.tools ?? parent.options.tools;
+        const tools = (params.tools !== undefined || params.role !== undefined || params.skills !== undefined || params.extensions !== undefined ? resolveTools?.(params.role, params.tools, params.model, parent.options.tools, params.thinking, params.skills, params.extensions) : undefined) ?? params.tools ?? parent.options.tools;
         const agentOptions = { ...params };
         Reflect.deleteProperty(agentOptions, "prompt");
-        const options: ScheduledAgentOptions = { label: params.label, requestedLabel: params.label, cwd: parent.options.cwd, tools, agentOptions, ...(params.model ? { model: params.model } : {}), ...(params.thinking ? { thinking: params.thinking } : {}), ...(params.role ? { role: params.role } : {}), ...(outputSchema === undefined ? {} : { schema: outputSchema }), ...(params.retries === undefined ? {} : { retries: params.retries }), ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }) };
+        const options: ScheduledAgentOptions = { label: params.label, requestedLabel: params.label, cwd: parent.options.cwd, tools, agentOptions, ...(params.skills ? { skills: params.skills } : {}), ...(params.extensions ? { extensions: params.extensions } : {}), ...(params.model ? { model: params.model } : {}), ...(params.thinking ? { thinking: params.thinking } : {}), ...(params.role ? { role: params.role } : {}), ...(outputSchema === undefined ? {} : { schema: outputSchema }), ...(params.retries === undefined ? {} : { retries: params.retries }), ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }) };
         const child = this.spawn(parent.runId, params.prompt, options, parentId);
         return { content: [{ type: "text" as const, text: JSON.stringify({ id: child.id }) }], details: { id: child.id } };
       },

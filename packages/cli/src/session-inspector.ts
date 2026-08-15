@@ -296,13 +296,17 @@ function detailLines(workflow: WorkflowReport): string[] {
       lines.push(`Attempt ${String(attempt.attempt)} · ${attempt.model}${attempt.thinking !== undefined ? `:${attempt.thinking}` : ""} · ${money(attempt.cost)}${attempt.error ? ` · ${attempt.error}` : ""}`, `Prompt: ${attempt.prompt}`, ...(attempt.setup ? [
         `Hooks: ${attempt.setup.hookNames.join(", ") || "(none)"}`,
         `Effective: model=${attempt.setup.model.provider}/${attempt.setup.model.model}${attempt.setup.model.thinking ? `:${attempt.setup.model.thinking}` : ""} tools=${attempt.setup.tools.join(",") || "(none)"} cwd=${attempt.setup.cwd}`,
-        ...(attempt.setup.disabledAgentResources ? [
-          `Configured skill patterns: ${attempt.setup.disabledAgentResources.skills.join(", ") || "(none)"}`,
-          `Excluded skills: ${attempt.setup.disabledAgentResources.excludedSkills?.join(", ") || "(none)"}`,
-          `Configured extension patterns: ${attempt.setup.disabledAgentResources.extensions.join(", ") || "(none)"}`,
-          `Excluded extensions: ${attempt.setup.disabledAgentResources.excludedExtensions?.join(", ") || "(none)"}`,
-          `Unmatched skills: ${attempt.setup.disabledAgentResources.unmatchedSkills.join(", ") || "(none)"}`,
-          `Unmatched extensions: ${attempt.setup.disabledAgentResources.unmatchedExtensions.join(", ") || "(none)"}`,
+        ...(attempt.setup.resourceSelectors ? [
+          `Selector sources: global/project/role/call are persisted with the attempt`,
+          `Configured skill patterns: ${attempt.setup.resourceSelectors.selectors.skills.join(", ") || "(none)"}`,
+          `Effective skills: ${attempt.setup.resourceSelectors.skills.join(", ") || "(none)"}`,
+          `Configured extension patterns: ${attempt.setup.resourceSelectors.selectors.extensions.join(", ") || "(none)"}`,
+          `Effective extensions: ${attempt.setup.resourceSelectors.extensions.join(", ") || "(none)"}`,
+          `Configured tool patterns: ${(attempt.setup.resourceSelectors.selectors.tools ?? []).join(", ") || "(none)"}`,
+          `Effective tools: ${attempt.setup.resourceSelectors.tools.join(", ") || "(none)"}`,
+          `Unmatched skills: ${attempt.setup.resourceSelectors.unmatchedSkills.join(", ") || "(none)"}`,
+          `Unmatched extensions: ${attempt.setup.resourceSelectors.unmatchedExtensions.join(", ") || "(none)"}`,
+          `Unmatched tools: ${attempt.setup.resourceSelectors.unmatchedTools.join(", ") || "(none)"}`,
         ] : []),
       ] : []));
     }

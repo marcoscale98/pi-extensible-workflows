@@ -22,15 +22,12 @@ const SUBAGENTS_ROLE_OVERRIDE = Type.Object({
   model: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   thinking: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   tools: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+  skills: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
+  extensions: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
   description: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   overrideSystemPrompt: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   contextFiles: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-  disabledAgentResources: Type.Optional(Type.Union([Type.Object({
-    skills: Type.Optional(Type.Array(Type.String())),
-    extensions: Type.Optional(Type.Array(Type.String())),
-  }, { additionalProperties: false }), Type.Null()])),
 }, { additionalProperties: false });
-
 const SUBAGENTS_MODE = Type.Union([
   Type.Literal("background"),
   Type.Literal("foreground"),
@@ -42,7 +39,9 @@ export const SUBAGENTS_RUN_PARAMETERS = Type.Object({
   label: Type.Optional(Type.String({ description: "Optional display label for the subagent" })),
   model: Type.Optional(Type.String({ description: "Optional model selection" })),
   thinking: Type.Optional(Type.String({ description: "Optional thinking level" })),
-  tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tools available to the subagent" })),
+  tools: Type.Optional(Type.Array(Type.String(), { description: "Optional tool selectors available to the subagent" })),
+  skills: Type.Optional(Type.Array(Type.String(), { description: "Optional skill selectors available to the subagent" })),
+  extensions: Type.Optional(Type.Array(Type.String(), { description: "Optional extension selectors available to the subagent" })),
   role: Type.Optional(Type.Union([Type.String({ description: "Workflow role name" }), SUBAGENTS_ROLE_OVERRIDE])),
   worktree: Type.Optional(Type.String({ description: "Optional named worktree" })),
   outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Optional JSON schema for the result" })),

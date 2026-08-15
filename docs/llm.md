@@ -64,10 +64,11 @@ Effective precedence is:
 
 1. Built-in defaults (`concurrency` defaults to `8`; `backgroundWidget` defaults to `true`).
 2. Global settings.
-3. Trusted project settings for `concurrency`, `modelAliases`, and `disabledAgentResources`.
-4. Per-run options where the workflow API defines them.
+3. Trusted project settings, appended after global selectors.
+4. Role frontmatter.
+5. Per-agent call options.
 
-Project collections replace, rather than deep-merge, the matching global collection. An empty project object or array clears the inherited value.
+Selectors are concatenated in that order. A later matching rule wins; a positive pattern enables a candidate and a leading `!` disables it. A candidate with no matching rule remains enabled by default. `!*` clears the current selection before narrower positive patterns are applied. Trusted project settings are ignored when the project is untrusted.
 
 Supported settings shape:
 
@@ -76,23 +77,15 @@ Supported settings shape:
   "concurrency": 8,
   "backgroundWidget": true,
   "modelAliases": {
-    "reviewer-model": "anthropic/claude-fable-5:high",
-    "cheap-model": "reviewer-model:low"
+    "reviewer-model": "anthropic/claude-fable-5:high"
   },
-  "disabledAgentResources": {
-    "skills": ["interactive-*", "!interactive-safe"],
-    "extensions": ["**/*", "!../../extensions/trusted.ts"]
-  },
-  "extensions": {
-    "herdr": {
-      "enableFullyInspectableMode": true
-    }
-  }
+  "skills": ["*", "!experimental-*"],
+  "extensions": ["**/*", "!**/unsafe.mjs"],
+  "tools": ["*", "!write"]
 }
 ```
 
-The supported top-level settings are exactly `concurrency`, `backgroundWidget`, `modelAliases`, `disabledAgentResources`, and `extensions`. `backgroundWidget` is accepted only in the global settings file and disables the live background workflow widget and durable background receipts when false. The currently supported extension setting is exactly `extensions.herdr.enableFullyInspectableMode` as a boolean; Herdr reads it from global settings only. Adding a new settings namespace requires a core validation and type change; do not silently add arbitrary keys.
-
+The supported resource fields are direct `skills`, `extensions`, and `tools` arrays. `skills` matches discovered skill names, `extensions` matches discovered normalized extension paths, and `tools` matches only the current root or parent tool boundary. Selectors never create unavailable resources. The legacy `disabledAgentResources` field is rejected; it is not an alias for these fields. Herdr's optional configuration remains under its existing extension settings namespace.
 ### Concurrency
 
 `concurrency` is an integer from `1` through `16`. The default is `8`.
@@ -115,9 +108,9 @@ A model is dynamic when its value cannot be determined during preflight, for exa
 
 Dynamic model aliases are resolved once per launch or resume, then captured for that execution segment. They are not re-resolved on every agent turn. A role can use a static alias or a dynamic alias in its `model` field.
 
-### Resource exclusions
+### Resource selectors
 
-`disabledAgentResources.skills` contains skill-name minimatch selectors. `disabledAgentResources.extensions` contains normalized extension-path selectors. Selectors are evaluated in declaration order; the last match wins, and a leading `!` re-enables a match. `~` expands to the home directory. These exclusions affect workflow agents, not the parent Pi session.
+The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Positive patterns enable matching discovered candidates; `!pattern` disables them, and the last match wins. A candidate with no match stays enabled. `!*` followed by a positive pattern selects only that narrower subset. Selectors are composed as global settings, trusted project settings, role frontmatter, then agent-call options.
 
 ## Standalone Subagents
 
@@ -274,24 +267,16 @@ description: Reviews code for correctness
 model: reviewer-model
 thinking: high
 tools: [read, grep]
+skills: ["review-*", "!experimental-*"]
+extensions: ["**/*", "!**/unsafe.mjs"]
 contextFiles: [global, project]
-disabledAgentResources:
-  skills: [interactive-skill]
 ---
 
 Focus on correctness, regressions, and concrete next checks.
 ```
-Supported core frontmatter fields:
+Supported core frontmatter fields include direct `tools`, `skills`, and `extensions` selector arrays. Each uses ordered Minimatch rules; positive rules enable, negated rules disable, and the last match wins.
 
-| Field | Type and behavior |
-| --- | --- |
-| `description` | Non-empty single-line string, at most 1024 characters. |
-| `model` | Configured alias or `provider/model[:thinking]`. |
-| `thinking` | One of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
-| `tools` | Array of non-empty Pi tool names. |
-| `overrideSystemPrompt` | Boolean. When true, use the role body instead of appending it to the native Pi system prompt. |
-| `contextFiles` | Array containing `global`, `cwd`, and/or `project`. |
-| `disabledAgentResources` | Object with `skills` and `extensions` selector arrays. |
+`description`, `model`, `thinking`, `overrideSystemPrompt`, and `contextFiles` retain their existing meanings. The selector fields are composed after global and trusted project settings and before per-call selectors.
 
 The role body is prompt guidance. Role files are trusted configuration and can change model, tools, context, resources, and system-prompt behavior.
 
@@ -302,7 +287,7 @@ Role selection can be a string or an object:
 { role: { name: "reviewer", model: "cheap-model", thinking: null, tools: [] } }
 ```
 
-For a role object, omit a field to inherit it, use `null` to unset it, or provide an explicit replacement including `[]` and `false`. The role name and body always come from the named file. Do not combine a role with top-level `model`, `thinking`, or `tools`; put those changes inside the role object.
+For a role object, omit a field to inherit it, use `null` to unset it, or provide an explicit replacement. Resource selectors in the top-level agent call are final overlays, including when a named role is selected; model and thinking remain role-only.
 
 ### Static and dynamic role references
 

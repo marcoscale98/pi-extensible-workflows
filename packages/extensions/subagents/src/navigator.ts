@@ -21,17 +21,20 @@ function objectValue(value: unknown): Record<string, unknown> | undefined { retu
 function isFileNotFound(error: unknown): boolean { return objectValue(error)?.code === "ENOENT"; }
 function safeRunId(id: string): boolean { return id !== "." && id !== ".." && /^[A-Za-z0-9._-]+$/.test(id); }
 type ModelThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-function resourceSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["setup"]["disabledAgentResources"]> | undefined {
+function resourceSummaryValue(value: unknown): NonNullable<AgentAttemptSummary["setup"]["resourceSelectors"]> | undefined {
   const record = objectValue(value);
+  const selectors = objectValue(record?.selectors);
   const skills = stringArrayValue(record?.skills);
   const extensions = stringArrayValue(record?.extensions);
+  const tools = stringArrayValue(record?.tools);
+  const selectorSkills = stringArrayValue(selectors?.skills);
+  const selectorExtensions = stringArrayValue(selectors?.extensions);
+  const selectorTools = stringArrayValue(selectors?.tools);
   const unmatchedSkills = stringArrayValue(record?.unmatchedSkills);
   const unmatchedExtensions = stringArrayValue(record?.unmatchedExtensions);
-  if (!record || !skills || !extensions || !unmatchedSkills || !unmatchedExtensions) return undefined;
-  const excludedSkills = record.excludedSkills === undefined ? undefined : stringArrayValue(record.excludedSkills);
-  const excludedExtensions = record.excludedExtensions === undefined ? undefined : stringArrayValue(record.excludedExtensions);
-  if (record.excludedSkills !== undefined && excludedSkills === undefined || record.excludedExtensions !== undefined && excludedExtensions === undefined) return undefined;
-  return { skills, extensions, unmatchedSkills, unmatchedExtensions, ...(excludedSkills === undefined ? {} : { excludedSkills }), ...(excludedExtensions === undefined ? {} : { excludedExtensions }) };
+  const unmatchedTools = stringArrayValue(record?.unmatchedTools);
+  if (!record || !selectors || !skills || !extensions || !tools || !selectorSkills || !selectorExtensions || !selectorTools || !unmatchedSkills || !unmatchedExtensions || !unmatchedTools) return undefined;
+  return { selectors: { skills: selectorSkills, extensions: selectorExtensions, tools: selectorTools }, skills, extensions, tools, unmatchedSkills, unmatchedExtensions, unmatchedTools };
 }
 function thinkingValue(value: unknown): ModelThinking | undefined { return value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" ? value : undefined; }
 function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
@@ -126,16 +129,16 @@ function attemptValue(value: unknown): AgentAttemptSummary | undefined {
   const model = objectValue(setup?.model);
   const hookNames = stringArrayValue(setup?.hookNames);
   const tools = stringArrayValue(setup?.tools);
-  const resources = setup?.disabledAgentResources === undefined ? undefined : resourceSummaryValue(setup.disabledAgentResources);
+  const resources = setup?.resourceSelectors === undefined ? undefined : resourceSummaryValue(setup.resourceSelectors);
   const accounting = accountingValue(record?.accounting);
   const session = record?.session === undefined ? undefined : sessionReferenceValue(record.session);
   const error = record?.error === undefined ? undefined : errorValue(record.error);
   const thinking = thinkingValue(model?.thinking);
-  if (!record || !nonnegativeInteger(record.attempt) || record.attempt < 1 || typeof record.transport !== "string" || !record.transport.trim() || !setup || typeof setup.cwd !== "string" || !setup.cwd.trim() || !model || typeof model.provider !== "string" || !model.provider.trim() || typeof model.model !== "string" || !model.model.trim() || model.thinking !== undefined && thinking === undefined || !hookNames || !tools || setup.disabledAgentResources !== undefined && resources === undefined || !accounting || record.session !== undefined && session === undefined || record.error !== undefined && error === undefined) return undefined;
+  if (!record || !nonnegativeInteger(record.attempt) || record.attempt < 1 || typeof record.transport !== "string" || !record.transport.trim() || !setup || typeof setup.cwd !== "string" || !setup.cwd.trim() || !model || typeof model.provider !== "string" || !model.provider.trim() || typeof model.model !== "string" || !model.model.trim() || model.thinking !== undefined && thinking === undefined || !hookNames || !tools || setup.resourceSelectors !== undefined && resources === undefined || !accounting || record.session !== undefined && session === undefined || record.error !== undefined && error === undefined) return undefined;
   return {
     attempt: record.attempt,
     transport: record.transport,
-    setup: { hookNames, model: { provider: model.provider, model: model.model, ...(thinking === undefined ? {} : { thinking }) }, tools, cwd: setup.cwd, ...(resources === undefined ? {} : { disabledAgentResources: resources }) },
+    setup: { hookNames, model: { provider: model.provider, model: model.model, ...(thinking === undefined ? {} : { thinking }) }, tools, cwd: setup.cwd, ...(resources === undefined ? {} : { resourceSelectors: resources }) },
     accounting,
     ...(session === undefined ? {} : { session }),
     ...(error === undefined ? {} : { error }),

@@ -30,7 +30,6 @@ import {
   workflowSettingsPath,
   type AgentExecutionOptions,
   type AgentExecutionRoot,
-  type AgentResourceExclusions,
   type AgentResourcePolicy,
   type AgentTransport,
   type WorkflowCatalogModelAlias,
@@ -42,7 +41,7 @@ import {
 } from "pi-extensible-workflows";
 import type { AgentDefinition } from "pi-extensible-workflows";
 import { loadingRegistry, type WorkflowRegistryApi } from "pi-extensible-workflows";
-import { disabledResources, unmatchedResourcePatterns } from "pi-extensible-workflows";
+import { selectResources, unmatchedResourcePatterns } from "pi-extensible-workflows";
 
 export type DoctorSeverity = "error" | "warning";
 export interface DoctorDiagnostic { severity: DoctorSeverity; code: string; message: string; source?: string; hint?: string }
@@ -54,7 +53,7 @@ export interface DoctorRoleInspection {
   path: string;
   model: { provider: string; model: string; thinking?: string; inherited?: boolean };
   tools: readonly string[];
-  resources: { skills: readonly string[]; extensions: readonly string[]; excludedSkills: readonly string[]; excludedExtensions: readonly string[]; unmatchedSkills: readonly string[]; unmatchedExtensions: readonly string[] };
+  resources: { selectors: { skills: readonly string[]; extensions: readonly string[]; tools: readonly string[] }; skills: readonly string[]; extensions: readonly string[]; tools: readonly string[]; unmatchedSkills: readonly string[]; unmatchedExtensions: readonly string[]; unmatchedTools: readonly string[]; /** @deprecated */ excludedSkills: readonly string[]; /** @deprecated */ excludedExtensions: readonly string[] };
   systemPrompt: { probe: string; expandedProbe: string; text: string; source?: string };
   setup: { hooks: readonly string[]; diagnostics: readonly DoctorDiagnostic[] };
 }
@@ -234,8 +233,8 @@ function legacyAgentResourceSelectorDiagnostic(source: string): DoctorDiagnostic
   return diagnostic("warning", "AGENT_RESOURCE_SELECTOR_MIGRATION", AGENT_RESOURCE_SELECTOR_MIGRATION_MESSAGE, source);
 }
 function emptyResourcePolicy(globalSettingsPath: string, cwd: string, projectTrusted: boolean): AgentResourcePolicy {
-  const empty: AgentResourceExclusions = { skills: [], extensions: [] };
-  return { globalSettingsPath, projectSettingsPath: workflowProjectSettingsPath(cwd), projectTrusted, global: empty, project: empty, effective: empty, unmatchedSkills: [], unmatchedExtensions: [] };
+  const empty = { skills: [], extensions: [], tools: [] };
+  return { globalSettingsPath, projectSettingsPath: workflowProjectSettingsPath(cwd), projectTrusted, global: empty, project: empty, effective: empty, unmatchedSkills: [], unmatchedExtensions: [], unmatchedTools: [] };
 }
 function validateModel(value: string, known: ReadonlySet<string>, available: ReadonlySet<string>, source: string, diagnostics: DoctorDiagnostic[], aliases: Readonly<Record<string, string>>, dynamicAliases: ReadonlySet<string>, settingsPath: string): void {
   if (isDynamicModelAlias(value, dynamicAliases)) return;
@@ -269,7 +268,11 @@ function inspectRole(path: string, activeTools: ReadonlySet<string>, knownModels
 function matchResourcePolicy(policy: AgentResourcePolicy, pi: DoctorPiState): AgentResourcePolicy {
   const extensions = [...new Set((pi.extensions ?? []).map(canonical))];
   const skills = [...new Set(pi.skills ?? [])];
-  return { ...policy, excludedSkills: disabledResources(policy.effective.skills, skills), excludedExtensions: disabledResources(policy.effective.extensions, extensions), unmatchedSkills: unmatchedResourcePatterns(policy.effective.skills, skills), unmatchedExtensions: unmatchedResourcePatterns(policy.effective.extensions, extensions) };
+  const tools = [...new Set(pi.activeTools)];
+  const selectedSkills = selectResources(policy.effective.skills, skills);
+  const selectedExtensions = selectResources(policy.effective.extensions, extensions);
+  const selectedTools = selectResources(policy.effective.tools ?? [], tools);
+  return { ...policy, selectedSkills, selectedExtensions, selectedTools, unmatchedSkills: unmatchedResourcePatterns(policy.effective.skills, skills), unmatchedExtensions: unmatchedResourcePatterns(policy.effective.extensions, extensions), unmatchedTools: unmatchedResourcePatterns(policy.effective.tools ?? [], tools) };
 }
 async function inspectRoleSession(cwd: string, agentDir: string, roleName: string, definition: AgentDefinition, rolePath: string, basePolicy: AgentResourcePolicy, rootModel: { provider: string; model: string; thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }, activeTools: readonly string[], aliases: Readonly<Record<string, string>>, knownModels: ReadonlySet<string>, availableModels: ReadonlySet<string>, settingsPath: string, prompt: string, hooks: NonNullable<AgentExecutionRoot["agentSetupHooks"]>, diagnostics: DoctorDiagnostic[]): Promise<DoctorRoleInspection | undefined> {
   const setupDiagnostics: DoctorDiagnostic[] = [];
@@ -298,7 +301,7 @@ async function inspectRoleSession(cwd: string, agentDir: string, roleName: strin
     const actualModel = session.model?.provider && (session.model.model ?? session.model.id) ? { provider: session.model.provider, model: session.model.model ?? session.model.id ?? prepared.setup.sessionInput.model.model, ...(session.thinkingLevel ? { thinking: session.thinkingLevel } : {}), ...(inherited ? { inherited: true } : {}) } : { ...prepared.setup.sessionInput.model, ...(inherited ? { inherited: true } : {}) };
     const policy = prepared.setup.sessionInput.resourcePolicy ?? basePolicy;
     for (const item of [...resources.diagnostics, ...promptResult.diagnostics]) setupDiagnostics.push(diagnostic(item.type === "error" ? "error" : "warning", "ROLE_INSPECTION", item.message, item.source));
-    return { role: roleName, path: rolePath, model: actualModel, tools: state?.tools.map(({ name }) => name) ?? [...prepared.setup.sessionInput.tools], resources: { skills: resources.skills, extensions: resources.extensions, excludedSkills: policy.excludedSkills ?? [], excludedExtensions: policy.excludedExtensions ?? [], unmatchedSkills: policy.unmatchedSkills, unmatchedExtensions: policy.unmatchedExtensions }, systemPrompt: { probe: prompt, expandedProbe: promptResult.expandedPrompt, text: promptResult.systemPrompt, ...(resources.systemPromptSource ? { source: resources.systemPromptSource } : {}) }, setup: { hooks: prepared.summary.hookNames, diagnostics: setupDiagnostics } };
+    return { role: roleName, path: rolePath, model: actualModel, tools: state?.tools.map(({ name }) => name) ?? [...prepared.setup.sessionInput.tools], resources: { selectors: { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], tools: [...(policy.effective.tools ?? [])] }, skills: policy.selectedSkills ?? resources.skills, extensions: policy.selectedExtensions ?? resources.extensions, tools: policy.selectedTools ?? prepared.setup.sessionInput.tools, unmatchedSkills: policy.unmatchedSkills, unmatchedExtensions: policy.unmatchedExtensions, unmatchedTools: policy.unmatchedTools ?? [], excludedSkills: [], excludedExtensions: [] }, systemPrompt: { probe: prompt, expandedProbe: promptResult.expandedPrompt, text: promptResult.systemPrompt, ...(resources.systemPromptSource ? { source: resources.systemPromptSource } : {}) }, setup: { hooks: prepared.summary.hookNames, diagnostics: setupDiagnostics } };
   } catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", error instanceof Error ? error.message : String(error), rolePath)); diagnostics.push(...setupDiagnostics); return undefined; }
   finally { await session.dispose(); }
 }
@@ -311,7 +314,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   let settings = DEFAULT_SETTINGS;
   try { settings = loadSettings(settingsPath); }
   catch (error) { diagnostics.push(diagnostic("error", "SETTINGS_INVALID", errorText(error), settingsPath, "Fix or remove the invalid workflow settings file.")); }
-  let settingsSources: WorkflowSettingsSources = { concurrency: settingsPath, modelAliases: settingsPath, disabledAgentResources: settingsPath };
+  let settingsSources: WorkflowSettingsSources = { concurrency: settingsPath, modelAliases: settingsPath, skills: settingsPath, extensions: settingsPath, tools: settingsPath };
   const projectSettingsPath = workflowProjectSettingsPath(cwd);
 
   let pi: DoctorPiState;
@@ -343,8 +346,9 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
     if (!diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
     resourcePolicy = emptyResourcePolicy(settingsPath, cwd, pi.trust.trusted);
   }
-  for (const skill of resourcePolicy.unmatchedSkills) diagnostics.push(diagnostic("warning", "AGENT_RESOURCE_UNMATCHED", `Disabled skill selector currently matches no discovered skill: ${skill}`, `${resourcePolicySource(settingsSources.disabledAgentResources)}.disabledAgentResources.skills`));
-  for (const extension of resourcePolicy.unmatchedExtensions) diagnostics.push(diagnostic("warning", "AGENT_RESOURCE_UNMATCHED", `Disabled extension selector currently matches no discovered extension source: ${extension}`, `${resourcePolicySource(settingsSources.disabledAgentResources)}.disabledAgentResources.extensions`));
+  for (const skill of resourcePolicy.unmatchedSkills) diagnostics.push(diagnostic("warning", "AGENT_RESOURCE_UNMATCHED", `Skill selector currently matches no discovered skill: ${skill}`, `${resourcePolicySource(settingsSources.skills ?? settingsPath)}.skills`));
+  for (const extension of resourcePolicy.unmatchedExtensions) diagnostics.push(diagnostic("warning", "AGENT_RESOURCE_UNMATCHED", `Extension selector currently matches no discovered extension source: ${extension}`, `${resourcePolicySource(settingsSources.extensions ?? settingsPath)}.extensions`));
+  for (const tool of resourcePolicy.unmatchedTools ?? []) diagnostics.push(diagnostic("warning", "AGENT_RESOURCE_UNMATCHED", `Tool selector currently matches no root tool: ${tool}`, `${resourcePolicySource(settingsSources.tools ?? settingsPath)}.tools`));
 
   const activeTools = new Set(pi.activeTools);
   const knownModels = new Set(pi.knownModels);
@@ -452,10 +456,6 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
 
 function count(report: DoctorReport, severity: DoctorSeverity): number { return report.diagnostics.filter((item) => item.severity === severity).length; }
 export function doctorExitCode(report: DoctorReport): 0 | 1 { return count(report, "error") > 0 ? 1 : 0; }
-function exposedValues(values: readonly string[], excluded: readonly string[]): string[] {
-  const disabled = new Set(excluded);
-  return values.filter((value) => !disabled.has(value));
-}
 function nestedValues(label: string, values: readonly string[]): string[] {
   return [`- ${label}:`, ...(values.length ? values.map((value) => `  - \`${value}\``) : ["  - (none)"])];
 }
@@ -464,12 +464,15 @@ function roleInspectionLines(inspection: DoctorRoleInspection): string[] {
     `- Role: \`${inspection.role}\` - \`${inspection.path}\``,
     `- Model: \`${inspection.model.provider}/${inspection.model.model}\` (${inspection.model.inherited ? "inherited, " : ""}${inspection.model.thinking ?? "off"})`,
     ...nestedValues("Tools", inspection.tools),
+    ...nestedValues("Configured skill selectors", inspection.resources.selectors.skills),
     ...nestedValues("Effective skills", inspection.resources.skills),
+    ...nestedValues("Configured extension selectors", inspection.resources.selectors.extensions),
     ...nestedValues("Effective extensions", inspection.resources.extensions),
-    ...nestedValues("Excluded skills", inspection.resources.excludedSkills),
-    ...nestedValues("Excluded extensions", inspection.resources.excludedExtensions),
+    ...nestedValues("Configured tool selectors", inspection.resources.selectors.tools),
+    ...nestedValues("Effective tools", inspection.resources.tools),
     ...nestedValues("Unmatched skills", inspection.resources.unmatchedSkills),
     ...nestedValues("Unmatched extensions", inspection.resources.unmatchedExtensions),
+    ...nestedValues("Unmatched tools", inspection.resources.unmatchedTools),
     `- Prompt probe: ${inspection.systemPrompt.probe ? JSON.stringify(inspection.systemPrompt.probe) : "empty"}`,
     `- Expanded probe: ${JSON.stringify(inspection.systemPrompt.expandedProbe)}`,
     `- System prompt source: ${inspection.systemPrompt.source ?? "(none)"}`,
@@ -506,7 +509,7 @@ export function formatDoctorReport(report: DoctorReport): string {
     `- Agent dir: \`${report.agentDir}\``,
     `- Global workflow settings: \`${report.settingsPath}\``,
     `- Project workflow settings: \`${report.resourcePolicy.projectSettingsPath}\` (${report.resourcePolicy.projectTrusted ? "trusted" : "ignored: project untrusted"})`,
-    `- Effective setting sources: concurrency=\`${report.settingsSources.concurrency}\`, modelAliases=\`${report.settingsSources.modelAliases}\`, disabledAgentResources=\`${report.settingsSources.disabledAgentResources}\``,
+    "- Effective setting sources: concurrency=" + report.settingsSources.concurrency + ", modelAliases=" + report.settingsSources.modelAliases + ", skills=" + (report.settingsSources.skills ?? "(none)") + ", extensions=" + (report.settingsSources.extensions ?? "(none)") + ", tools=" + (report.settingsSources.tools ?? "(none)"),
     `- Limits: concurrency=${String(report.settings.concurrency)}`,
     "",
     "## Trust/resources",
@@ -521,21 +524,21 @@ export function formatDoctorReport(report: DoctorReport): string {
     "## Pi active skills",
     ...(report.piSkills.length ? report.piSkills.map((skill) => `- \`${skill}\``) : ["- None resolved"]),
     "",
-    "## Workflow agent resources (after disabledAgentResources)",
+    "## Workflow agent resource selectors",
     `- Global settings: \`${report.resourcePolicy.globalSettingsPath}\``,
     `- Global skills: ${report.resourcePolicy.global.skills.join(", ") || "(none)"}`,
     `- Global extensions: ${report.resourcePolicy.global.extensions.join(", ") || "(none)"}`,
+    `- Global tools: ${(report.resourcePolicy.global.tools ?? []).join(", ") || "(none)"}`,
     `- Project settings: \`${report.resourcePolicy.projectSettingsPath}\` (${report.resourcePolicy.projectTrusted ? "trusted" : "ignored: project untrusted"})`,
     `- Project skills: ${report.resourcePolicy.project.skills.join(", ") || "(none)"}`,
     `- Project extensions: ${report.resourcePolicy.project.extensions.join(", ") || "(none)"}`,
-    `- Effective skills: ${report.resourcePolicy.effective.skills.join(", ") || "(none)"}`,
-    `- Effective extensions: ${report.resourcePolicy.effective.extensions.join(", ") || "(none)"}`,
-    ...nestedValues("Exposed skills", exposedValues(report.piSkills, report.resourcePolicy.excludedSkills ?? [])),
-    ...nestedValues("Exposed extensions", exposedValues(report.piExtensions, report.resourcePolicy.excludedExtensions ?? [])),
-    ...nestedValues("Disabled skills", report.resourcePolicy.excludedSkills ?? []),
-    ...nestedValues("Disabled extensions", report.resourcePolicy.excludedExtensions ?? []),
+    `- Project tools: ${(report.resourcePolicy.project.tools ?? []).join(", ") || "(none)"}`,
+    `- Effective skills: ${(report.resourcePolicy.selectedSkills ?? []).join(", ") || "(none)"}`,
+    `- Effective extensions: ${(report.resourcePolicy.selectedExtensions ?? []).join(", ") || "(none)"}`,
+    `- Effective tools: ${(report.resourcePolicy.selectedTools ?? []).join(", ") || "(none)"}`,
     `- Unmatched skills: ${report.resourcePolicy.unmatchedSkills.join(", ") || "(none)"}`,
     `- Unmatched extensions: ${report.resourcePolicy.unmatchedExtensions.join(", ") || "(none)"}`,
+    `- Unmatched tools: ${(report.resourcePolicy.unmatchedTools ?? []).join(", ") || "(none)"}`,
     "",
     "## Roles",
     ...(report.roles.length ? report.roles.map((role) => `- \`${role.name}\` (${role.scope}, ${role.active ? "active" : role.overriddenBy ? `overridden by ${role.overriddenBy}` : "inactive: project untrusted"}) - \`${role.path}\`${role.extension ? `; ${extensionLabel(role.extension)} role directory "${dirname(role.path)}"` : ""}${role.overrides ? `; overrides \`${role.overrides}\`` : ""}`) : ["- None found"]),

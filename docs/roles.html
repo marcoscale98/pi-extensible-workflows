@@ -45,7 +45,7 @@
 <span class="tok-keyword">const</span> fastReview <span class="tok-punctuation">=</span> <span class="tok-keyword">await</span> <span class="tok-function">agent</span><span class="tok-punctuation">(</span><span class="tok-string">"Review this change"</span><span class="tok-punctuation">,</span> <span class="tok-punctuation">{</span>
   <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span> <span class="tok-property">name</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span> <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model"</span><span class="tok-punctuation">,</span> <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[]</span> <span class="tok-punctuation">}</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span></code></pre>
-        <p>Top-level <code>model</code>, <code>thinking</code>, and <code>tools</code> cannot be combined with either role form. Put per-call changes inside the role object.</p>
+        <p>Top-level <code>model</code> and <code>thinking</code> cannot be combined with either role form. Top-level <code>tools</code>, <code>skills</code>, and <code>extensions</code> are per-call selectors and can refine the role's selectors.</p>
         <p><a href="subagents.html"><code>@piewf/subagents</code></a> discovers these same role files and applies the same role-name, override, model, thinking, tool, context, and resource-policy validation to standalone agent runs.</p>
       </section>
       <section id="files">
@@ -57,9 +57,11 @@
 <span class="tok-property">model</span><span class="tok-punctuation">:</span> anthropic/claude-fable-5
 <span class="tok-property">thinking</span><span class="tok-punctuation">:</span> high
 <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>read<span class="tok-punctuation">,</span> grep<span class="tok-punctuation">]</span>
+<span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"review-*"<span class="tok-punctuation">]</span>
+<span class="tok-property">extensions</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"!**/unsafe.mjs"<span class="tok-punctuation">]</span>
 <span class="tok-punctuation">---</span>
 Focus on correctness and regressions.</code></pre>
-        <p>The body is prompt guidance. It is appended to the native Pi system prompt unless <code>overrideSystemPrompt: true</code> is set. Role files are trusted configuration and can affect model, tools, resources, and the system prompt.</p>
+        <p>The body is prompt guidance. It is appended to the native Pi system prompt unless <code>overrideSystemPrompt: true</code> is set. Role files are trusted configuration and can affect model, tools, resource selectors, and the system prompt.</p>
       </section>
       <section id="frontmatter">
         <h2>Frontmatter fields</h2>
@@ -69,10 +71,9 @@ Focus on correctness and regressions.</code></pre>
             <tr><td><code>description</code></td><td>Role description shown in role discovery and Pi guidance.</td></tr>
             <tr><td><code>model</code></td><td>Configured alias or concrete <code>provider/model[:thinking]</code>.</td></tr>
             <tr><td><code>thinking</code></td><td>Default thinking level for the role.</td></tr>
-            <tr><td><code>tools</code></td><td>Allow-list of Pi tools available to the role.</td></tr>
+            <tr><td><code>tools</code>, <code>skills</code>, <code>extensions</code></td><td>Ordered Minimatch selectors. Positive patterns enable discovered candidates, <code>!pattern</code> disables them, and later layers override earlier layers.</td></tr>
             <tr><td><code>overrideSystemPrompt</code></td><td>When true, use the role body instead of appending it to the native system prompt.</td></tr>
-            <tr><td><code>contextFiles</code></td><td>Choose which Pi context-file scopes reach the role: <code>global</code>, <code>cwd</code>, and <code>project</code>.</td></tr>
-            <tr><td><code>disabledAgentResources</code></td><td>Role-specific <code>skills</code> and <code>extensions</code> exclusions.</td></tr>
+            <tr><td><code>contextFiles</code></td><td>Choose which Pi context-file scopes reach the role.</td></tr>
           </tbody>
         </table></div>
       </section>
@@ -92,17 +93,18 @@ Focus on correctness and regressions.</code></pre>
     <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[]</span>
   <span class="tok-punctuation">}</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span></code></pre>
-        <p>Per-call overrides can set <code>model</code>, <code>thinking</code>, <code>tools</code>, <code>description</code>, <code>overrideSystemPrompt</code>, <code>contextFiles</code>, and <code>disabledAgentResources</code>. They never change the role name or body. Other agent options such as <code>label</code>, <code>outputSchema</code>, <code>retries</code>, <code>timeoutMs</code>, and <code>withWorktree</code> remain top-level call options.</p>
+        <p>Per-call overrides can set <code>tools</code>, <code>skills</code>, and <code>extensions</code> selectors, as well as <code>model</code>, <code>thinking</code>, <code>description</code>, <code>overrideSystemPrompt</code>, and <code>contextFiles</code>. Capability selectors are final overlays even when a named role is selected.</p>
       </section>
       <section id="context">
         <h2>Context and resources</h2>
         <p><code>contextFiles</code> controls Pi context discovery for that role. <code>global</code> selects the Pi agent-directory file, <code>cwd</code> selects the exact working-directory file, and <code>project</code> selects discovered project and ancestor files excluding those two. Omit the field for normal discovery or use <code>[]</code> to load none. Scopes can be combined.</p>
         <pre><code class="language-yaml"><span class="tok-punctuation">---</span>
 <span class="tok-property">contextFiles</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>global<span class="tok-punctuation">,</span> project<span class="tok-punctuation">]</span>
-<span class="tok-property">disabledAgentResources</span><span class="tok-punctuation">:</span>
-  <span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>interactive-skill<span class="tok-punctuation">]</span>
+<span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"review-*"<span class="tok-punctuation">,</span> "!experimental-*"<span class="tok-punctuation">]</span>
+<span class="tok-property">extensions</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"**/*"<span class="tok-punctuation">]</span>
+<span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"!*"<span class="tok-punctuation">,</span> read<span class="tok-punctuation">]</span>
 <span class="tok-punctuation">---</span></code></pre>
-        <p>Resource exclusions affect only agents using the role. They merge with global and trusted-project policy. Use <code>piewf doctor --role &lt;name&gt;</code> to inspect the effective model, tools, skills, extensions, exclusions, setup hooks, and prepared system prompt without contacting a provider.</p>
+        <p>Selectors affect only agents using the role and compose after global and trusted-project selectors. Use <code>piewf doctor --role &lt;name&gt;</code> to inspect selector sources and effective skills, extensions, and tools without contacting a provider.</p>
       </section>
       <section id="doctor">
         <h2>Inspect a role</h2>

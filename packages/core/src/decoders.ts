@@ -1,4 +1,4 @@
-import { AGENT_STATES, ERROR_CODES, RUN_STATES, type AgentAccounting, type AgentActivity, type AgentAttemptSummary, type AgentDefinition, type AgentRecord, type AgentResourceExclusions, type BudgetApprovalRequest, type BudgetDimension, type BudgetEvent, type ContextFileScope, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunRecord, type WorkflowBudgetUsage, type WorkflowRunEvent } from "./types.js";
+import { AGENT_STATES, ERROR_CODES, RUN_STATES, type AgentAccounting, type AgentActivity, type AgentAttemptSummary, type AgentDefinition, type AgentRecord, type AgentResourceInspection, type AgentResourceSelectors, type BudgetApprovalRequest, type BudgetDimension, type BudgetEvent, type ContextFileScope, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunRecord, type WorkflowBudgetUsage, type WorkflowRunEvent } from "./types.js";
 import type { OwnershipRecord, ScheduledAgentOptions } from "./agent-execution.js";
 import { jsonValue, object } from "./utils.js";
 
@@ -86,12 +86,13 @@ function decodeModelSpec(value: unknown): ModelSpec | undefined {
   if (thinking !== undefined && !isThinking(thinking)) return undefined;
   return { provider: value.provider, model: value.model, ...(thinking === undefined ? {} : { thinking }) };
 }
-function decodeAgentResourceExclusions(value: unknown): AgentResourceExclusions | undefined {
+function decodeAgentResourceSelectors(value: unknown): AgentResourceSelectors | undefined {
   if (!object(value)) return undefined;
-  const skills = decodeStringArray(value.skills);
-  const extensions = decodeStringArray(value.extensions);
-  if (!skills || !extensions) return undefined;
-  return { skills, extensions };
+  const skills = value.skills === undefined ? undefined : decodeStringArray(value.skills);
+  const extensions = value.extensions === undefined ? undefined : decodeStringArray(value.extensions);
+  const tools = value.tools === undefined ? undefined : decodeStringArray(value.tools);
+  if (value.skills !== undefined && !skills || value.extensions !== undefined && !extensions || value.tools !== undefined && !tools) return undefined;
+  return { ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(tools === undefined ? {} : { tools }) };
 }
 function decodeContextFileScopes(value: unknown): ContextFileScope[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -107,34 +108,28 @@ function decodeRoleOverride(value: unknown): RoleOverride | undefined {
   const model = value.model;
   const thinking = value.thinking;
   const tools = value.tools;
+  const skills = value.skills;
+  const extensions = value.extensions;
   const description = value.description;
   const overrideSystemPrompt = value.overrideSystemPrompt;
   const contextFiles = value.contextFiles;
-  const disabledAgentResources = value.disabledAgentResources;
   if (model !== undefined && model !== null && typeof model !== "string") return undefined;
   if (thinking !== undefined && thinking !== null && !isThinking(thinking)) return undefined;
   if (description !== undefined && description !== null && typeof description !== "string") return undefined;
   if (overrideSystemPrompt !== undefined && overrideSystemPrompt !== null && typeof overrideSystemPrompt !== "boolean") return undefined;
   const decodedTools = tools === undefined ? undefined : tools === null ? null : decodeStringArray(tools);
+  const decodedSkills = skills === undefined ? undefined : skills === null ? null : decodeStringArray(skills);
+  const decodedExtensions = extensions === undefined ? undefined : extensions === null ? null : decodeStringArray(extensions);
   const decodedContextFiles = contextFiles === undefined ? undefined : contextFiles === null ? null : decodeContextFileScopes(contextFiles);
-  const decodedResources = disabledAgentResources === undefined ? undefined : disabledAgentResources === null ? null : decodeAgentResourceExclusions(disabledAgentResources);
   const result: RoleOverride = { name: value.name };
   if (model !== undefined) result.model = model;
   if (thinking !== undefined) result.thinking = thinking;
-  if (tools !== undefined) {
-    if (decodedTools === undefined) return undefined;
-    result.tools = decodedTools;
-  }
+  if (tools !== undefined) { if (decodedTools === undefined) return undefined; result.tools = decodedTools; }
+  if (skills !== undefined) { if (decodedSkills === undefined) return undefined; result.skills = decodedSkills; }
+  if (extensions !== undefined) { if (decodedExtensions === undefined) return undefined; result.extensions = decodedExtensions; }
   if (description !== undefined) result.description = description;
   if (overrideSystemPrompt !== undefined) result.overrideSystemPrompt = overrideSystemPrompt;
-  if (contextFiles !== undefined) {
-    if (decodedContextFiles === undefined) return undefined;
-    result.contextFiles = decodedContextFiles;
-  }
-  if (disabledAgentResources !== undefined) {
-    if (decodedResources === undefined) return undefined;
-    result.disabledAgentResources = decodedResources === null ? null : { skills: [...decodedResources.skills], extensions: [...decodedResources.extensions] };
-  }
+  if (contextFiles !== undefined) { if (decodedContextFiles === undefined) return undefined; result.contextFiles = decodedContextFiles; }
   return result;
 }
 function decodeAgentDefinition(value: unknown): AgentDefinition | undefined {
@@ -144,20 +139,15 @@ function decodeAgentDefinition(value: unknown): AgentDefinition | undefined {
   const model = optionalString(value.model);
   const thinking = value.thinking;
   const tools = value.tools === undefined ? undefined : decodeStringArray(value.tools);
+  const skills = value.skills === undefined ? undefined : decodeStringArray(value.skills);
+  const extensions = value.extensions === undefined ? undefined : decodeStringArray(value.extensions);
   const overrideSystemPrompt = optionalBoolean(value.overrideSystemPrompt);
   const contextFiles = value.contextFiles === undefined ? undefined : decodeContextFileScopes(value.contextFiles);
-  const disabledAgentResources = value.disabledAgentResources === undefined ? undefined : decodeAgentResourceExclusions(value.disabledAgentResources);
   if (prompt === INVALID_PERSISTED_VALUE || description === INVALID_PERSISTED_VALUE || model === INVALID_PERSISTED_VALUE || overrideSystemPrompt === INVALID_PERSISTED_VALUE) return undefined;
-  if (thinking !== undefined && !isThinking(thinking) || value.tools !== undefined && !tools || value.contextFiles !== undefined && !contextFiles || value.disabledAgentResources !== undefined && !disabledAgentResources) return undefined;
+  if (thinking !== undefined && !isThinking(thinking) || value.tools !== undefined && !tools || value.skills !== undefined && !skills || value.extensions !== undefined && !extensions || value.contextFiles !== undefined && !contextFiles) return undefined;
   return {
-    ...(prompt === undefined ? {} : { prompt }),
-    ...(description === undefined ? {} : { description }),
-    ...(model === undefined ? {} : { model }),
-    ...(thinking === undefined ? {} : { thinking }),
-    ...(tools === undefined ? {} : { tools }),
-    ...(overrideSystemPrompt === undefined ? {} : { overrideSystemPrompt }),
-    ...(contextFiles === undefined ? {} : { contextFiles }),
-    ...(disabledAgentResources === undefined ? {} : { disabledAgentResources }),
+    ...(prompt === undefined ? {} : { prompt }), ...(description === undefined ? {} : { description }), ...(model === undefined ? {} : { model }), ...(thinking === undefined ? {} : { thinking }),
+    ...(tools === undefined ? {} : { tools }), ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(overrideSystemPrompt === undefined ? {} : { overrideSystemPrompt }), ...(contextFiles === undefined ? {} : { contextFiles }),
   };
 }
 function decodeWorkflowMetadata(value: unknown): LaunchSnapshot["metadata"] | undefined {
@@ -166,7 +156,7 @@ function decodeWorkflowMetadata(value: unknown): LaunchSnapshot["metadata"] | un
   if (description === INVALID_PERSISTED_VALUE) return undefined;
   return { name: value.name, ...(description === undefined ? {} : { description }) };
 }
-function decodeWorkflowExtensions(value: unknown): NonNullable<LaunchSnapshot["settings"]["extensions"]> | undefined {
+function decodeWorkflowExtensions(value: unknown): { herdr?: { enableFullyInspectableMode?: boolean } } | undefined {
   if (!object(value)) return undefined;
   if (value.herdr === undefined) return {};
   if (!object(value.herdr)) return undefined;
@@ -197,20 +187,22 @@ function decodeWorkflowSettings(value: unknown): LaunchSnapshot["settings"] | un
   if (!object(value) || !positiveInteger(value.concurrency)) return undefined;
   const backgroundWidget = optionalBoolean(value.backgroundWidget);
   const modelAliases = value.modelAliases === undefined ? undefined : decodeStringMap(value.modelAliases);
-  const disabledAgentResources = value.disabledAgentResources === undefined ? undefined : decodeAgentResourceExclusions(value.disabledAgentResources);
-  const extensions = value.extensions === undefined ? undefined : decodeWorkflowExtensions(value.extensions);
-  if (backgroundWidget === INVALID_PERSISTED_VALUE || (value.modelAliases !== undefined && !modelAliases) || (value.disabledAgentResources !== undefined && !disabledAgentResources) || (value.extensions !== undefined && !extensions)) return undefined;
+  const skills = value.skills === undefined ? undefined : decodeStringArray(value.skills);
+  const tools = value.tools === undefined ? undefined : decodeStringArray(value.tools);
+  const extensions = value.extensions === undefined ? undefined : Array.isArray(value.extensions) ? decodeStringArray(value.extensions) : decodeWorkflowExtensions(value.extensions);
+  if (backgroundWidget === INVALID_PERSISTED_VALUE || (value.modelAliases !== undefined && !modelAliases) || value.skills !== undefined && !skills || value.tools !== undefined && !tools || (value.extensions !== undefined && !extensions)) return undefined;
   return {
     concurrency: value.concurrency,
-    ...(backgroundWidget === undefined ? {} : { backgroundWidget }),
-    ...(modelAliases === undefined ? {} : { modelAliases }),
-    ...(disabledAgentResources === undefined ? {} : { disabledAgentResources }),
-    ...(extensions === undefined ? {} : { extensions }),
+    ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }), ...(skills === undefined ? {} : { skills }), ...(tools === undefined ? {} : { tools }), ...(extensions === undefined ? {} : { extensions: extensions as NonNullable<LaunchSnapshot["settings"]["extensions"]> }),
   };
 }
 function decodeWorkflowSettingsSources(value: unknown): NonNullable<LaunchSnapshot["settingsSources"]> | undefined {
-  if (!object(value) || typeof value.concurrency !== "string" || typeof value.modelAliases !== "string" || typeof value.disabledAgentResources !== "string") return undefined;
-  return { concurrency: value.concurrency, modelAliases: value.modelAliases, disabledAgentResources: value.disabledAgentResources };
+  if (!object(value) || typeof value.concurrency !== "string" || typeof value.modelAliases !== "string") return undefined;
+  const skills = value.skills === undefined ? undefined : typeof value.skills === "string" ? value.skills : undefined;
+  const extensions = value.extensions === undefined ? undefined : typeof value.extensions === "string" ? value.extensions : undefined;
+  const tools = value.tools === undefined ? undefined : typeof value.tools === "string" ? value.tools : undefined;
+  if (value.skills !== undefined && skills === undefined || value.extensions !== undefined && extensions === undefined || value.tools !== undefined && tools === undefined) return undefined;
+  return { concurrency: value.concurrency, modelAliases: value.modelAliases, ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(tools === undefined ? {} : { tools }) };
 }
 function decodeIdentity(value: unknown): PersistedIdentity | undefined {
   if (!object(value) || typeof value.callSite !== "string" || !positiveInteger(value.occurrence)) return undefined;
@@ -223,6 +215,8 @@ function decodeIdentity(value: unknown): PersistedIdentity | undefined {
 function decodeScheduledAgentOptions(value: unknown): PersistedOptions | undefined {
   if (!object(value) || typeof value.label !== "string" || typeof value.cwd !== "string") return undefined;
   const tools = decodeStringArray(value.tools);
+  const skills = value.skills === undefined ? undefined : decodeStringArray(value.skills);
+  const extensions = value.extensions === undefined ? undefined : decodeStringArray(value.extensions);
   if (!tools) return undefined;
   const requestedLabel = optionalString(value.requestedLabel);
   const parentBreadcrumb = optionalString(value.parentBreadcrumb);
@@ -240,13 +234,14 @@ function decodeScheduledAgentOptions(value: unknown): PersistedOptions | undefin
     if (typeof role === "string") decodedRole = role;
     else decodedRole = decodeRoleOverride(role);
   }
-  if (requestedLabel === INVALID_PERSISTED_VALUE || parentBreadcrumb === INVALID_PERSISTED_VALUE || worktreeOwner === INVALID_PERSISTED_VALUE || model === INVALID_PERSISTED_VALUE || (thinking !== undefined && !isThinking(thinking)) || (role !== undefined && decodedRole === undefined) || (value.schema !== undefined && !schema) || retries === INVALID_PERSISTED_VALUE || (retries !== undefined && !integer(retries)) || (timeoutMs !== undefined && timeoutMs !== null && !finiteNumber(timeoutMs)) || (value.agentOptions !== undefined && !agentOptions) || (value.agentIdentity !== undefined && !agentIdentity)) return undefined;
+  if (requestedLabel === INVALID_PERSISTED_VALUE || parentBreadcrumb === INVALID_PERSISTED_VALUE || worktreeOwner === INVALID_PERSISTED_VALUE || model === INVALID_PERSISTED_VALUE || value.skills !== undefined && !skills || value.extensions !== undefined && !extensions || (thinking !== undefined && !isThinking(thinking)) || (role !== undefined && decodedRole === undefined) || (value.schema !== undefined && !schema) || retries === INVALID_PERSISTED_VALUE || (retries !== undefined && !integer(retries)) || (timeoutMs !== undefined && timeoutMs !== null && !finiteNumber(timeoutMs)) || (value.agentOptions !== undefined && !agentOptions) || (value.agentIdentity !== undefined && !agentIdentity)) return undefined;
   return {
     label: value.label,
     ...(requestedLabel === undefined ? {} : { requestedLabel }),
     ...(parentBreadcrumb === undefined ? {} : { parentBreadcrumb }),
     cwd: value.cwd,
     tools,
+    ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }),
     ...(worktreeOwner === undefined ? {} : { worktreeOwner }),
     ...(model === undefined ? {} : { model }),
     ...(thinking === undefined ? {} : { thinking }),
@@ -280,25 +275,26 @@ function decodeAgentToolCall(value: unknown): NonNullable<AgentRecord["toolCalls
   if (state !== "running" && state !== "completed" && state !== "failed") return undefined;
   return { id: value.id, name: value.name, state };
 }
+function decodeAgentResourceInspection(value: unknown): AgentResourceInspection | undefined {
+  if (!object(value)) return undefined;
+  const selectors = decodeAgentResourceSelectors(value.selectors);
+  const skills = decodeStringArray(value.skills);
+  const extensions = decodeStringArray(value.extensions);
+  const tools = decodeStringArray(value.tools);
+  const unmatchedSkills = decodeStringArray(value.unmatchedSkills);
+  const unmatchedExtensions = decodeStringArray(value.unmatchedExtensions);
+  const unmatchedTools = decodeStringArray(value.unmatchedTools);
+  if (!selectors || !skills || !extensions || !tools || !unmatchedSkills || !unmatchedExtensions || !unmatchedTools) return undefined;
+  return { selectors: { skills: [...(selectors.skills ?? [])], extensions: [...(selectors.extensions ?? [])], tools: [...(selectors.tools ?? [])] }, skills, extensions, tools, unmatchedSkills, unmatchedExtensions, unmatchedTools };
+}
 function decodeAgentSetupSummary(value: unknown): NonNullable<NonNullable<AgentRecord["attemptDetails"]>[number]["setup"]> | undefined {
   if (!object(value) || typeof value.cwd !== "string") return undefined;
   const hookNames = decodeStringArray(value.hookNames);
   const tools = decodeStringArray(value.tools);
   const model = decodeModelSpec(value.model);
-  const resources = value.disabledAgentResources;
-  let disabledAgentResources: NonNullable<AgentAttemptSummary["setup"]["disabledAgentResources"]> | undefined;
-  if (resources !== undefined) {
-    if (!object(resources)) return undefined;
-    const base = decodeAgentResourceExclusions(resources);
-    const unmatchedSkills = decodeStringArray(resources.unmatchedSkills);
-    const unmatchedExtensions = decodeStringArray(resources.unmatchedExtensions);
-    const excludedSkills = resources.excludedSkills === undefined ? undefined : decodeStringArray(resources.excludedSkills);
-    const excludedExtensions = resources.excludedExtensions === undefined ? undefined : decodeStringArray(resources.excludedExtensions);
-    if (!base || !unmatchedSkills || !unmatchedExtensions || resources.excludedSkills !== undefined && !excludedSkills || resources.excludedExtensions !== undefined && !excludedExtensions) return undefined;
-    disabledAgentResources = { ...base, unmatchedSkills, unmatchedExtensions, ...(excludedSkills === undefined ? {} : { excludedSkills }), ...(excludedExtensions === undefined ? {} : { excludedExtensions }) };
-  }
-  if (!hookNames || !tools || !model) return undefined;
-  return { hookNames, model, tools, cwd: value.cwd, ...(disabledAgentResources === undefined ? {} : { disabledAgentResources }) };
+  const resourceSelectors = value.resourceSelectors === undefined ? undefined : decodeAgentResourceInspection(value.resourceSelectors);
+  if (!hookNames || !tools || !model || value.resourceSelectors !== undefined && !resourceSelectors) return undefined;
+  return { hookNames, model, tools, cwd: value.cwd, ...(resourceSelectors === undefined ? {} : { resourceSelectors }) };
 }
 function decodeAttemptError(value: unknown): NonNullable<NonNullable<AgentRecord["attemptDetails"]>[number]["error"]> | undefined {
   if (!object(value) || typeof value.code !== "string" || typeof value.message !== "string") return undefined;

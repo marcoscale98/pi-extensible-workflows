@@ -137,7 +137,26 @@ export function validateResourcePattern(pattern: string): void {
   const matcher = new Minimatch(resourcePatternPath(body), RESOURCE_PATTERN_OPTIONS);
   if (matcher.makeRe() === false) throw new Error(`Invalid minimatch pattern ${JSON.stringify(pattern)}`);
 }
-export function resourcePatternMatches(resource: string, pattern: string): boolean { return new Minimatch(resourcePatternPath(resourcePatternBody(pattern)), RESOURCE_PATTERN_OPTIONS).match(resourcePatternPath(resource)); }
+export function resourcePatternMatches(resource: string, pattern: string): boolean {
+  const body = resourcePatternBody(pattern);
+  if (body === "*") return true;
+  return new Minimatch(resourcePatternPath(body), RESOURCE_PATTERN_OPTIONS).match(resourcePatternPath(resource));
+}
+export function selectResources(patterns: readonly string[], resources: readonly string[], defaultEnabled = true): string[] {
+  return resources.filter((resource) => {
+    let enabled = defaultEnabled;
+    for (const pattern of patterns) if (resourcePatternMatches(resource, pattern)) enabled = !pattern.startsWith("!");
+    return enabled;
+  });
+}
+export function unmatchedResourcePatterns(patterns: readonly string[], resources: readonly string[]): string[] { return patterns.filter((pattern) => !resources.some((resource) => resourcePatternMatches(resource, pattern))); }
+export function mergeAgentResourceSelectors(...values: (import("./types.js").AgentResourceSelectors | undefined)[]): import("./types.js").AgentResourceSelectors {
+  return {
+    skills: values.flatMap((value) => value?.skills ?? []),
+    extensions: values.flatMap((value) => value?.extensions ?? []),
+    tools: values.flatMap((value) => value?.tools ?? []),
+  };
+}
 export function disabledResources(patterns: readonly string[], resources: readonly string[]): string[] {
   const disabled = new Set<string>();
   for (const resource of resources) {
@@ -147,7 +166,6 @@ export function disabledResources(patterns: readonly string[], resources: readon
   }
   return [...disabled];
 }
-export function unmatchedResourcePatterns(patterns: readonly string[], resources: readonly string[]): string[] { return patterns.filter((pattern) => !resources.some((resource) => resourcePatternMatches(resource, pattern))); }
 export function mergeAgentResourceExclusions(...values: (AgentResourceExclusions | undefined)[]): AgentResourceExclusions { return { skills: values.flatMap((value) => value?.skills ?? []), extensions: values.flatMap((value) => value?.extensions ?? []) }; }
 export function createLaunchSnapshot(input: Omit<import("./types.js").LaunchSnapshot, "identityVersion"> & { identityVersion?: number }): Readonly<import("./types.js").LaunchSnapshot> { return deepFreeze(structuredClone({ ...input, identityVersion: input.identityVersion ?? LAUNCH_SNAPSHOT_IDENTITY_VERSION })); }
 export function loadLaunchSnapshot(input: import("./types.js").LaunchSnapshot): Readonly<import("./types.js").LaunchSnapshot> { return deepFreeze(structuredClone(input)); }

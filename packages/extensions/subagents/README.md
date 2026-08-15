@@ -18,7 +18,7 @@ Use `@piewf/subagents` for focused, independent tasks. Use `pi-extensible-workfl
 
 - Five focused tools: run, inspect, steer, stop, and retry.
 - Background fan-out with one durable ID per run, or foreground execution with an inline terminal result.
-- Reuses workflow roles, role overrides, model aliases, settings, and agent options: `label`, `model`, `thinking`, `tools`, `worktree`, `outputSchema`, `retries` (0 through 255), and `timeoutMs`.
+- Reuses workflow roles, role overrides, model aliases, settings, and agent options: `label`, `model`, `thinking`, `tools`, `skills`, `extensions`, `worktree`, `outputSchema`, `retries` (0 through 255), and `timeoutMs`.
 - Repeatable inspection of progress, token accounting, tool calls, results, failures, and worktrees.
 - Optional `singleAgent` workflow function for inline composition without a standalone lifecycle.
 
@@ -59,13 +59,13 @@ Every tool schema is a closed object. Unknown properties are rejected. The model
 
 | Tool | Input schema |
 | --- | --- |
-| `subagents_run` | `{ prompt: string, mode?: "background" \| "foreground", label?: string, model?: string, thinking?: string, tools?: string[], role?: string \| roleOverride, worktree?: string, outputSchema?: object, retries?: integer 0..255, timeoutMs?: positive integer \| null }` |
+| `subagents_run` | `{ prompt: string, mode?: "background" | "foreground", label?: string, model?: string, thinking?: string, tools?: string[], skills?: string[], extensions?: string[], role?: string | roleOverride, worktree?: string, outputSchema?: object, retries?: integer 0..255, timeoutMs?: positive integer | null }` |
 | `subagents_inspect` | `{ id?: string }` |
 | `subagents_steer` | `{ id: string, message: string }` |
 | `subagents_stop` | `{ id: string }` |
 | `subagents_retry` | `{ id: string }` |
 
-`prompt` is the only required `subagents_run` property. `mode` defaults to "background". A `role` string selects an existing workflow role. A role override object has `name` and optional `model`, `thinking`, `tools`, `description`, `overrideSystemPrompt`, `contextFiles`, and `disabledAgentResources` fields. A role request cannot also set `model`, `thinking`, or `tools`. `outputSchema` is a JSON Schema object passed to the agent result tool. Worktree names must be non-empty; surrounding whitespace is trimmed. `retries` accepts 0 through 255. `timeoutMs: null` disables an explicit timeout. The other option values use the same validation as the core workflow `agent` call.
+`prompt` is the only required `subagents_run` property. `mode` defaults to "background". A `role` string selects an existing workflow role. A role override object has `name` and optional `model`, `thinking`, `tools`, `skills`, `extensions`, `description`, `overrideSystemPrompt`, and `contextFiles` fields. Capability selectors use ordered minimatch rules and are applied after global, trusted-project, and role selectors. A role request may set final call-level capability selectors but cannot set `model` or `thinking`.
 
 `subagents_inspect({})` returns all accessible run summaries ordered by start time. `subagents_inspect({ id })` returns the detailed lifecycle record, including state, start and finish timestamps, and the live snapshot under `progress`: `state`, cumulative `accounting`, `toolCalls`, `activity`, and `lastEventAt`. The snapshot state never includes the effective system prompt, and inspection has no `usage` field; token totals are derived from accounting. Materialized worktree path and branch are included when available. For completed runs it also includes `value`; for failed runs it includes `error`. A running run has no terminal value yet. Unknown IDs fail with `RUN_NOT_FOUND`.
 
@@ -109,7 +109,7 @@ Set `worktree` on `subagents_run` to create a named isolated Git worktree for th
 
 ## Agent options, roles, and settings
 
-`subagents_run` accepts the same execution options as a workflow `agent(...)`: model, thinking level, tools, named roles or inline role overrides, worktrees, structured output, retries, and timeout. The extension also reuses workflow model aliases, settings, disabled-resource policy, and role discovery:
+`subagents_run` accepts the same execution options as a workflow `agent(...)`: model, thinking level, tool, skill, and extension selectors, named roles or inline role overrides, worktrees, structured output, retries, and timeout. The extension also reuses workflow model aliases, settings, resource selector policy, and role discovery:
 
 - global roles: `<agentDir>/pi-extensible-workflows/roles/<name>.md`, normally `~/.pi/agent/pi-extensible-workflows/roles/`;
 - trusted project roles: `<cwd>/.pi/pi-extensible-workflows/roles/<name>.md`;
