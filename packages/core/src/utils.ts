@@ -142,8 +142,8 @@ export function resourcePatternMatches(resource: string, pattern: string): boole
   if (body === "*") return true;
   return new Minimatch(resourcePatternPath(body), RESOURCE_PATTERN_OPTIONS).match(resourcePatternPath(resource));
 }
-export function selectResourcesByLayers(layers: readonly (readonly string[] | undefined)[], resources: readonly string[], defaultEnabled = true): string[] {
-  const enabled = new Set(defaultEnabled ? resources : []);
+export function selectResourcesByLayers(layers: readonly (readonly string[] | undefined)[], resources: readonly string[]): string[] {
+  const enabled = new Set(resources);
   for (const layer of layers) {
     if (layer === undefined) continue;
     for (const resource of resources) {

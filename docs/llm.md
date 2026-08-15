@@ -111,7 +111,7 @@ Dynamic model aliases are resolved once per launch or resume, then captured for 
 
 ### Resource selectors
 
-The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. Every discovered candidate starts enabled; a matching positive pattern enables it, `!pattern` disables it, and the last matching rule wins. `!*` clears the current selection before narrower positive patterns are applied. Selectors never create unavailable resources or bypass trust filtering. Child capability calls may re-enable discovered skills and extensions through their final overlay, while child tools remain within the parent boundary.
+The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. Every discovered candidate starts enabled; a matching positive pattern enables it, `!pattern` disables it, and the last matching rule wins. `!*` clears the current selection before narrower positive patterns are applied. An empty selector array is a no-op; prepend `!*` to a positive list when it must restrict the candidate set, or use `!*` alone to select none. Selectors never create unavailable resources or bypass trust filtering. Child capability calls may re-enable discovered skills and extensions through their final overlay, while child tools remain within the parent boundary.
 
 ## Standalone Subagents
 
@@ -267,7 +267,7 @@ A role is a Markdown file named `<role>.md` with optional YAML frontmatter and a
 description: Reviews code for correctness
 model: reviewer-model
 thinking: high
-tools: [read, grep]
+tools: ["!*", read, grep]
 skills: ["review-*", "!experimental-*"]
 extensions: ["**/*", "!**/unsafe.mjs"]
 contextFiles: [global, project]
@@ -285,7 +285,7 @@ Role selection can be a string or an object:
 
 ```js
 { role: "reviewer" }
-{ role: { name: "reviewer", model: "cheap-model", thinking: null, tools: [] } }
+{ role: { name: "reviewer", model: "cheap-model", thinking: null, tools: ["!*"] } }
 ```
 
 For a role object, omit a field to inherit it, use `null` to unset it, or provide an explicit replacement. Resource selectors in the top-level agent call are final overlays, including when a named role is selected; model and thinking remain role-only.

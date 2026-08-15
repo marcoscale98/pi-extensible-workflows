@@ -97,7 +97,7 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
   if (!object(parsed)) fail("INVALID_SETTINGS", `Workflow settings at ${path} must be an object`);
   const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", ...(partial ? [] : ["backgroundWidget"]) ]);
   const unknown = Object.keys(parsed).find((key) => !allowed.has(key));
-  if (unknown === "disabledAgentResources") fail("INVALID_SETTINGS", `disabledAgentResources is no longer supported; use skills, extensions, and tools selectors (settings: ${path})`);
+  if (Object.prototype.hasOwnProperty.call(parsed, "disabledAgentResources")) fail("INVALID_SETTINGS", `disabledAgentResources is no longer supported; use skills, extensions, and tools selectors (settings: ${path})`);
   if (unknown) fail("INVALID_SETTINGS", `Unknown workflow setting at ${path}: ${unknown}`);
   const concurrency = parsed.concurrency === undefined ? (partial ? undefined : DEFAULT_SETTINGS.concurrency) : parsed.concurrency;
   if (concurrency !== undefined && (!positiveInteger(concurrency) || concurrency > 16)) fail("INVALID_SETTINGS", `${path}.concurrency must be an integer from 1 to 16`);

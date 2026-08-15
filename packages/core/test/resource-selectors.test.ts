@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadSettings, parseRoleMarkdown, preflight, resolveWorkflowSettings, selectResourcesByLayers, WorkflowAgentExecutor, WorkflowError } from "../src/index.js";
+import { loadSettings, parseRoleMarkdown, preflight, prepareAgentSetupForInspection, resolveWorkflowSettings, selectResourcesByLayers, localAgentTransport, WorkflowAgentExecutor, WorkflowError } from "../src/index.js";
 import { decodeLaunchSnapshot } from "../src/decoders.js";
 
 void test("resource selectors use ordered last-match-wins rules", () => {
@@ -34,6 +34,9 @@ void test("settings and roles expose direct selector fields", () => {
   const legacyPath = join(root, "legacy.json");
   writeFileSync(legacyPath, JSON.stringify({ disabledAgentResources: { skills: ["old"] } }));
   assert.throws(() => loadSettings(legacyPath), (error: unknown) => error instanceof WorkflowError && error.message.includes("use skills, extensions, and tools selectors"));
+  const legacyWithUnknownPath = join(root, "legacy-with-unknown.json");
+  writeFileSync(legacyWithUnknownPath, JSON.stringify({ stale: true, disabledAgentResources: { skills: ["old"] } }));
+  assert.throws(() => loadSettings(legacyWithUnknownPath), (error: unknown) => error instanceof WorkflowError && error.message.includes("use skills, extensions, and tools selectors"));
 });
 
 void test("decodes legacy extension settings in launch snapshots", () => {
@@ -46,6 +49,23 @@ void test("tool selectors cannot widen the root boundary", () => {
   assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", tools: ["!*", "grep"] }).tools, ["grep"]);
   assert.throws(() => executor.resolve({ label: "agent", workflowName: "test", tools: ["!*", "/not-a-tool"] }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
   assert.throws(() => executor.resolve({ label: "agent", workflowName: "test", effectiveTools: ["/not-a-tool"] }, ["read"]), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
+});
+
+void test("child capability selectors can re-enable discovered skills and extensions", async () => {
+  const policy = {
+    globalSettingsPath: "/settings.json",
+    projectSettingsPath: "/project/settings.json",
+    projectTrusted: true,
+    global: { skills: ["*", "!operator-skill"], extensions: ["**/*", "!**/unsafe.mjs"] },
+    project: { skills: [], extensions: [] },
+    effective: { skills: ["*", "!operator-skill"], extensions: ["**/*", "!**/unsafe.mjs"] },
+    unmatchedSkills: [],
+    unmatchedExtensions: [],
+    unmatchedTools: [],
+    selectorSources: { global: { skills: ["*", "!operator-skill"], extensions: ["**/*", "!**/unsafe.mjs"] }, project: {} },
+  };
+  const prepared = await prepareAgentSetupForInspection({ cwd: "/tmp", model: { provider: "test", model: "model" }, tools: new Set(["read"]), availableModels: new Set(["test/model"]), agentResourcePolicy: () => structuredClone(policy) }, "child", { label: "child", workflowName: "test", skills: ["operator-skill"], extensions: ["/opt/unsafe.mjs"], tools: ["!*", "read"] }, localAgentTransport);
+  assert.deepEqual(prepared.setup.sessionInput.resourcePolicy?.effective, { skills: ["*", "!operator-skill", "operator-skill"], extensions: ["**/*", "!**/unsafe.mjs", "/opt/unsafe.mjs"], tools: ["!*", "read"] });
 });
 
 void test("capability layers preserve default-enabled candidates and parent boundaries", () => {

@@ -43,7 +43,7 @@
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span>
 
 <span class="tok-keyword">const</span> fastReview <span class="tok-punctuation">=</span> <span class="tok-keyword">await</span> <span class="tok-function">agent</span><span class="tok-punctuation">(</span><span class="tok-string">"Review this change"</span><span class="tok-punctuation">,</span> <span class="tok-punctuation">{</span>
-  <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span> <span class="tok-property">name</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span> <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model"</span><span class="tok-punctuation">,</span> <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[]</span> <span class="tok-punctuation">}</span>
+  <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span> <span class="tok-property">name</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span> <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model"</span><span class="tok-punctuation">,</span> <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">]</span> <span class="tok-punctuation">}</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span></code></pre>
         <p>Top-level <code>model</code> and <code>thinking</code> cannot be combined with either role form. Top-level <code>tools</code>, <code>skills</code>, and <code>extensions</code> are per-call selectors and can refine the role's selectors.</p>
         <p><a href="subagents.html"><code>@piewf/subagents</code></a> discovers these same role files and applies the same role-name, override, model, thinking, tool, context, and resource-policy validation to standalone agent runs.</p>
@@ -56,7 +56,7 @@
 <span class="tok-property">description</span><span class="tok-punctuation">:</span> Reviews code for correctness
 <span class="tok-property">model</span><span class="tok-punctuation">:</span> anthropic/claude-fable-5
 <span class="tok-property">thinking</span><span class="tok-punctuation">:</span> high
-<span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>read<span class="tok-punctuation">,</span> grep<span class="tok-punctuation">]</span>
+<span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> read<span class="tok-punctuation">,</span> grep<span class="tok-punctuation">]</span>
 <span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"review-*"<span class="tok-punctuation">]</span>
 <span class="tok-property">extensions</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"!**/unsafe.mjs"<span class="tok-punctuation">]</span>
 <span class="tok-punctuation">---</span>
@@ -83,14 +83,14 @@ Focus on correctness and regressions.</code></pre>
         <ul>
           <li>Omit a key to inherit the role-file value.</li>
           <li>Use <code>null</code> to unset an inherited value.</li>
-          <li>Use an explicit value to replace it, including <code>[]</code> and <code>false</code>.</li>
+          <li>Use an explicit value to replace it, including <code>[]</code> and <code>false</code>. For capability selectors, <code>[]</code> is a no-op; prepend <code>!*</code> to restrict the candidate set or use it alone to select none.</li>
         </ul>
         <pre><code class="language-javascript"><span class="tok-keyword">await</span> <span class="tok-function">agent</span><span class="tok-punctuation">(</span><span class="tok-string">"Inspect the API"</span><span class="tok-punctuation">,</span> <span class="tok-punctuation">{</span>
   <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
     <span class="tok-property">name</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span>
     <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model"</span><span class="tok-punctuation">,</span>
     <span class="tok-property">thinking</span><span class="tok-punctuation">:</span> <span class="tok-keyword">null</span><span class="tok-punctuation">,</span>
-    <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[]</span>
+    <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">]</span>
   <span class="tok-punctuation">}</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span></code></pre>
         <p>Per-call overrides can set <code>tools</code>, <code>skills</code>, and <code>extensions</code> selectors, as well as <code>model</code>, <code>thinking</code>, <code>description</code>, <code>overrideSystemPrompt</code>, and <code>contextFiles</code>. Capability selectors are final overlays even when a named role is selected.</p>
