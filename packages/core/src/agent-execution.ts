@@ -46,7 +46,7 @@ export interface PiResourceInspection {
   readonly systemPromptSource?: string;
 }
 import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceExclusions, AgentResourceInspection, AgentResourcePolicy, AgentResourceSelectors, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
-import { deepFreeze, jsonObject, jsonValue, object, modelAliasName, modelCapability, resolveModelReference, selectResources, unmatchedResourcePatterns } from "./utils.js";
+import { deepFreeze, jsonObject, jsonValue, object, modelAliasName, modelCapability, resolveModelReference, resourcePatternHasMagic, selectResourcesByLayers, unmatchedResourcePatterns } from "./utils.js";
 import { roleNameOf } from "./types.js";
 import { WorkflowError } from "./types.js";
 import { createLiveSessionHandoff } from "./session-handoff.js";
@@ -138,11 +138,13 @@ const WORKFLOW_HOST_ENTRIES = new Set([
   canonicalSourcePath(resolve(workflowPackageRoot, "src/index.ts")),
   canonicalSourcePath(resolve(workflowPackageRoot, "dist/src/index.js")),
 ]);
-function canonicalExtensionSelector(selector: string): string {
+function canonicalExtensionSelector(selector: string, base = process.cwd()): string {
   const negated = selector.startsWith("!");
   const body = negated ? selector.slice(1) : selector;
-  if (!existsSync(body) && /[*?\x5b\x5d{}()]/.test(body)) return selector;
-  return `${negated ? "!" : ""}${canonicalSourcePath(body)}`;
+  if (body === "*" || body === "**" || body.startsWith("**/")) return selector;
+  const resolved = resolve(base, body);
+  if (resourcePatternHasMagic(body)) return `${negated ? "!" : ""}${resolved}`;
+  return `${negated ? "!" : ""}${canonicalSourcePath(resolved)}`;
 }
 const WORKFLOW_DIRECTORY = "pi-extensible-workflows";
 function workflowSystemPromptPath(cwd: string, agentDir: string, projectTrusted: boolean): string | undefined {
@@ -268,16 +270,21 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     const packageManager = new DefaultPackageManager({ cwd: input.cwd, agentDir, settingsManager });
     const resolved = await packageManager.resolve();
     const discoveredExtensions = [...new Set(resolved.extensions.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => canonicalSourcePath(path)))];
-    const extensionSelectors = policy.effective.extensions.map((selector) => ({ original: selector, matching: canonicalExtensionSelector(selector) }));
-    const selectedExtensions = selectResources(extensionSelectors.map(({ matching }) => matching), discoveredExtensions);
+    const selectorSources = policy.selectorSources;
+    const extensionLayers = selectorSources ? [selectorSources.global.extensions, selectorSources.project.extensions, selectorSources.role?.extensions, selectorSources.call?.extensions] : [policy.effective.extensions];
+    const extensionSelectors = extensionLayers.flatMap((layer) => (layer ?? []).map((original) => ({ original, matching: canonicalExtensionSelector(original, input.cwd) })));
+    const selectedExtensions = selectResourcesByLayers(extensionLayers.map((layer) => layer?.map((selector) => canonicalExtensionSelector(selector, input.cwd))), discoveredExtensions);
     const extensionPaths = selectedExtensions.filter((path) => !WORKFLOW_HOST_ENTRIES.has(path));
     const unmatchedExtensions = extensionSelectors.filter(({ matching }) => unmatchedResourcePatterns([matching], discoveredExtensions).length > 0).map(({ original }) => original);
-    Object.assign(policy, { selectedExtensions, unmatchedExtensions });
+    policy.selectedExtensions = selectedExtensions;
+    policy.unmatchedExtensions = unmatchedExtensions;
     const skillPaths = [...new Set(resolved.skills.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => path))];
     const updateSkillMatches = (skills: readonly { name: string }[]): Set<string> => {
       const names = [...new Set(skills.map(({ name }) => name))];
-      const selectedSkills = selectResources(policy.effective.skills, names);
-      Object.assign(policy, { selectedSkills, unmatchedSkills: unmatchedResourcePatterns(policy.effective.skills, names) });
+      const skillLayers = selectorSources ? [selectorSources.global.skills, selectorSources.project.skills, selectorSources.role?.skills, selectorSources.call?.skills] : [policy.effective.skills];
+      const selectedSkills = selectResourcesByLayers(skillLayers, names);
+      policy.selectedSkills = selectedSkills;
+      policy.unmatchedSkills = unmatchedResourcePatterns(policy.effective.skills, names);
       return new Set(names.filter((name) => !selectedSkills.includes(name)));
     };
     resourceLoader = new DefaultResourceLoader({
@@ -657,7 +664,7 @@ function resourcePolicyWidened(ceiling: AgentResourcePolicy | undefined, candida
   if (!ceiling) return false;
   if (!candidate) return true;
   if (!ceiling.projectTrusted && candidate.projectTrusted) return true;
-  return (["skills", "extensions", "tools"] as const).some((kind) => (ceiling.effective[kind] ?? []).some((pattern) => !(candidate.effective[kind] ?? []).includes(pattern)));
+  return JSON.stringify(ceiling.effective) !== JSON.stringify(candidate.effective) || JSON.stringify(ceiling.selectorSources) !== JSON.stringify(candidate.selectorSources);
 }
 function packageRoot(start: string): string | undefined {
   let current = dirname(realpathSync(start));
@@ -722,22 +729,33 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
   const roleName = roleNameOf(options.role);
   const roleDefinition = roleName ? root.agentDefinitions?.[roleName] : undefined;
   const effectiveRoleDefinition = roleDefinition && typeof options.role === "object" ? applyRoleOverride(roleDefinition, options.role) : roleDefinition;
-  const roleSelectors: AgentResourceSelectors | undefined = effectiveRoleDefinition ? { ...(effectiveRoleDefinition.skills === undefined ? {} : { skills: effectiveRoleDefinition.skills }), ...(effectiveRoleDefinition.extensions === undefined ? {} : { extensions: effectiveRoleDefinition.extensions }), ...(effectiveRoleDefinition.tools === undefined ? {} : { tools: effectiveRoleDefinition.tools }) } : undefined;
+  const roleSelectors: AgentResourceSelectors | undefined = effectiveRoleDefinition ? {
+    ...(effectiveRoleDefinition.skills === undefined ? {} : { skills: effectiveRoleDefinition.skills }),
+    ...(effectiveRoleDefinition.extensions === undefined ? {} : { extensions: effectiveRoleDefinition.extensions.map((selector) => canonicalExtensionSelector(selector, cwd)) }),
+    ...(effectiveRoleDefinition.tools === undefined ? {} : { tools: effectiveRoleDefinition.tools }),
+  } : undefined;
   const selectorValue = (key: "skills" | "extensions" | "tools", fallback: readonly string[] | undefined): readonly string[] | undefined => {
     const value = baselineOptions[key];
-    return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : fallback;
+    if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) return value;
+    return options.agentOptions === undefined ? fallback : undefined;
   };
   const rawCallSkills = selectorValue("skills", options.skills);
-  const rawCallExtensions = selectorValue("extensions", options.extensions);
+  const rawCallExtensions = selectorValue("extensions", options.extensions)?.map((selector) => canonicalExtensionSelector(selector, cwd));
   const rawCallTools = selectorValue("tools", options.tools);
   const callSelectors: AgentResourceSelectors = { ...(rawCallSkills === undefined ? {} : { skills: rawCallSkills }), ...(rawCallExtensions === undefined ? {} : { extensions: rawCallExtensions }), ...(rawCallTools === undefined ? {} : { tools: rawCallTools }) };
-  const hasCallSelectors = Object.values(callSelectors).some((value) => value !== undefined);
   const resourcePolicy: AgentResourcePolicy | undefined = baseResourcePolicy ? {
     ...baseResourcePolicy,
-    effective: { skills: [...baseResourcePolicy.effective.skills, ...(roleSelectors?.skills ?? []), ...(hasCallSelectors ? rawCallSkills ?? [] : [])], extensions: [...baseResourcePolicy.effective.extensions, ...(roleSelectors?.extensions ?? []), ...(hasCallSelectors ? rawCallExtensions ?? [] : [])], tools: [...(baseResourcePolicy.effective.tools ?? []), ...(roleSelectors?.tools ?? []), ...(hasCallSelectors ? rawCallTools ?? [] : [])] },
-    selectorSources: { global: baseResourcePolicy.selectorSources?.global ?? baseResourcePolicy.global, project: baseResourcePolicy.selectorSources?.project ?? baseResourcePolicy.project, ...(roleSelectors ? { role: roleSelectors } : {}), ...(hasCallSelectors ? { call: callSelectors } : {}) },
+    effective: {
+      skills: [...baseResourcePolicy.effective.skills, ...(roleSelectors?.skills ?? []), ...(rawCallSkills ?? [])],
+      extensions: [...baseResourcePolicy.effective.extensions, ...(roleSelectors?.extensions ?? []), ...(rawCallExtensions ?? [])],
+      ...(baseResourcePolicy.effective.tools === undefined && roleSelectors?.tools === undefined && rawCallTools === undefined ? {} : { tools: [...(baseResourcePolicy.effective.tools ?? []), ...(roleSelectors?.tools ?? []), ...(rawCallTools ?? [])] }),
+    },
+    selectorSources: { global: baseResourcePolicy.selectorSources?.global ?? baseResourcePolicy.global, project: baseResourcePolicy.selectorSources?.project ?? baseResourcePolicy.project, ...(roleSelectors ? { role: roleSelectors } : {}), ...(Object.keys(callSelectors).length ? { call: callSelectors } : {}) },
   } : undefined;
-  if (resourcePolicy) Object.assign(resourcePolicy, { selectedTools: resolved.tools, unmatchedTools: unmatchedResourcePatterns(resourcePolicy.effective.tools ?? [], [...root.tools]) });
+  if (resourcePolicy) {
+    resourcePolicy.selectedTools = resolved.tools;
+    resourcePolicy.unmatchedTools = unmatchedResourcePatterns(resourcePolicy.effective.tools ?? [], [...root.tools]);
+  }
   const resourcePolicyCeiling = resourcePolicy ? structuredClone(resourcePolicy) : undefined;
   const sessionInput: SessionInput = { cwd, model: { ...resolved.model }, tools: [...resolved.tools], sessionLabel: `${options.workflowName}:${options.label}:attempt-${String(attempt)}`, ...(root.agentDir ? { agentDir: root.agentDir } : {}), ...(root.additionalSkillPaths?.length ? { additionalSkillPaths: [...root.additionalSkillPaths] } : {}), ...(resolved.contextFiles === undefined ? {} : { contextFiles: [...resolved.contextFiles] }), ...(customTools.length ? { customTools: [...customTools] } : {}), ...(resultTool ? { resultTool } : {}), ...(resolved.systemPrompt !== undefined ? { systemPrompt: resolved.systemPrompt } : {}), systemPromptAppend: resolved.systemPromptAppend, ...(resourcePolicy ? { resourcePolicy } : {}), options: structuredClone(baselineOptions) };
   const setup = { prompt: task, options: sessionInput.options ?? {}, sessionInput, prepared: preparedAgentSession(sessionInput, task), transport };
@@ -825,8 +843,15 @@ export class WorkflowAgentExecutor {
       this.root.resourceSelectors?.tools,
       roleDefinition?.tools,
       options.tools,
-    ].flatMap((selectors) => selectors ?? []);
-    const requested = selectResources(selectorLayers, candidateTools);
+    ];
+    const hasToolSelectors = selectorLayers.some((selectors) => selectors !== undefined);
+    for (const layer of selectorLayers) {
+      for (const pattern of layer ?? []) {
+        const body = pattern.startsWith("!") ? pattern.slice(1) : pattern;
+        if (!pattern.startsWith("!") && !resourcePatternHasMagic(pattern) && !candidateTools.includes(body)) throw new WorkflowError("UNKNOWN_TOOL", `Tool is outside the launching session boundary: ${body}`);
+      }
+    }
+    const requested = hasToolSelectors ? selectResourcesByLayers(selectorLayers, candidateTools) : options.effectiveTools ?? candidateTools;
     const forbidden = requested.find((tool) => !this.root.tools.has(tool));
     if (forbidden) throw new WorkflowError("UNKNOWN_TOOL", `Tool is outside the launching session boundary: ${forbidden}`);
     const requestedModel = options.model ?? roleDefinition?.model;

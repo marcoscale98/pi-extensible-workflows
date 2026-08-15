@@ -196,8 +196,8 @@ void test("strict settings use defaults and reject unknown or unsafe values", ()
   assert.equal(loadSettings(path).backgroundWidget, false);
   writeFileSync(path, JSON.stringify({ backgroundWidget: "yes" }));
   assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS");
-  writeFileSync(path, JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: true } } }));
-  assert.equal(loadSettings(path).extensions?.herdr?.enableFullyInspectableMode, true);
+  writeFileSync(path, JSON.stringify({ extensionSettings: { herdr: { enableFullyInspectableMode: true } } }));
+  assert.equal(loadSettings(path).extensionSettings?.herdr?.enableFullyInspectableMode, true);
   writeFileSync(path, JSON.stringify({ extensions: { herdr: { enableFullyInspectableMode: "yes" } } }));
   assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS");
   writeFileSync(path, JSON.stringify({ agentTimeoutMs: 500 }));

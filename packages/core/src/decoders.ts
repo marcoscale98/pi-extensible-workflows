@@ -190,10 +190,12 @@ function decodeWorkflowSettings(value: unknown): LaunchSnapshot["settings"] | un
   const skills = value.skills === undefined ? undefined : decodeStringArray(value.skills);
   const tools = value.tools === undefined ? undefined : decodeStringArray(value.tools);
   const extensions = value.extensions === undefined ? undefined : Array.isArray(value.extensions) ? decodeStringArray(value.extensions) : decodeWorkflowExtensions(value.extensions);
-  if (backgroundWidget === INVALID_PERSISTED_VALUE || (value.modelAliases !== undefined && !modelAliases) || value.skills !== undefined && !skills || value.tools !== undefined && !tools || (value.extensions !== undefined && !extensions)) return undefined;
+  const extensionSettings = value.extensionSettings === undefined ? undefined : decodeWorkflowExtensions(value.extensionSettings);
+  if (backgroundWidget === INVALID_PERSISTED_VALUE || (value.modelAliases !== undefined && !modelAliases) || value.skills !== undefined && !skills || value.tools !== undefined && !tools || value.extensions !== undefined && !extensions || value.extensionSettings !== undefined && !extensionSettings) return undefined;
   return {
     concurrency: value.concurrency,
-    ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }), ...(skills === undefined ? {} : { skills }), ...(tools === undefined ? {} : { tools }), ...(extensions === undefined ? {} : { extensions: extensions as NonNullable<LaunchSnapshot["settings"]["extensions"]> }),
+    ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }), ...(skills === undefined ? {} : { skills }), ...(tools === undefined ? {} : { tools }),
+    ...(extensions === undefined ? {} : { extensions: extensions as NonNullable<LaunchSnapshot["settings"]["extensions"]> }), ...(extensionSettings === undefined ? {} : { extensionSettings }),
   };
 }
 function decodeWorkflowSettingsSources(value: unknown): NonNullable<LaunchSnapshot["settingsSources"]> | undefined {
@@ -201,8 +203,9 @@ function decodeWorkflowSettingsSources(value: unknown): NonNullable<LaunchSnapsh
   const skills = value.skills === undefined ? undefined : typeof value.skills === "string" ? value.skills : undefined;
   const extensions = value.extensions === undefined ? undefined : typeof value.extensions === "string" ? value.extensions : undefined;
   const tools = value.tools === undefined ? undefined : typeof value.tools === "string" ? value.tools : undefined;
-  if (value.skills !== undefined && skills === undefined || value.extensions !== undefined && extensions === undefined || value.tools !== undefined && tools === undefined) return undefined;
-  return { concurrency: value.concurrency, modelAliases: value.modelAliases, ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(tools === undefined ? {} : { tools }) };
+  const extensionSettings = value.extensionSettings === undefined ? undefined : typeof value.extensionSettings === "string" ? value.extensionSettings : undefined;
+  if (value.skills !== undefined && skills === undefined || value.extensions !== undefined && extensions === undefined || value.tools !== undefined && tools === undefined || value.extensionSettings !== undefined && extensionSettings === undefined) return undefined;
+  return { concurrency: value.concurrency, modelAliases: value.modelAliases, ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(tools === undefined ? {} : { tools }), ...(extensionSettings === undefined ? {} : { extensionSettings }) };
 }
 function decodeIdentity(value: unknown): PersistedIdentity | undefined {
   if (!object(value) || typeof value.callSite !== "string" || !positiveInteger(value.occurrence)) return undefined;
@@ -284,8 +287,16 @@ function decodeAgentResourceInspection(value: unknown): AgentResourceInspection 
   const unmatchedSkills = decodeStringArray(value.unmatchedSkills);
   const unmatchedExtensions = decodeStringArray(value.unmatchedExtensions);
   const unmatchedTools = decodeStringArray(value.unmatchedTools);
-  if (!selectors || !skills || !extensions || !tools || !unmatchedSkills || !unmatchedExtensions || !unmatchedTools) return undefined;
-  return { selectors: { skills: [...(selectors.skills ?? [])], extensions: [...(selectors.extensions ?? [])], tools: [...(selectors.tools ?? [])] }, skills, extensions, tools, unmatchedSkills, unmatchedExtensions, unmatchedTools };
+  const rawSources = value.selectorSources;
+  const sourceRecord = object(rawSources) ? rawSources : undefined;
+  const sources = sourceRecord === undefined ? undefined : {
+    global: decodeAgentResourceSelectors(sourceRecord.global),
+    project: decodeAgentResourceSelectors(sourceRecord.project),
+    ...(sourceRecord.role === undefined ? {} : { role: decodeAgentResourceSelectors(sourceRecord.role) }),
+    ...(sourceRecord.call === undefined ? {} : { call: decodeAgentResourceSelectors(sourceRecord.call) }),
+  };
+  if (!selectors || !skills || !extensions || !tools || !unmatchedSkills || !unmatchedExtensions || !unmatchedTools || rawSources !== undefined && (!sources || !sources.global || !sources.project || sources.role === undefined && sourceRecord?.role !== undefined || sources.call === undefined && sourceRecord?.call !== undefined)) return undefined;
+  return { selectors: { skills: [...(selectors.skills ?? [])], extensions: [...(selectors.extensions ?? [])], tools: [...(selectors.tools ?? [])] }, skills, extensions, tools, unmatchedSkills, unmatchedExtensions, unmatchedTools, ...(sources === undefined ? {} : { selectorSources: { global: sources.global ?? {}, project: sources.project ?? {}, ...(sources.role === undefined ? {} : { role: sources.role }), ...(sources.call === undefined ? {} : { call: sources.call }) } }) };
 }
 function decodeAgentSetupSummary(value: unknown): NonNullable<NonNullable<AgentRecord["attemptDetails"]>[number]["setup"]> | undefined {
   if (!object(value) || typeof value.cwd !== "string") return undefined;

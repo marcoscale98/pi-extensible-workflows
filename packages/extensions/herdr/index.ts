@@ -41,10 +41,11 @@ import type {
   WorkflowExtension,
   WorkflowRunContext,
   WorkflowSettings,
+  HerdrExtensionSettings,
 } from "pi-extensible-workflows";
 
-type HerdrSettings = Pick<WorkflowSettings, "extensions">;
-type HerdrConfig = NonNullable<NonNullable<HerdrSettings["extensions"]>["herdr"]>;
+type HerdrSettings = Pick<WorkflowSettings, "extensions" | "extensionSettings">;
+type HerdrConfig = HerdrExtensionSettings;
 type HerdrResourcePaths = { extensions: readonly string[]; skills: readonly string[] };
 type HerdrModelContext = { readonly model: ExtensionContext["model"]; readonly modelRegistry: ModelRegistry | undefined };
 type HerdrSession = Omit<WorkflowAgentSession, "getLastAssistant" | "abort"> & { getLastAssistant?(): WorkflowAgentMessage | undefined; abort(): Promise<void>; getHerdrResourcePaths?(): HerdrResourcePaths | undefined; getHerdrContextFiles?(): readonly ContextFile[] | undefined; getHerdrModelContext?(): HerdrModelContext | undefined };
@@ -77,8 +78,10 @@ function settings(agentDirectory = agentDir()): HerdrSettings {
 }
 
 function herdrConfig(agentDirectory = agentDir()): HerdrConfig {
-  const extensions = settings(agentDirectory).extensions;
-  return extensions && !Array.isArray(extensions) && extensions.herdr ? extensions.herdr : {};
+  const workflowSettings = settings(agentDirectory);
+  const extensions = workflowSettings.extensions;
+  if (extensions !== undefined && !Array.isArray(extensions) && "herdr" in extensions) return extensions.herdr;
+  return workflowSettings.extensionSettings?.herdr ?? {};
 }
 
 export function isFullyInspectableMode(agentDirectory = agentDir()): boolean { return herdrConfig(agentDirectory).enableFullyInspectableMode === true; }

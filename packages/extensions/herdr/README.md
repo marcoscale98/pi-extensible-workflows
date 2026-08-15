@@ -33,13 +33,15 @@ Set the global workflow settings file, normally `~/.pi/agent/pi-extensible-workf
 
 ```json
 {
-  "extensions": {
+  "extensionSettings": {
     "herdr": {
       "enableFullyInspectableMode": true
     }
   }
 }
 ```
+
+Use `extensionSettings.herdr` when workflow `extensions` selectors are configured in the same settings file. The legacy `extensions.herdr` object remains readable when no selector array is needed.
 
 This setting is global-only. When enabled, every workflow agent launches in a dedicated labeled Herdr workspace and the manual live-session action is hidden. Completed-session inspection remains available.
 

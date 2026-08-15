@@ -3,10 +3,11 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadSettings, parseRoleMarkdown, resolveWorkflowSettings, selectResources, WorkflowAgentExecutor, WorkflowError } from "../src/index.js";
+import { loadSettings, parseRoleMarkdown, preflight, resolveWorkflowSettings, selectResources, WorkflowAgentExecutor, WorkflowError } from "../src/index.js";
 
 void test("resource selectors use ordered last-match-wins rules", () => {
   const candidates = ["review-skill", "experimental-skill", "/opt/reviewer.mjs", "/opt/unsafe.mjs", "read", "write"];
+  assert.deepEqual(selectResources(["review-*"], candidates), ["review-skill"]);
   assert.deepEqual(selectResources(["*", "!experimental-*"], candidates), ["review-skill", "/opt/reviewer.mjs", "/opt/unsafe.mjs", "read", "write"]);
   assert.deepEqual(selectResources(["!*", "review-*"], candidates), ["review-skill"]);
   assert.deepEqual(selectResources(["*", "!write", "write"], candidates), candidates);
@@ -35,5 +36,16 @@ void test("settings and roles expose direct selector fields", () => {
 void test("tool selectors cannot widen the root boundary", () => {
   const executor = new WorkflowAgentExecutor({ cwd: "/tmp", model: { provider: "test", model: "model" }, tools: new Set(["read", "grep"]), resourceSelectors: { tools: ["!*", "read"] }, availableModels: new Set(["test/model"]) });
   assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", tools: ["!*", "grep"] }).tools, ["grep"]);
-  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", tools: ["!*", "/not-a-tool"] }).tools, []);
+  assert.throws(() => executor.resolve({ label: "agent", workflowName: "test", tools: ["!*", "/not-a-tool"] }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
+});
+
+void test("positive capability layers preserve least privilege and parent boundaries", () => {
+  const executor = new WorkflowAgentExecutor({ cwd: "/tmp", model: { provider: "test", model: "model" }, tools: new Set(["read", "grep", "bash"]), resourceSelectors: { tools: ["*", "!bash"] }, agentDefinitions: { reviewer: { tools: ["read"] } }, availableModels: new Set(["test/model"]) });
+  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", role: "reviewer" }).tools, ["read"]);
+  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", role: "reviewer", tools: ["grep"] }).tools, ["grep"]);
+  assert.deepEqual(executor.resolve({ label: "agent", workflowName: "test", tools: [] }).tools, []);
+});
+
+void test("static selector validation is not skipped by dynamic options", () => {
+  assert.throws(() => preflight("const label = process.env.LABEL; agent(\"x\", { tools: [1], label });", { models: new Set(["test/model"]), tools: new Set(["read"]), agentTypes: new Set() }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
 });

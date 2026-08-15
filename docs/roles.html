@@ -34,7 +34,7 @@
     <article class="prose">
       <p class="eyebrow">Role author path</p>
       <h1>Define and customize agent roles</h1>
-      <p class="lead">Roles package a reusable agent policy: model, thinking level, tools, prompt instructions, context-file scope, and resource exclusions. Use a role file for the stable defaults, then use a role object when one call needs a deliberate exception.</p>
+      <p class="lead">Roles package a reusable agent policy: model, thinking level, tools, skills, extensions, prompt instructions, and context-file scope. Use a role file for stable defaults, then use a role object or top-level call selectors when one call needs a deliberate capability overlay.</p>
       <section id="overview">
         <h2>Overview</h2>
         <p>A workflow agent can use a role name or a role object. A string applies the role file unchanged. An object must contain <code>name</code> and can override role frontmatter for that call. The role name and role body always come from the named file.</p>

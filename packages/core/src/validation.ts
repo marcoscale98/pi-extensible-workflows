@@ -39,14 +39,14 @@ function normalizedResourcePath(value: string, settingsPath: string): string {
   }
   try { return realpathSync(resolved); } catch { return resolved; }
 }
-function validateSelectorList(value: unknown, path: string, kind: "skills" | "extensions" | "tools", errorCode: "INVALID_SETTINGS" | "INVALID_METADATA" = "INVALID_SETTINGS"): readonly string[] | undefined {
+function validateSelectorList(value: unknown, path: string, kind: "skills" | "extensions" | "tools", errorCode: "INVALID_SETTINGS" | "INVALID_METADATA" = "INVALID_SETTINGS", normalizeExtensions = true): readonly string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) fail(errorCode, `${path}.${kind} must be an array`);
   const normalized: string[] = [];
   for (const [index, entry] of value.entries()) {
     if (typeof entry !== "string" || !entry.trim()) fail(errorCode, `${path}.${kind}[${String(index)}] must be a non-empty string`);
     let selector = entry.trim();
-    if (kind === "extensions") {
+    if (kind === "extensions" && normalizeExtensions) {
       const negated = selector.startsWith("!");
       const body = negated ? selector.slice(1) : selector;
       if (!body) fail(errorCode, `${path}.${kind}[${String(index)}] must be a valid minimatch pattern: Empty minimatch pattern ${JSON.stringify(selector)}`);
@@ -57,6 +57,11 @@ function validateSelectorList(value: unknown, path: string, kind: "skills" | "ex
   }
   return Object.freeze(normalized);
 }
+function extensionSettingsFrom(settings: Readonly<WorkflowSettings | WorkflowSettingsOverrides>): Readonly<WorkflowExtensionSettings> | undefined {
+  const value = settings.extensions;
+  if (value === undefined || Array.isArray(value) || !object(value)) return undefined;
+  return value;
+}
 function selectorsFromSettings(settings: Readonly<WorkflowSettings | WorkflowSettingsOverrides>): AgentResourceSelectors {
   return {
     ...(settings.skills === undefined ? {} : { skills: settings.skills }),
@@ -64,7 +69,7 @@ function selectorsFromSettings(settings: Readonly<WorkflowSettings | WorkflowSet
     ...(settings.tools === undefined ? {} : { tools: settings.tools }),
   };
 }
-function selectorSet(value: AgentResourceSelectors | undefined): AgentResourceSelectorSet { return { skills: [...(value?.skills ?? [])], extensions: [...(value?.extensions ?? [])], tools: [...(value?.tools ?? [])] }; }
+function selectorSet(value: AgentResourceSelectors | undefined): AgentResourceSelectorSet { return { skills: [...(value?.skills ?? [])], extensions: [...(value?.extensions ?? [])], ...(value?.tools === undefined ? {} : { tools: [...value.tools] }) }; }
 const CONTEXT_FILE_SCOPES = ["global", "project", "cwd"] as const;
 function isContextFileScope(value: unknown): value is ContextFileScope { return CONTEXT_FILE_SCOPES.some((scope) => scope === value); }
 function validateContextFileScopes(value: unknown, rolePath: string): readonly ContextFileScope[] | undefined {
@@ -96,7 +101,7 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
     fail("CONFIG_ERROR", `Invalid workflow settings JSON at ${path}: ${errorText(error)}`);
   }
   if (!object(parsed)) fail("INVALID_SETTINGS", `Workflow settings at ${path} must be an object`);
-  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "tools", ...(partial ? [] : ["backgroundWidget"]) ]);
+  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", ...(partial ? [] : ["backgroundWidget"]) ]);
   const unknown = Object.keys(parsed).find((key) => !allowed.has(key));
   if (unknown) fail("INVALID_SETTINGS", `Unknown workflow setting at ${path}: ${unknown}`);
   const concurrency = parsed.concurrency === undefined ? (partial ? undefined : DEFAULT_SETTINGS.concurrency) : parsed.concurrency;
@@ -107,8 +112,13 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
   const skills = validateSelectorList(parsed.skills, path, "skills");
   const tools = validateSelectorList(parsed.tools, path, "tools");
   const extensions = Array.isArray(parsed.extensions) ? validateSelectorList(parsed.extensions, path, "extensions") : undefined;
-  const extensionSettings = parsed.extensions === undefined || Array.isArray(parsed.extensions) ? undefined : validateWorkflowExtensions(parsed.extensions, path);
-  return Object.freeze({ ...(concurrency === undefined ? {} : { concurrency }), ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }), ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? extensionSettings === undefined ? {} : { extensions: extensionSettings } : { extensions }), ...(tools === undefined ? {} : { tools }) });
+  const legacyExtensionSettings = parsed.extensions === undefined || Array.isArray(parsed.extensions) ? undefined : validateWorkflowExtensions(parsed.extensions, path);
+  const extensionSettings = parsed.extensionSettings === undefined ? undefined : validateWorkflowExtensions(parsed.extensionSettings, path);
+  return Object.freeze({
+    ...(concurrency === undefined ? {} : { concurrency }), ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }),
+    ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? legacyExtensionSettings === undefined ? {} : { extensions: legacyExtensionSettings } : { extensions }),
+    ...(extensionSettings === undefined ? {} : { extensionSettings }), ...(tools === undefined ? {} : { tools }),
+  });
 }
 export function loadSettings(path = workflowSettingsPath()): Readonly<WorkflowSettings> { return parseSettings(path, false); }
 export function loadSettingsOverrides(path: string): Readonly<WorkflowSettingsOverrides> { return parseSettings(path, true); }
@@ -123,20 +133,26 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
   const effectiveSelectors = selectorSet({
     skills: [...(globalSelectors.skills ?? []), ...(projectSelectors.skills ?? [])],
     extensions: [...(globalSelectors.extensions ?? []), ...(projectSelectors.extensions ?? [])],
-    tools: [...(globalSelectors.tools ?? []), ...(projectSelectors.tools ?? [])],
+    ...(globalSelectors.tools === undefined && projectSelectors.tools === undefined ? {} : { tools: [...(globalSelectors.tools ?? []), ...(projectSelectors.tools ?? [])] }),
   });
+  const hasExtensionSelectors = Array.isArray(global.extensions) || Array.isArray(project.extensions);
+  const legacyExtensionSettings = extensionSettingsFrom(project) ?? extensionSettingsFrom(global);
+  const configuredExtensionSettings = projectHas("extensionSettings") ? project.extensionSettings : global.extensionSettings;
+  const extensionSettings = configuredExtensionSettings ?? (hasExtensionSelectors ? legacyExtensionSettings : undefined);
   const sources: WorkflowSettingsSources = {
     concurrency: projectHas("concurrency") ? projectSettingsPath : globalSettingsPath,
     modelAliases: projectHas("modelAliases") ? projectSettingsPath : globalSettingsPath,
     skills: sourceFor("skills"), extensions: sourceFor("extensions"), tools: sourceFor("tools"),
+    ...(extensionSettings === undefined ? {} : { extensionSettings: projectHas("extensionSettings") ? projectSettingsPath : globalSettingsPath }),
   };
   const effective = Object.freeze({
     concurrency: project.concurrency ?? global.concurrency,
     backgroundWidget: global.backgroundWidget ?? true,
     ...(projectHas("modelAliases") ? { modelAliases: project.modelAliases } : global.modelAliases === undefined ? {} : { modelAliases: global.modelAliases }),
     ...(effectiveSelectors.skills.length ? { skills: effectiveSelectors.skills } : global.skills !== undefined || project.skills !== undefined ? { skills: effectiveSelectors.skills } : {}),
-    ...(effectiveSelectors.extensions.length ? { extensions: effectiveSelectors.extensions } : (globalSelectors.extensions ?? []).length || (projectSelectors.extensions ?? []).length ? { extensions: effectiveSelectors.extensions } : {}),
-    ...((effectiveSelectors.tools ?? []).length ? { tools: effectiveSelectors.tools } : global.tools !== undefined || project.tools !== undefined ? { tools: effectiveSelectors.tools } : {}),
+    ...(hasExtensionSelectors ? { extensions: effectiveSelectors.extensions } : legacyExtensionSettings === undefined ? {} : { extensions: legacyExtensionSettings }),
+    ...(extensionSettings === undefined ? {} : { extensionSettings }),
+    ...(effectiveSelectors.tools?.length ? { tools: effectiveSelectors.tools } : global.tools !== undefined || project.tools !== undefined ? { tools: effectiveSelectors.tools } : {}),
   });
   return { globalSettingsPath, projectSettingsPath, projectTrusted, global, project, effective, sources };
 }
@@ -176,10 +192,14 @@ export function parseRoleMarkdown(content: string, strict = false, rolePath?: st
     if (end < 0) return { prompt: content };
     const meta: Record<string, string> = {};
     for (const line of content.slice(4, end).split("\n")) {
-      const match = /^(model|thinking|tools|description|overrideSystemPrompt|override_system_prompt|is_system_prompt|contextFiles)\s*:\s*(.+)$/.exec(line.trim());
+      const match = /^(model|thinking|tools|skills|extensions|description|overrideSystemPrompt|override_system_prompt|is_system_prompt|contextFiles|disabledAgentResources)\s*:\s*(.+)$/.exec(line.trim());
+      if (match?.[1] === "disabledAgentResources") fail("INVALID_METADATA", "disabledAgentResources is no longer supported; use skills, extensions, and tools selectors");
       if (match?.[1] && match[2]) meta[match[1]] = match[2].trim();
     }
-    const tools = meta.tools ? meta.tools.replace(/^\[|\]$/g, "").split(",").map((tool) => tool.trim().replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "")).filter(Boolean) : undefined;
+    const parseList = (value: string | undefined): string[] | undefined => value === undefined ? undefined : value.replace(/^\[|\]$/g, "").split(",").map((entry) => entry.trim().replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "")).filter(Boolean);
+    const tools = parseList(meta.tools);
+    const skills = parseList(meta.skills);
+    const extensions = parseList(meta.extensions);
     const rawThinking = meta.thinking?.replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "");
     const thinking = rawThinking ? parseThinking(rawThinking) : undefined;
     if (rawThinking && !thinking) fail("INVALID_METADATA", `Invalid role thinking level: ${rawThinking}`);
@@ -188,6 +208,8 @@ export function parseRoleMarkdown(content: string, strict = false, rolePath?: st
     if (meta.description) definition.description = meta.description.replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "");
     if (thinking !== undefined) definition.thinking = thinking;
     if (tools) definition.tools = tools;
+    if (skills) definition.skills = skills;
+    if (extensions) definition.extensions = extensions;
     const overrideSystemPrompt = meta.overrideSystemPrompt ?? meta.override_system_prompt ?? meta.is_system_prompt;
     const contextFiles = meta.contextFiles ? meta.contextFiles.replace(/^\[|\]$/g, "").split(",").map((scope) => scope.trim().replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "")).filter(Boolean) : undefined;
     const normalizedContextFiles = validateContextFileScopes(contextFiles, "role");
@@ -291,7 +313,7 @@ function readRoleDefinitions(dirs: readonly WorkflowRoleDirectoryInput[], extens
 export function loadAgentDefinitions(cwd: string, agentDir = getAgentDir(), projectTrusted = true, extensionRoleDirectories: readonly WorkflowRoleDirectoryInput[] = registeredWorkflowRoleDirectoryRegistrations()): Readonly<Record<string, AgentDefinition>> {
   return deepFreeze({ ...readRoleDefinitions(extensionRoleDirectories, true), ...readRoleDefinitions(workflowRoleDirectories(agentDir)), ...(projectTrusted ? readRoleDefinitions(projectRoleDirectories(join(cwd, ".pi"))) : {}) });
 }
-function validateRolePolicies(definitions: Readonly<Record<string, AgentDefinition>>, roles: readonly string[], availableModels: ReadonlySet<string>, aliases: Readonly<Record<string, string>> = {}, knownModels = availableModels, settingsPath?: string): void {
+function validateRolePolicies(definitions: Readonly<Record<string, AgentDefinition>>, roles: readonly string[], availableModels: ReadonlySet<string>, rootTools: ReadonlySet<string>, aliases: Readonly<Record<string, string>> = {}, knownModels = availableModels, settingsPath?: string): void {
   for (const role of roles) {
     const definition = definitions[role];
     if (!definition) continue;
@@ -302,7 +324,10 @@ function validateRolePolicies(definitions: Readonly<Record<string, AgentDefiniti
         fail("UNKNOWN_MODEL", `Unknown model for role ${role}: ${resolved}`);
       }
     }
-    // Capability selectors are evaluated against the launching root's available tool set. Unmatched patterns do not create tools.
+    for (const pattern of definition.tools ?? []) {
+      const body = pattern.startsWith("!") ? pattern.slice(1) : pattern;
+      if (!pattern.startsWith("!") && !resourcePatternHasMagic(pattern) && !rootTools.has(body)) fail("UNKNOWN_TOOL", `Unknown tool for role ${role}: ${body}`);
+    }
   }
 }
 
@@ -551,7 +576,7 @@ export function validateRoleOverride(value: unknown, aliases?: Readonly<Record<s
   if (thinking !== undefined && thinking !== null && (typeof thinking !== "string" || !parseThinking(thinking))) fail("INVALID_METADATA", "agent role override thinking must be off, minimal, low, medium, high, xhigh, or max, or null");
   const normalizedTools = tools === undefined || tools === null ? tools : validateSelectorList(tools, "role override", "tools", "INVALID_METADATA");
   const normalizedSkills = skills === undefined || skills === null ? skills : validateSelectorList(skills, "role override", "skills", "INVALID_METADATA");
-  const normalizedExtensions = extensions === undefined || extensions === null ? extensions : validateSelectorList(extensions, "role override", "extensions", "INVALID_METADATA");
+  const normalizedExtensions = extensions === undefined || extensions === null ? extensions : validateSelectorList(extensions, "role override", "extensions", "INVALID_METADATA", false);
   if (description !== undefined && description !== null && (typeof description !== "string" || description.trim() === "" || description.length > 1024 || /[\r\n]/.test(description))) fail("INVALID_METADATA", "agent role override description must be a non-empty single-line string of at most 1024 characters or null");
   if (overrideSystemPrompt !== undefined && overrideSystemPrompt !== null && typeof overrideSystemPrompt !== "boolean") fail("INVALID_METADATA", "agent role override overrideSystemPrompt must be a boolean or null");
   const normalizedContextFiles = contextFiles === undefined || contextFiles === null ? contextFiles : validateContextFileScopes(contextFiles, "role override");
@@ -584,7 +609,7 @@ function validateAgentOption(key: string, value: unknown, aliases?: Readonly<Rec
     case "tools":
     case "skills":
     case "extensions":
-      validateSelectorList(value, "agent options", key, "INVALID_METADATA");
+      validateSelectorList(value, "agent options", key, "INVALID_METADATA", key !== "extensions");
       break;
     case "role":
       if (typeof value === "string") {
@@ -712,11 +737,11 @@ function validateStaticAgentOptions(node: acorn.AnyNode | undefined, aliases: Re
   if (options.known && object(options.value)) {
     const optionValues = options.value;
     if (optionValues.role !== undefined && ["model", "thinking"].some((key) => Object.prototype.hasOwnProperty.call(optionValues, key))) fail("INVALID_METADATA", "Role agents must not specify model or thinking; capability selectors are final call overlays");
+  }
   for (const key of AGENT_OPTION_KEYS) {
     const value = staticValue(propertyNode(node, key));
     if (value.known) validateAgentOption(key, value.value, aliases, knownModels, settingsPath);
   }
-}
 }
 function hasDynamicAgentRole(node: acorn.AnyNode | undefined): boolean {
   if (!node) return false;
@@ -796,6 +821,10 @@ export function preflight(script: string, capabilities: PreflightCapabilities, s
     return candidates.flatMap((value) => value?.type === "ArrayExpression" ? value.elements.flatMap((element) => { const tool = element && element.type !== "SpreadElement" ? literalString(element) : undefined; return tool === undefined ? [] : [tool]; }) : []);
   });
   const agentTypes = agentCalls.flatMap((call) => { const value = staticRoleName(propertyNode(call.arguments[1], "role")); return value === null ? [] : [value]; });
+  for (const pattern of tools) {
+    const body = pattern.startsWith("!") ? pattern.slice(1) : pattern;
+    if (!pattern.startsWith("!") && !resourcePatternHasMagic(pattern) && !capabilities.tools.has(body)) fail("UNKNOWN_TOOL", `Unknown tool: ${body}`);
+  }
   const missingModel = capabilities.skipModelAvailability ? undefined : modelRefs.find(({ resolved }) => !capabilities.models.has(resolved));
   if (missingModel) {
     if (modelAliasName(missingModel.requested, capabilities.modelAliases ?? {})) unknownModel(missingModel.requested, missingModel.resolved, capabilities.settingsPath);
@@ -834,7 +863,7 @@ export function validateWorkflowLaunchWithRegistry(params: WorkflowValidationPar
   const knownModels = context.knownModels ?? context.availableModels;
   const checked = preflight(script, { models: context.availableModels, tools: context.rootTools, agentTypes: new Set(Object.keys(agentDefinitions)), modelAliases: aliases, knownModels, ...(context.settingsPath ? { settingsPath: context.settingsPath } : {}) }, [], metadata);
   const roleNames = checked.dynamicAgentRoles ? Object.keys(agentDefinitions) : checked.referenced.agentTypes;
-  validateRolePolicies(agentDefinitions, roleNames, context.availableModels, aliases, knownModels, context.settingsPath);
+  validateRolePolicies(agentDefinitions, roleNames, context.availableModels, context.rootTools, aliases, knownModels, context.settingsPath);
   return { script, checked, agentDefinitions, projectAgentDefinitions, roleNames };
 }
 

@@ -143,12 +143,27 @@ export function resourcePatternMatches(resource: string, pattern: string): boole
   return new Minimatch(resourcePatternPath(body), RESOURCE_PATTERN_OPTIONS).match(resourcePatternPath(resource));
 }
 export function selectResources(patterns: readonly string[], resources: readonly string[], defaultEnabled = true): string[] {
+  const whitelist = patterns.some((pattern) => !pattern.startsWith("!"));
   return resources.filter((resource) => {
-    let enabled = defaultEnabled;
+    let enabled = whitelist ? false : defaultEnabled;
     for (const pattern of patterns) if (resourcePatternMatches(resource, pattern)) enabled = !pattern.startsWith("!");
     return enabled;
   });
 }
+export function selectResourcesByLayers(layers: readonly (readonly string[] | undefined)[], resources: readonly string[], defaultEnabled = true): string[] {
+  const enabled = new Set(defaultEnabled ? resources : []);
+  for (const layer of layers) {
+    if (layer === undefined) continue;
+    if (layer.length === 0 || layer.some((pattern) => !pattern.startsWith("!"))) enabled.clear();
+    for (const resource of resources) {
+      for (const pattern of layer) if (resourcePatternMatches(resource, pattern)) {
+        if (pattern.startsWith("!")) enabled.delete(resource); else enabled.add(resource);
+      }
+    }
+  }
+  return resources.filter((resource) => enabled.has(resource));
+}
+export function resourcePatternHasMagic(pattern: string): boolean { return /[*?\x5b\x5d{}()]/.test(resourcePatternBody(pattern)); }
 export function unmatchedResourcePatterns(patterns: readonly string[], resources: readonly string[]): string[] { return patterns.filter((pattern) => !resources.some((resource) => resourcePatternMatches(resource, pattern))); }
 export function mergeAgentResourceSelectors(...values: (import("./types.js").AgentResourceSelectors | undefined)[]): import("./types.js").AgentResourceSelectors {
   return {

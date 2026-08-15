@@ -68,7 +68,7 @@ Effective precedence is:
 4. Role frontmatter.
 5. Per-agent call options.
 
-Selectors are concatenated in that order. A later matching rule wins; a positive pattern enables a candidate and a leading `!` disables it. A candidate with no matching rule remains enabled by default. `!*` clears the current selection before narrower positive patterns are applied. Trusted project settings are ignored when the project is untrusted.
+Selectors are concatenated in that order. A later matching rule wins; a positive pattern enables a candidate and a leading `!` disables it. A layer containing positive selectors acts as a whitelist for that layer; an empty explicitly configured list selects no candidates. A candidate with no matching rule remains enabled by default when no layer establishes a whitelist. `!*` clears the current selection before narrower positive patterns are applied. Trusted project settings are ignored when the project is untrusted.
 
 Supported settings shape:
 
@@ -81,11 +81,12 @@ Supported settings shape:
   },
   "skills": ["*", "!experimental-*"],
   "extensions": ["**/*", "!**/unsafe.mjs"],
+  "extensionSettings": { "herdr": { "enableFullyInspectableMode": true } },
   "tools": ["*", "!write"]
 }
 ```
+The supported resource fields are direct `skills`, `extensions`, and `tools` arrays. `skills` matches discovered skill names, `extensions` matches discovered normalized extension paths, and `tools` matches only the current root or parent tool boundary. Selectors never create unavailable resources. The legacy `disabledAgentResources` field is rejected; it is not an alias for these fields. Use `extensionSettings.herdr` when extension selectors and Herdr configuration are needed together.
 
-The supported resource fields are direct `skills`, `extensions`, and `tools` arrays. `skills` matches discovered skill names, `extensions` matches discovered normalized extension paths, and `tools` matches only the current root or parent tool boundary. Selectors never create unavailable resources. The legacy `disabledAgentResources` field is rejected; it is not an alias for these fields. Herdr's optional configuration remains under its existing extension settings namespace.
 ### Concurrency
 
 `concurrency` is an integer from `1` through `16`. The default is `8`.

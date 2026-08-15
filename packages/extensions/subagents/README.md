@@ -59,7 +59,7 @@ Every tool schema is a closed object. Unknown properties are rejected. The model
 
 | Tool | Input schema |
 | --- | --- |
-| `subagents_run` | `{ prompt: string, mode?: "background" | "foreground", label?: string, model?: string, thinking?: string, tools?: string[], skills?: string[], extensions?: string[], role?: string | roleOverride, worktree?: string, outputSchema?: object, retries?: integer 0..255, timeoutMs?: positive integer | null }` |
+| `subagents_run` | `{ prompt: string, mode?: "background" \| "foreground", label?: string, model?: string, thinking?: string, tools?: string[], skills?: string[], extensions?: string[], role?: string \| roleOverride, worktree?: string, outputSchema?: object, retries?: integer 0..255, timeoutMs?: positive integer \| null }` |
 | `subagents_inspect` | `{ id?: string }` |
 | `subagents_steer` | `{ id: string, message: string }` |
 | `subagents_stop` | `{ id: string }` |

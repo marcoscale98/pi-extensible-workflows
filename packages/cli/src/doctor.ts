@@ -41,7 +41,7 @@ import {
 } from "pi-extensible-workflows";
 import type { AgentDefinition } from "pi-extensible-workflows";
 import { loadingRegistry, type WorkflowRegistryApi } from "pi-extensible-workflows";
-import { selectResources, unmatchedResourcePatterns } from "pi-extensible-workflows";
+import { selectResourcesByLayers, unmatchedResourcePatterns } from "pi-extensible-workflows";
 
 export type DoctorSeverity = "error" | "warning";
 export interface DoctorDiagnostic { severity: DoctorSeverity; code: string; message: string; source?: string; hint?: string }
@@ -269,9 +269,10 @@ function matchResourcePolicy(policy: AgentResourcePolicy, pi: DoctorPiState): Ag
   const extensions = [...new Set((pi.extensions ?? []).map(canonical))];
   const skills = [...new Set(pi.skills ?? [])];
   const tools = [...new Set(pi.activeTools)];
-  const selectedSkills = selectResources(policy.effective.skills, skills);
-  const selectedExtensions = selectResources(policy.effective.extensions, extensions);
-  const selectedTools = selectResources(policy.effective.tools ?? [], tools);
+  const layers = policy.selectorSources;
+  const selectedSkills = selectResourcesByLayers(layers ? [layers.global.skills, layers.project.skills] : [policy.effective.skills], skills);
+  const selectedExtensions = selectResourcesByLayers(layers ? [layers.global.extensions, layers.project.extensions] : [policy.effective.extensions], extensions);
+  const selectedTools = selectResourcesByLayers(layers ? [layers.global.tools, layers.project.tools] : [policy.effective.tools], tools);
   return { ...policy, selectedSkills, selectedExtensions, selectedTools, unmatchedSkills: unmatchedResourcePatterns(policy.effective.skills, skills), unmatchedExtensions: unmatchedResourcePatterns(policy.effective.extensions, extensions), unmatchedTools: unmatchedResourcePatterns(policy.effective.tools ?? [], tools) };
 }
 async function inspectRoleSession(cwd: string, agentDir: string, roleName: string, definition: AgentDefinition, rolePath: string, basePolicy: AgentResourcePolicy, rootModel: { provider: string; model: string; thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }, activeTools: readonly string[], aliases: Readonly<Record<string, string>>, knownModels: ReadonlySet<string>, availableModels: ReadonlySet<string>, settingsPath: string, prompt: string, hooks: NonNullable<AgentExecutionRoot["agentSetupHooks"]>, diagnostics: DoctorDiagnostic[]): Promise<DoctorRoleInspection | undefined> {
