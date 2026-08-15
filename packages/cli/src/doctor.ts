@@ -234,7 +234,7 @@ function legacyAgentResourceSelectorDiagnostic(source: string): DoctorDiagnostic
 }
 function emptyResourcePolicy(globalSettingsPath: string, cwd: string, projectTrusted: boolean): AgentResourcePolicy {
   const empty = { skills: [], extensions: [], tools: [] };
-  return { globalSettingsPath, projectSettingsPath: workflowProjectSettingsPath(cwd), projectTrusted, global: empty, project: empty, effective: empty, unmatchedSkills: [], unmatchedExtensions: [], unmatchedTools: [] };
+  return { globalSettingsPath, projectSettingsPath: workflowProjectSettingsPath(cwd), projectTrusted, global: empty, project: empty, effective: empty, unmatchedSkills: [], unmatchedExtensions: [], unmatchedTools: [], selectorSources: { global: {}, project: {} } };
 }
 function validateModel(value: string, known: ReadonlySet<string>, available: ReadonlySet<string>, source: string, diagnostics: DoctorDiagnostic[], aliases: Readonly<Record<string, string>>, dynamicAliases: ReadonlySet<string>, settingsPath: string): void {
   if (isDynamicModelAlias(value, dynamicAliases)) return;
@@ -269,7 +269,7 @@ function matchResourcePolicy(policy: AgentResourcePolicy, pi: DoctorPiState): Ag
   const extensions = [...new Set((pi.extensions ?? []).map(canonical))];
   const skills = [...new Set(pi.skills ?? [])];
   const tools = [...new Set(pi.activeTools)];
-  const layers = policy.selectorSources ?? { global: {}, project: {} };
+  const layers = policy.selectorSources;
   const selectedSkills = selectResourcesByLayers([layers.global.skills, layers.project.skills], skills);
   const selectedExtensions = selectResourcesByLayers([layers.global.extensions, layers.project.extensions], extensions);
   const selectedTools = selectResourcesByLayers([layers.global.tools, layers.project.tools], tools);
@@ -302,7 +302,7 @@ async function inspectRoleSession(cwd: string, agentDir: string, roleName: strin
     const actualModel = session.model?.provider && (session.model.model ?? session.model.id) ? { provider: session.model.provider, model: session.model.model ?? session.model.id ?? prepared.setup.sessionInput.model.model, ...(session.thinkingLevel ? { thinking: session.thinkingLevel } : {}), ...(inherited ? { inherited: true } : {}) } : { ...prepared.setup.sessionInput.model, ...(inherited ? { inherited: true } : {}) };
     const policy = prepared.setup.sessionInput.resourcePolicy ?? basePolicy;
     for (const item of [...resources.diagnostics, ...promptResult.diagnostics]) setupDiagnostics.push(diagnostic(item.type === "error" ? "error" : "warning", "ROLE_INSPECTION", item.message, item.source));
-    return { role: roleName, path: rolePath, model: actualModel, tools: state?.tools.map(({ name }) => name) ?? [...prepared.setup.sessionInput.tools], resources: { selectors: { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], tools: [...(policy.effective.tools ?? [])] }, skills: policy.selectedSkills ?? resources.skills, extensions: policy.selectedExtensions ?? resources.extensions, tools: policy.selectedTools ?? prepared.setup.sessionInput.tools, unmatchedSkills: policy.unmatchedSkills, unmatchedExtensions: policy.unmatchedExtensions, unmatchedTools: policy.unmatchedTools ?? [], ...(policy.selectorSources ? { selectorSources: policy.selectorSources } : {}) }, systemPrompt: { probe: prompt, expandedProbe: promptResult.expandedPrompt, text: promptResult.systemPrompt, ...(resources.systemPromptSource ? { source: resources.systemPromptSource } : {}) }, setup: { hooks: prepared.summary.hookNames, diagnostics: setupDiagnostics } };
+    return { role: roleName, path: rolePath, model: actualModel, tools: state?.tools.map(({ name }) => name) ?? [...prepared.setup.sessionInput.tools], resources: { selectors: { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], tools: [...(policy.effective.tools ?? [])] }, skills: policy.selectedSkills ?? resources.skills, extensions: policy.selectedExtensions ?? resources.extensions, tools: policy.selectedTools ?? prepared.setup.sessionInput.tools, unmatchedSkills: policy.unmatchedSkills, unmatchedExtensions: policy.unmatchedExtensions, unmatchedTools: policy.unmatchedTools ?? [], selectorSources: policy.selectorSources }, systemPrompt: { probe: prompt, expandedProbe: promptResult.expandedPrompt, text: promptResult.systemPrompt, ...(resources.systemPromptSource ? { source: resources.systemPromptSource } : {}) }, setup: { hooks: prepared.summary.hookNames, diagnostics: setupDiagnostics } };
   } catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", error instanceof Error ? error.message : String(error), rolePath)); diagnostics.push(...setupDiagnostics); return undefined; }
   finally { await session.dispose(); }
 }

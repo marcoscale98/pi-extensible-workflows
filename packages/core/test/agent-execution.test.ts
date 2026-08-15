@@ -357,7 +357,7 @@ void test("applies named role object overrides to the resolved role policy", () 
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", model: "missing/model" } }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_MODEL");
 });
 void test("role object overrides carry description, context files, resource selectors, and system prompt policy", async () => {
-  const basePolicy: AgentResourcePolicy = { globalSettingsPath: "/g", projectSettingsPath: "/p", projectTrusted: true, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["global"], extensions: ["/global.ts"] }, unmatchedSkills: [], unmatchedExtensions: [] };
+  const basePolicy: AgentResourcePolicy = { globalSettingsPath: "/g", projectSettingsPath: "/p", projectTrusted: true, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["global"], extensions: ["/global.ts"] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["global"], extensions: ["/global.ts"] }, project: {} } };
   const roleRoot: AgentExecutionRoot = { ...root, agentDefinitions: { ...root.agentDefinitions, scoped: { prompt: "Scoped role", contextFiles: ["global", "project"], overrideSystemPrompt: true, skills: ["role-skill"], extensions: ["/role.ts"] } }, agentResourcePolicy: () => structuredClone(basePolicy) };
   const executor = new WorkflowAgentExecutor(roleRoot, testTransport(async () => { throw new Error("unused"); }));
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scoped", description: "per-call", contextFiles: ["cwd"], overrideSystemPrompt: false } }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPromptAppend: "Scoped role", contextFiles: ["cwd"] });
@@ -1975,7 +1975,7 @@ void test("removeRun evicts only settled scheduler state", async () => {
   assert.equal((await replacement.result).ok, true);
 });
 void test("setup hooks cannot widen the prepared resource policy", async () => {
-  const policy = (): AgentResourcePolicy => ({ globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: false, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["excluded"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [] });
+  const policy = (): AgentResourcePolicy => ({ globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: false, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["excluded"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["excluded"] }, project: {} } });
   const mutations: Array<[string, (input: SessionInput) => void]> = [
     ["trust project", (input) => { assert.ok(input.resourcePolicy); input.resourcePolicy.projectTrusted = true; }],
     ["remove exclusion", (input) => { assert.ok(input.resourcePolicy); input.resourcePolicy.effective = { skills: [], extensions: [] }; }],
@@ -1989,14 +1989,31 @@ void test("setup hooks cannot widen the prepared resource policy", async () => {
   }
 });
 void test("setup hooks may narrow the prepared resource policy", async () => {
-  const policy = (): AgentResourcePolicy => ({ globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["*"], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["*"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [] });
-  const prepared = await prepareAgentSetupForInspection({ ...root, agentResourcePolicy: policy, agentSetupHooks: [{ name: "narrow", priority: 1, setup(agent) { const resourcePolicy = agent.sessionInput.resourcePolicy; if (resourcePolicy) resourcePolicy.effective = { ...resourcePolicy.effective, skills: [...resourcePolicy.effective.skills, "!secret"] }; } }] }, "work", { label: "worker", workflowName: "flow" }, localAgentTransport);
+  const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-hook-resource-policy-"));
+  const agentDir = join(rootDir, "agent");
+  const cwd = join(rootDir, "project");
+  mkdirSync(join(agentDir, "skills", "secret"), { recursive: true });
+  mkdirSync(join(agentDir, "skills", "kept"), { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", apiKey: "fixture", models: [{ id: "fixture-model", name: "Fixture model", reasoning: false, input: ["text"], contextWindow: 1_024, maxTokens: 128 }] } } }));
+  writeFileSync(join(agentDir, "auth.json"), "{}");
+  writeFileSync(join(agentDir, "skills", "secret", "SKILL.md"), "---\nname: secret\ndescription: Secret\n---\nSecret");
+  writeFileSync(join(agentDir, "skills", "kept", "SKILL.md"), "---\nname: kept\ndescription: Kept\n---\nKept");
+  const policy = (): AgentResourcePolicy => ({ globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["*"], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["*"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["*"] }, project: {} } });
+  const prepared = await prepareAgentSetupForInspection({ ...root, cwd, agentDir, model: { provider: "fixture", model: "fixture-model" }, availableModels: new Set([...root.availableModels ?? [], "fixture/fixture-model"]), agentResourcePolicy: policy, agentSetupHooks: [{ name: "narrow", priority: 1, setup(agent) { const resourcePolicy = agent.sessionInput.resourcePolicy; if (resourcePolicy) resourcePolicy.effective = { ...resourcePolicy.effective, skills: [...resourcePolicy.effective.skills, "!secret"] }; } }] }, "work", { label: "worker", workflowName: "flow" }, localAgentTransport);
   assert.equal(prepared.failure, undefined);
-  assert.deepEqual(prepared.setup.sessionInput.resourcePolicy?.effective.skills, ["*", "!secret"]);
+  let session: Awaited<ReturnType<typeof createLocalPiSession>> | undefined;
+  try {
+    session = await createLocalPiSession(prepared.setup.sessionInput);
+    assert.deepEqual(session.getResourceInspection().skills, ["kept"]);
+  } finally {
+    await session?.dispose();
+    rmSync(rootDir, { recursive: true, force: true });
+  }
 });
 
-void test("resource policy fallback preserves effective selectors when source metadata is absent", async () => {
-  const policy: AgentResourcePolicy = { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["global-cold"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [] };
+void test("resource policy preserves explicit selector sources", async () => {
+  const policy: AgentResourcePolicy = { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["global-cold"], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["global-cold"], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["global-cold"] }, project: {} } };
   const prepared = await prepareAgentSetupForInspection({ ...root, agentResourcePolicy: () => structuredClone(policy) }, "work", { label: "worker", workflowName: "flow" }, localAgentTransport);
   assert.equal(prepared.failure, undefined);
   assert.deepEqual(prepared.setup.sessionInput.resourcePolicy?.selectorSources, { global: { skills: ["global-cold"] }, project: {} });
@@ -2009,7 +2026,7 @@ void test("refreshes resource selectors for every fresh attempt and inspects the
     policyCalls += 1;
     const skill = `skill-${String(policyCalls)}`;
     const extension = `/extensions/extension-${String(policyCalls)}.ts`;
-    return { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: [skill], extensions: [extension] }, unmatchedSkills: [skill], unmatchedExtensions: [extension] };
+    return { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: [skill], extensions: [extension] }, unmatchedSkills: [skill], unmatchedExtensions: [extension], selectorSources: { global: { skills: [skill], extensions: [extension] }, project: {} } };
   } }, testTransport(async (input) => {
     assert.ok(input.resourcePolicy);
     inputs.push(input.resourcePolicy);
@@ -2024,7 +2041,7 @@ void test("refreshes resource selectors for every fresh attempt and inspects the
 });
 void test("composes role resource selectors and reapplies them on retries", async () => {
   const roleExtension = "/role/extension.ts";
-  const basePolicy = { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["global"], extensions: ["/global.ts"] }, project: { skills: ["project"], extensions: ["/project.ts"] }, effective: { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"] }, unmatchedSkills: [], unmatchedExtensions: [] };
+  const basePolicy = { globalSettingsPath: "/global/settings.json", projectSettingsPath: "/project/settings.json", projectTrusted: true, global: { skills: ["global"], extensions: ["/global.ts"] }, project: { skills: ["project"], extensions: ["/project.ts"] }, effective: { skills: ["global", "project"], extensions: ["/global.ts", "/project.ts"] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["global"], extensions: ["/global.ts"] }, project: { skills: ["project"], extensions: ["/project.ts"] } } };
   const policies: Array<NonNullable<SessionInput["resourcePolicy"]>> = [];
   let sessions = 0;
   const executor = new WorkflowAgentExecutor({ ...root, agentDefinitions: { ...root.agentDefinitions, reviewer: { ...root.agentDefinitions?.reviewer, skills: ["role", "global"], extensions: [roleExtension, "/global.ts"] }, scout: { ...root.agentDefinitions?.scout } }, agentResourcePolicy: () => structuredClone(basePolicy) }, testTransport(async (input) => {
@@ -2160,7 +2177,7 @@ void test("loads workflow SYSTEM.md with project trust and precedence", async ()
     writeFileSync(join(agentDir, "auth.json"), "{}");
     writeFileSync(join(rootDir, ".pi", "pi-extensible-workflows", "SYSTEM.md"), "Global workflow system");
     writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "SYSTEM.md"), "Project workflow system");
-    const policy = (projectTrusted: boolean): AgentResourcePolicy => ({ globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: [], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [] });
+    const policy = (projectTrusted: boolean): AgentResourcePolicy => ({ globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: [], extensions: [] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: {}, project: {} } });
     const untrusted = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], sessionLabel: "system-untrusted", systemPromptAppend: "Role append", resourcePolicy: policy(false) });
     assert.match(untrusted.systemPrompt ?? "", /Global workflow system/);
     assert.doesNotMatch(untrusted.systemPrompt ?? "", /Project workflow system/);

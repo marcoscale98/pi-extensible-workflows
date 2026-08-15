@@ -45,7 +45,7 @@ export interface PiResourceInspection {
   readonly diagnostics: readonly { type: "warning" | "error" | "collision"; message: string; source?: string }[];
   readonly systemPromptSource?: string;
 }
-import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceInspection, AgentResourcePolicy, AgentResourceSelectors, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
+import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceInspection, AgentResourcePolicy, AgentResourceSelectors, AgentResourceSelectorSources, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
 import { deepFreeze, jsonObject, jsonValue, object, modelAliasName, modelCapability, resolveModelReference, resourcePatternHasMagic, selectResourcesByLayers, unmatchedResourcePatterns } from "./utils.js";
 import { roleNameOf } from "./types.js";
 import { WorkflowError } from "./types.js";
@@ -271,7 +271,7 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     const resolved = await packageManager.resolve();
     const discoveredExtensions = [...new Set(resolved.extensions.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => canonicalSourcePath(path)))];
     const selectorSources = policy.selectorSources;
-    const extensionLayers = selectorSources ? [selectorSources.global.extensions, selectorSources.project.extensions, selectorSources.role?.extensions, selectorSources.call?.extensions] : [policy.effective.extensions];
+    const extensionLayers = [selectorSources.global.extensions, selectorSources.project.extensions, selectorSources.role?.extensions, selectorSources.call?.extensions];
     const extensionSelectors = extensionLayers.flatMap((layer) => (layer ?? []).map((original) => ({ original, matching: canonicalExtensionSelector(original, input.cwd) })));
     const selectedExtensions = selectResourcesByLayers(extensionLayers.map((layer) => layer?.map((selector) => canonicalExtensionSelector(selector, input.cwd))), discoveredExtensions);
     const extensionPaths = selectedExtensions.filter((path) => !WORKFLOW_HOST_ENTRIES.has(path));
@@ -281,10 +281,10 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     const skillPaths = [...new Set(resolved.skills.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => path))];
     const updateSkillMatches = (skills: readonly { name: string }[]): Set<string> => {
       const names = [...new Set(skills.map(({ name }) => name))];
-      const skillLayers = selectorSources ? [selectorSources.global.skills, selectorSources.project.skills, selectorSources.role?.skills, selectorSources.call?.skills] : [policy.effective.skills];
+      const skillLayers = [selectorSources.global.skills, selectorSources.project.skills, selectorSources.role?.skills, selectorSources.call?.skills];
       const selectedSkills = selectResourcesByLayers(skillLayers, names);
       policy.selectedSkills = selectedSkills;
-      policy.unmatchedSkills = unmatchedResourcePatterns(policy.effective.skills, names);
+      policy.unmatchedSkills = unmatchedResourcePatterns(skillLayers.flatMap((layer) => layer ?? []), names);
       return new Set(names.filter((name) => !selectedSkills.includes(name)));
     };
     resourceLoader = new DefaultResourceLoader({
@@ -657,19 +657,13 @@ function resourcePolicySummary(policy: AgentResourcePolicy, tools: readonly stri
     selectors: { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], tools: [...(policy.effective.tools ?? [])] },
     skills: [...(policy.selectedSkills ?? [])], extensions: [...(policy.selectedExtensions ?? [])], tools: [...tools],
     unmatchedSkills: [...policy.unmatchedSkills], unmatchedExtensions: [...policy.unmatchedExtensions], unmatchedTools: [...(policy.unmatchedTools ?? [])],
-    ...(policy.selectorSources ? { selectorSources: policy.selectorSources } : {}),
+    selectorSources: policy.selectorSources,
   };
 }
-function resourcePolicySelectorSources(policy: AgentResourcePolicy): NonNullable<AgentResourcePolicy["selectorSources"]> {
-  if (policy.selectorSources) return policy.selectorSources;
-  return {
-    global: {
-      ...(policy.effective.skills.length ? { skills: policy.effective.skills } : {}),
-      ...(policy.effective.extensions.length ? { extensions: policy.effective.extensions } : {}),
-      ...(policy.effective.tools?.length ? { tools: policy.effective.tools } : {}),
-    },
-    project: {},
-  };
+const RESOURCE_SELECTOR_KEYS = ["skills", "extensions", "tools"] as const;
+type ResourceSelectorKey = (typeof RESOURCE_SELECTOR_KEYS)[number];
+function resourceSelectorLayers(sources: AgentResourceSelectorSources, key: ResourceSelectorKey): readonly (readonly string[] | undefined)[] {
+  return [sources.global[key], sources.project[key], sources.role?.[key], sources.call?.[key]];
 }
 function selectorListWidened(ceiling: readonly string[], candidate: readonly string[]): boolean {
   let candidateIndex = 0;
@@ -685,10 +679,37 @@ function resourcePolicyWidened(ceiling: AgentResourcePolicy | undefined, candida
   if (!ceiling) return false;
   if (!candidate) return true;
   if (!ceiling.projectTrusted && candidate.projectTrusted) return true;
-  if (JSON.stringify(ceiling.selectorSources) !== JSON.stringify(candidate.selectorSources)) return true;
+  for (const key of RESOURCE_SELECTOR_KEYS) {
+    const ceilingLayers = resourceSelectorLayers(ceiling.selectorSources, key);
+    const candidateLayers = resourceSelectorLayers(candidate.selectorSources, key);
+    for (let index = 0; index < ceilingLayers.length; index += 1) if (selectorListWidened(ceilingLayers[index] ?? [], candidateLayers[index] ?? [])) return true;
+  }
   if (selectorListWidened(ceiling.effective.skills, candidate.effective.skills)) return true;
   if (selectorListWidened(ceiling.effective.extensions, candidate.effective.extensions)) return true;
   return selectorListWidened(ceiling.effective.tools ?? [], candidate.effective.tools ?? []);
+}
+function selectorSuffix(ceiling: readonly string[], candidate: readonly string[]): readonly string[] {
+  if (candidate.length < ceiling.length || ceiling.some((pattern, index) => candidate[index] !== pattern)) return [];
+  return candidate.slice(ceiling.length);
+}
+function appendResourcePolicyNarrowing(ceiling: AgentResourcePolicy | undefined, candidate: AgentResourcePolicy | undefined): void {
+  if (!ceiling || !candidate) return;
+  const suffixes = {
+    skills: selectorSuffix(ceiling.effective.skills, candidate.effective.skills),
+    extensions: selectorSuffix(ceiling.effective.extensions, candidate.effective.extensions),
+    tools: selectorSuffix(ceiling.effective.tools ?? [], candidate.effective.tools ?? []),
+  };
+  if (!suffixes.skills.length && !suffixes.extensions.length && !suffixes.tools.length) return;
+  const call = candidate.selectorSources.call ?? {};
+  candidate.selectorSources = {
+    ...candidate.selectorSources,
+    call: {
+      ...call,
+      ...(suffixes.skills.length ? { skills: [...(call.skills ?? []), ...suffixes.skills] } : {}),
+      ...(suffixes.extensions.length ? { extensions: [...(call.extensions ?? []), ...suffixes.extensions] } : {}),
+      ...(suffixes.tools.length ? { tools: [...(call.tools ?? []), ...suffixes.tools] } : {}),
+    },
+  };
 }
 function packageRoot(start: string): string | undefined {
   let current = dirname(realpathSync(start));
@@ -767,7 +788,6 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
   const rawCallExtensions = selectorValue("extensions", options.extensions)?.map((selector) => canonicalExtensionSelector(selector, cwd));
   const rawCallTools = selectorValue("tools", options.tools);
   const callSelectors: AgentResourceSelectors = { ...(rawCallSkills === undefined ? {} : { skills: rawCallSkills }), ...(rawCallExtensions === undefined ? {} : { extensions: rawCallExtensions }), ...(rawCallTools === undefined ? {} : { tools: rawCallTools }) };
-  const baseSelectorSources = baseResourcePolicy === undefined ? undefined : resourcePolicySelectorSources(baseResourcePolicy);
   const resourcePolicy: AgentResourcePolicy | undefined = baseResourcePolicy ? {
     ...baseResourcePolicy,
     effective: {
@@ -775,11 +795,11 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
       extensions: [...baseResourcePolicy.effective.extensions, ...(roleSelectors?.extensions ?? []), ...(rawCallExtensions ?? [])],
       ...(baseResourcePolicy.effective.tools === undefined && roleSelectors?.tools === undefined && rawCallTools === undefined ? {} : { tools: [...(baseResourcePolicy.effective.tools ?? []), ...(roleSelectors?.tools ?? []), ...(rawCallTools ?? [])] }),
     },
-    selectorSources: { global: baseSelectorSources?.global ?? {}, project: baseSelectorSources?.project ?? {}, ...(roleSelectors ? { role: roleSelectors } : {}), ...(Object.keys(callSelectors).length ? { call: callSelectors } : {}) },
+    selectorSources: { global: baseResourcePolicy.selectorSources.global, project: baseResourcePolicy.selectorSources.project, ...(roleSelectors ? { role: roleSelectors } : {}), ...(Object.keys(callSelectors).length ? { call: callSelectors } : {}) },
   } : undefined;
   if (resourcePolicy) {
     resourcePolicy.selectedTools = resolved.tools;
-    resourcePolicy.unmatchedTools = unmatchedResourcePatterns(resourcePolicy.effective.tools ?? [], [...root.tools]);
+    resourcePolicy.unmatchedTools = unmatchedResourcePatterns(resourceSelectorLayers(resourcePolicy.selectorSources, "tools").flatMap((layer) => layer ?? []), [...root.tools]);
   }
   const resourcePolicyCeiling = resourcePolicy ? structuredClone(resourcePolicy) : undefined;
   const sessionInput: SessionInput = { cwd, model: { ...resolved.model }, tools: [...resolved.tools], sessionLabel: `${options.workflowName}:${options.label}:attempt-${String(attempt)}`, ...(root.agentDir ? { agentDir: root.agentDir } : {}), ...(root.additionalSkillPaths?.length ? { additionalSkillPaths: [...root.additionalSkillPaths] } : {}), ...(resolved.contextFiles === undefined ? {} : { contextFiles: [...resolved.contextFiles] }), ...(customTools.length ? { customTools: [...customTools] } : {}), ...(resultTool ? { resultTool } : {}), ...(resolved.systemPrompt !== undefined ? { systemPrompt: resolved.systemPrompt } : {}), systemPromptAppend: resolved.systemPromptAppend, ...(resourcePolicy ? { resourcePolicy } : {}), options: structuredClone(baselineOptions) };
@@ -799,6 +819,7 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
   }
   try {
     if (resourcePolicyWidened(resourcePolicyCeiling, setup.sessionInput.resourcePolicy)) throw new WorkflowError("INVALID_METADATA", "Agent setup widened the prepared resource policy");
+    appendResourcePolicyNarrowing(resourcePolicyCeiling, setup.sessionInput.resourcePolicy);
     setup.sessionInput.options = setup.options;
     if (changedOption(setup.options, baselineOptions, "model") && typeof setup.options.model === "string") setup.sessionInput.model = parseModel(setup.options.model, setup.sessionInput.model, changedOption(setup.options, baselineOptions, "thinking") && validThinking(setup.options.thinking) ? setup.options.thinking : undefined, root.modelAliases, root.knownModels ?? root.availableModels, root.settingsPath);
     if (changedOption(setup.options, baselineOptions, "thinking") && validThinking(setup.options.thinking)) setup.sessionInput.model = { ...setup.sessionInput.model, thinking: setup.options.thinking };

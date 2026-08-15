@@ -218,7 +218,7 @@
       </section>
       <section id="hooks">
         <h2>Agent setup hooks</h2>
-        <p>An <code>AgentSetupHook</code> is trusted code that runs after normal model, tool, cwd, and role resolution but before the selected agent transport creates a session. It has <code>priority?: number</code> and <code>setup(agent, context)</code>. The priority must be finite; it defaults to <code>10</code>. Hooks run in ascending priority order, with the stable hook name breaking ties. Hooks may replace or wrap <code>agent.transport</code>; the final prepared policy remains the capability ceiling.</p>
+        <p>An <code>AgentSetupHook</code> is trusted code that runs after normal model, tool, cwd, and role resolution but before the selected agent transport creates a session. It has <code>priority?: number</code> and <code>setup(agent, context)</code>. The priority must be finite; it defaults to <code>10</code>. Hooks run in ascending priority order, with the stable hook name breaking ties. Hooks may replace or wrap <code>agent.transport</code>; the final prepared policy remains the capability ceiling. Resource-policy changes may only narrow that ceiling; negated selectors appended by a hook are applied as a final resource overlay.</p>
         <h3><code>AgentSetup</code> and <code>AgentSetupContext</code></h3>
         <div class="table-wrap"><table>
           <thead><tr><th>Contract</th><th>Fields</th></tr></thead>
