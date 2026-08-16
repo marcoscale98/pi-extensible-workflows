@@ -1,5 +1,5 @@
 # Changelog
-## [5.5.0-rc.1] - 2026-08-16
+## [5.5.0] - 2026-08-16
 
 - Show the core package's bundled changelog once after its installed version changes, with a startup fallback for `pi update --extensions` and `pi update --all` ([#208](https://github.com/vekexasia/pi-extensible-workflows/issues/208)).
 - Added `piewf doctor --json`, which emits one machine-readable `DoctorReport` object when checks complete; the existing exit contract still returns non-zero for error diagnostics. Selecting a role adds `roleTarget` and, when role inspection succeeds, `roleInspection` ([#207](https://github.com/vekexasia/pi-extensible-workflows/issues/207)).
