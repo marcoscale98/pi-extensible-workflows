@@ -55,7 +55,8 @@ jobs:
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version is already published"
             else
-              (cd "$workspace" && npm publish --access public)
+              case "$version" in *-*) tag=next;; *) tag=latest;; esac
+              (cd "$workspace" && npm publish --access public --tag "$tag")
             fi
           }
           publish packages/core
