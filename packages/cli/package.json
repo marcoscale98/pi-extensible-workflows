@@ -46,7 +46,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "pi-extensible-workflows": "5.4.0"
+    "pi-extensible-workflows": "5.5.0-rc.1"
   },
   "publishConfig": {
     "access": "public"
