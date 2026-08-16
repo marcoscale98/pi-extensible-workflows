@@ -1078,6 +1078,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     promptSnippet: WORKFLOW_TOOL_PROMPT_SNIPPET,
     parameters: WORKFLOW_TOOL_PARAMETERS,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      let resolveForegroundResult: (() => void) | undefined;
+      const foregroundResultReady = new Promise<void>((resolve) => { resolveForegroundResult = resolve; });
       try {
       const headless = object(ctx) && ctx.headless === true;
       const settingsPath = workflowSettingsPath(extensionAgentDir);
@@ -1202,10 +1204,20 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const queueForegroundDelivery = async (content: string | (() => string | Promise<string>), failure = false): Promise<void> => {
         const delivery = foregroundDeliveries.get(toolCallId);
         if (!delivery) return;
-        if (delivery.detached) {
+        const deliverDetached = async (): Promise<void> => {
           pendingFailureDiagnostics.delete(toolCallId);
           await deliverTerminal(store, content, failure);
           foregroundDeliveries.delete(toolCallId);
+        };
+        if (delivery.detached) {
+          await deliverDetached();
+          return;
+        }
+        await foregroundResultReady;
+        const currentDelivery = foregroundDeliveries.get(toolCallId);
+        if (!currentDelivery) return;
+        if (currentDelivery.detached) {
+          await deliverDetached();
           return;
         }
         await store.updateState((current) => {
@@ -1240,14 +1252,19 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         ]);
       if (outcome.kind === "detached") {
         const { run, ...detached } = outcome.result;
+        resolveForegroundResult?.();
         return { content: [{ type: "text" as const, text: JSON.stringify(detached) }], details: { ...detached, run, preview: `Moved workflow ${runId} to background.` } };
       }
       const { value, resultPath, resultBytes } = outcome.result;
       const delivery = await completionDeliveryFromStore({ mode: "foreground", name: checked.metadata.name, runId, value, resultPath, resultBytes, store, context: completionContext(ctx) });
       const run = (await store.load()).run;
-      return { content: [{ type: "text" as const, text: delivery.content }, ...(delivery.inlined ? [{ type: "text" as const, text: `Workflow run ID: ${runId}` }] : [])], details: { runId, value, run } };
+      const result = { content: [{ type: "text" as const, text: delivery.content }, ...(delivery.inlined ? [{ type: "text" as const, text: `Workflow run ID: ${runId}` }] : [])], details: { runId, value, run } };
+      resolveForegroundResult?.();
+      return result;
       } catch (error) {
-        throw mainAgentError(error);
+        const presented = mainAgentError(error);
+        resolveForegroundResult?.();
+        throw presented;
       }
     },
     renderCall(args) {

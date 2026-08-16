@@ -274,6 +274,53 @@ void test("foreground and background completion delivery share bounded results",
   await toolResultHandler?.({ toolName: "workflow", toolCallId: "foreground-descriptor", isError: false });
 });
 
+void test("does not promote a delayed foreground completion before its tool result", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-foreground-delivery-race-"));
+  const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; details?: { runId: string } }> }> = [];
+  const messages: Array<{ message: { content: string }; options: { deliverAs: string; triggerTurn: boolean } }> = [];
+  let toolResultHandler: ((event: { toolName: string; toolCallId: string; isError: boolean }) => Promise<unknown>) | undefined;
+  const pi = {
+    registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, on(name: string, handler: unknown) { if (name === "tool_result") toolResultHandler = handler as typeof toolResultHandler; },
+    getThinkingLevel: () => "medium" as const, getActiveTools: () => ["workflow"],
+    sendMessage(message: { content: string }, options: { deliverAs: string; triggerTurn: boolean }) { messages.push({ message, options }); },
+  };
+  workflowExtension(testExtensionApi(pi), home);
+  const execute = tools.find(({ name }) => name === "workflow")?.execute;
+  assert.ok(execute);
+  const load = Object.getOwnPropertyDescriptor(RunStore.prototype, "load")?.value as RunStore["load"];
+  const restoreLoad = () => { RunStore.prototype.load = load; };
+  let releaseConstruction!: () => void;
+  let markConstructionStarted!: () => void;
+  const constructionHold = new Promise<void>((resolve) => { releaseConstruction = resolve; });
+  const constructionStarted = new Promise<void>((resolve) => { markConstructionStarted = resolve; });
+  let completedLoads = 0;
+  RunStore.prototype.load = async function () {
+    const loaded = await load.call(this);
+    if (this.cwd === home && loaded.run.state === "completed" && completedLoads === 0) {
+      completedLoads += 1;
+      markConstructionStarted();
+      await constructionHold;
+    }
+    return loaded;
+  };
+  try {
+    const pending = execute("foreground-race", { name: "foreground-race", script: "return {ok:true};", foreground: true }, new AbortController().signal, undefined, { cwd: home, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } });
+    await constructionStarted;
+    // Let any queued promotion timer run while foreground result construction is held.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(messages, []);
+    releaseConstruction();
+    const foreground = await pending;
+    assert.equal(foreground.content[0]?.text, "{\"ok\":true}");
+    await toolResultHandler?.({ toolName: "workflow", toolCallId: "foreground-race", isError: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.deepEqual(messages, []);
+  } finally {
+    releaseConstruction();
+    restoreLoad();
+  }
+});
+
 void test("promotes detached foreground completion and failure to follow-up delivery", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-detached-foreground-"));
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; details?: { runId: string } }> }> = [];
