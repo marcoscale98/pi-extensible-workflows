@@ -178,6 +178,13 @@ void test("doctor reports role errors, warnings, overrides, and extension failur
   assert.match(formatDoctorReport(report), /Fix: Use a tool listed under Pi active tools/);
 });
 
+void test("doctor validates role tool selectors like runtime", async () => {
+  const paths = fixture();
+  writeFileSync(join(paths.agentDir, "pi-extensible-workflows", "roles", "selectors.md"), "---\ntools: [\"!*\", \"r*\", read, cat]\n---\nInspect selectors");
+  const report = await withHome(paths.root, () => doctor({ ...paths, discoverPi: async () => pi({ activeTools: ["read"] }) }));
+  assert.deepEqual(report.diagnostics.filter(({ code }) => code === "ROLE_TOOL_INACTIVE").map(({ message }) => message), ["Tool is unknown or inactive: cat"]);
+});
+
 void test("doctor rejects invalid role descriptions", async () => {
   const paths = fixture();
   writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "empty-description.md"), "---\ndescription: ''\n---\nRole");

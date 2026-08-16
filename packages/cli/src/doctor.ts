@@ -21,6 +21,7 @@ import {
   resolveAgentResourcePolicy,
   resolveWorkflowSettings,
   resolveModelReference,
+  resourcePatternHasMagic,
   parseThinking,
   parseRoleMarkdown,
   registeredWorkflowFunctions,
@@ -282,7 +283,10 @@ function inspectRole(path: string, activeTools: ReadonlySet<string>, knownModels
   if (Buffer.byteLength(body) > 50 * 1024) diagnostics.push(diagnostic("warning", "ROLE_BODY_LARGE", "Role body exceeds 50KB", path));
   if (/{{\s*[^{}]+\s*}}/.test(body)) diagnostics.push(diagnostic("warning", "ROLE_PLACEHOLDER", "Role body contains an unsupported placeholder-looking token", path));
   if (definition.model) validateModel(definition.model, knownModels, availableModels, path, diagnostics, aliases, dynamicAliases, settingsPath);
-  for (const tool of definition.tools ?? []) if (!activeTools.has(tool)) diagnostics.push(diagnostic("error", "ROLE_TOOL_INACTIVE", `Tool is unknown or inactive: ${tool}`, path, "Use a tool listed under Pi active tools or enable its Pi extension."));
+  for (const selector of definition.tools ?? []) {
+    const tool = selector.startsWith("!") ? selector.slice(1) : selector;
+    if (!selector.startsWith("!") && !resourcePatternHasMagic(selector) && !activeTools.has(tool)) diagnostics.push(diagnostic("error", "ROLE_TOOL_INACTIVE", `Tool is unknown or inactive: ${tool}`, path, "Use a tool listed under Pi active tools or enable its Pi extension."));
+  }
   return definition;
 }
 
