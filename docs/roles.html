@@ -57,8 +57,8 @@
 <span class="tok-property">model</span><span class="tok-punctuation">:</span> anthropic/claude-fable-5
 <span class="tok-property">thinking</span><span class="tok-punctuation">:</span> high
 <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> read<span class="tok-punctuation">,</span> grep<span class="tok-punctuation">]</span>
-<span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"review-*"<span class="tok-punctuation">]</span>
-<span class="tok-property">extensions</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"!**/unsafe.mjs"<span class="tok-punctuation">]</span>
+<span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> <span class="tok-string">"review-*"</span><span class="tok-punctuation">]</span>
+<span class="tok-property">extensions</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!**/unsafe.mjs"</span><span class="tok-punctuation">]</span>
 <span class="tok-punctuation">---</span>
 Focus on correctness and regressions.</code></pre>
         <p>The body is prompt guidance. It is appended to the native Pi system prompt unless <code>overrideSystemPrompt: true</code> is set. Role files are trusted configuration and can affect model, tools, resource selectors, and the system prompt.</p>
@@ -76,6 +76,7 @@ Focus on correctness and regressions.</code></pre>
             <tr><td><code>contextFiles</code></td><td>Choose which Pi context-file scopes reach the role.</td></tr>
           </tbody>
         </table></div>
+        <p>Relative extension selectors in role frontmatter resolve from the role file's directory; call-level and role-object override selectors resolve from the agent launch cwd. See the <a href="developers.html#settings">settings reference</a> for <code>~</code>, <code>file://</code>, glob, and canonicalization rules.</p>
       </section>
       <section id="calls">
         <h2>Customize calls</h2>
@@ -83,7 +84,7 @@ Focus on correctness and regressions.</code></pre>
         <ul>
           <li>Omit a key to inherit the role-file value.</li>
           <li>Use <code>null</code> to unset an inherited value.</li>
-          <li>Use an explicit value to replace it, including <code>[]</code> and <code>false</code>. For capability selectors, <code>[]</code> is a no-op; prepend <code>!*</code> to restrict the candidate set or use it alone to select none.</li>
+          <li>Use an explicit value to replace it, including <code>[]</code> and <code>false</code>. For capability selectors, <code>[]</code> replaces the inherited role selector list with an empty layer; prepend <code>!*</code> to restrict the candidate set or use it alone to select none.</li>
         </ul>
         <pre><code class="language-javascript"><span class="tok-keyword">await</span> <span class="tok-function">agent</span><span class="tok-punctuation">(</span><span class="tok-string">"Inspect the API"</span><span class="tok-punctuation">,</span> <span class="tok-punctuation">{</span>
   <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
@@ -100,9 +101,9 @@ Focus on correctness and regressions.</code></pre>
         <p><code>contextFiles</code> controls Pi context discovery for that role. <code>global</code> selects the Pi agent-directory file, <code>cwd</code> selects the exact working-directory file, and <code>project</code> selects discovered project and ancestor files excluding those two. Omit the field for normal discovery or use <code>[]</code> to load none. Scopes can be combined.</p>
         <pre><code class="language-yaml"><span class="tok-punctuation">---</span>
 <span class="tok-property">contextFiles</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>global<span class="tok-punctuation">,</span> project<span class="tok-punctuation">]</span>
-<span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"review-*"<span class="tok-punctuation">,</span> "!experimental-*"<span class="tok-punctuation">]</span>
-<span class="tok-property">extensions</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"**/*"<span class="tok-punctuation">]</span>
-<span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>"!*"<span class="tok-punctuation">,</span> read<span class="tok-punctuation">]</span>
+<span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> <span class="tok-string">"review-*"</span><span class="tok-punctuation">]</span>
+<span class="tok-property">extensions</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> <span class="tok-string">"**/review-tools/**"</span><span class="tok-punctuation">]</span>
+<span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> read<span class="tok-punctuation">]</span>
 <span class="tok-punctuation">---</span></code></pre>
         <p>Selectors affect only agents using the role and compose after global and trusted-project selectors. Use <code>piewf doctor --role &lt;name&gt;</code> to inspect selector sources and effective skills, extensions, and tools without contacting a provider.</p>
       </section>
@@ -111,7 +112,8 @@ Focus on correctness and regressions.</code></pre>
         <pre><code class="language-shell"><span class="tok-command">npx</span> piewf doctor --role reviewer
 <span class="tok-command">npx</span> piewf doctor --role reviewer --prompt <span class="tok-string">"Review the current change"</span>
 <span class="tok-command">npx</span> piewf doctor --role reviewer --json</code></pre>
-        <p>The role inspection is read-only. It resolves the active role and reports its effective resources and prepared prompt. The optional probe prompt is useful when prompt hooks depend on the agent request. Add <code>--json</code> to emit the structured report for machine consumers, including the role inspection data.</p>
+        <p>The role inspection is read-only. The positional form <code>piewf doctor reviewer</code> is equivalent to <code>--role reviewer</code>. Both resolve the active role and report its effective resources and prepared prompt. The optional probe prompt is useful when prompt hooks depend on the agent request. Add <code>--json</code> to emit the structured report for machine consumers; either role form includes <code>roleTarget</code> and includes <code>roleInspection</code> when inspection succeeds.</p>
+        <p>Role discovery is fail-closed: invalid frontmatter or the rejected legacy selector in any packaged or global role file, or in any trusted-project role file, blocks the complete role set. See the <a href="developers.html#operations">doctor reference</a> for diagnostics and exit behavior. At runtime, a missing named role fails with <code>UNKNOWN_AGENT_TYPE</code> and <code>Unknown agent role: &lt;name&gt;</code>.</p>
         <p>See <a href="developers.html#tool-api">workflow tool usage</a>, <a href="developers.html#settings">settings</a> for model aliases and global selectors, and <a href="extensions.html#resources">extension resources</a> for packaged role directories.</p>
       </section>
       <p class="back-link"><a href="index.html">&lt; Back to documentation home</a></p>

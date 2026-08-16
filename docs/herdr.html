@@ -70,13 +70,13 @@
         <h2>Fully inspectable mode</h2>
         <p>Enable fully inspectable mode in the global workflow settings file, normally <code>~/.pi/agent/pi-extensible-workflows/settings.json</code>:</p>
         <pre><code class="language-json"><span class="tok-punctuation">{</span>
-  <span class="tok-property">"extensions"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
+  <span class="tok-property">"extensionSettings"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
     <span class="tok-property">"herdr"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
       <span class="tok-property">"enableFullyInspectableMode"</span><span class="tok-punctuation">:</span> <span class="tok-boolean">true</span>
     <span class="tok-punctuation">}</span>
   <span class="tok-punctuation">}</span>
 <span class="tok-punctuation">}</span></code></pre>
-        <p>The setting is global-only. When enabled, every workflow agent launches in a dedicated labeled Herdr workspace and uses the Herdr transport. The manual live-session action is hidden because the session is already in Herdr. Completed-session inspection remains available.</p>
+        <p><code>extensionSettings.herdr</code> is the only valid location for Herdr configuration. The obsolete <code>extensions.herdr</code> object is rejected with <code>INVALID_SETTINGS</code>; migrate it before launching. This setting is global-only: a project-scope value is accepted by the generic workflow settings parser but ignored by Herdr. When enabled globally, every workflow agent launches in a dedicated labeled Herdr workspace and uses the Herdr transport. The manual live-session action is hidden because the session is already in Herdr. Completed-session inspection remains available.</p>
       </section>
       <section id="handoff">
         <h2>Live handoff and ownership</h2>

@@ -41,9 +41,9 @@ Set the global workflow settings file, normally `~/.pi/agent/pi-extensible-workf
 }
 ```
 
-Use `extensionSettings.herdr` when workflow `extensions` selectors are configured in the same settings file.
+`extensionSettings.herdr` is the only valid location for Herdr configuration. The obsolete `extensions.herdr` object is rejected with `INVALID_SETTINGS`; migrate it before launching.
 
-This setting is global-only. When enabled, every workflow agent launches in a dedicated labeled Herdr workspace and the manual live-session action is hidden. Completed-session inspection remains available.
+This setting is global-only: a project-scope value is accepted by the generic workflow settings parser but ignored by Herdr. When enabled globally, every workflow agent launches in a dedicated labeled Herdr workspace and the manual live-session action is hidden. Completed-session inspection remains available.
 
 ## Live handoff and ownership
 

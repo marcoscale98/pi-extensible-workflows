@@ -85,7 +85,8 @@ Supported settings shape:
   "tools": ["*", "!write"]
 }
 ```
-The supported resource fields are direct `skills`, `extensions`, and `tools` arrays. `skills` matches discovered skill names, `extensions` matches discovered normalized extension paths, and `tools` matches only the current root or parent tool boundary. Selectors never create unavailable resources. The legacy `disabledAgentResources` field is rejected; it is not an alias for these fields. Use `extensionSettings.herdr` when extension selectors and Herdr configuration are needed together.
+The supported resource fields are direct `skills`, `extensions`, and `tools` arrays. `skills` matches discovered skill names, `extensions` matches discovered normalized extension paths, and `tools` matches only the current root or parent tool boundary. Selectors never create unavailable resources. The legacy `disabledAgentResources` field is rejected; it is not an alias for these fields. `extensionSettings.herdr` is the only valid location for Herdr configuration; the obsolete `extensions.herdr` object is rejected.
+The strict top-level settings keys are exactly `concurrency`, `backgroundWidget`, `modelAliases`, `skills`, `extensions`, `extensionSettings`, and `tools`. `backgroundWidget` is accepted only in the global file, and project settings may use the other keys. `extensionSettings` currently accepts only `herdr.enableFullyInspectableMode`; Herdr reads it only from global settings, so a project-scope value is accepted by the generic parser but ignored by Herdr.
 
 ### Concurrency
 
@@ -111,7 +112,15 @@ Dynamic model aliases are resolved once per launch or resume, then captured for 
 
 ### Resource selectors
 
-The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. Every discovered candidate starts enabled; a matching positive pattern enables it, `!pattern` disables it, and the last matching rule wins. `!*` clears the current selection before narrower positive patterns are applied. An empty selector array is a no-op; prepend `!*` to a positive list when it must restrict the candidate set, or use `!*` alone to select none. Selectors never create unavailable resources or bypass trust filtering. Child capability calls may re-enable discovered skills and extensions through their final overlay, while child tools remain within the parent boundary.
+The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. Every discovered candidate starts enabled; a matching positive pattern enables it, `!pattern` disables it, and the last matching rule wins. `!*` clears the current selection before narrower positive patterns are applied. An empty selector array contributes no matches as a selector layer; prepend `!*` to a positive list when it must restrict the candidate set or use `!*` alone to select none. In a role override, an explicit `[]` replaces the inherited role selector list with that empty layer. Selectors never create unavailable resources or bypass trust filtering. Child capability calls may re-enable discovered skills and extensions through their final overlay, while child tools remain within the parent boundary. Doctor reports `AGENT_RESOURCE_TOOL_SELECTOR_ALLOWLIST` when a positive-only tool selector looks like an ineffective allow-list.
+
+Extension selector normalization is context-specific. In settings, `~` and `~/...` expand from the home directory, `file://` URLs become filesystem paths, and relative paths resolve from the directory containing that settings file. In role frontmatter, the same forms are supported and relative paths resolve from the role file's directory. Existing non-magic paths and the static prefixes of magic paths in settings and role files are canonicalized with `realpath` when possible; `*`, `**`, and `**/...` remain cwd-independent patterns. At call level and in role-object overrides, those three forms also remain cwd-independent. Other relative selectors resolve from the agent launch cwd: non-magic selectors are canonicalized, while magic patterns are path-resolved without `realpath`. Call-level and role-override `~` and `file://` values are not expanded by the runtime.
+
+## `piewf doctor --json`
+
+When doctor completes its checks, `piewf doctor --json` writes one JSON object. A command-level failure writes an error to stderr, exits `1`, and produces no JSON. The current top-level `DoctorReport` keys are `cwd`, `agentDir`, `settingsPath`, `settings`, `settingsSources`, `trust`, `activeTools`, `piExtensions`, `piSkills`, `roles`, `functions`, `modelAliases`, `resourcePolicy`, optional `roleTarget`, optional `roleInspection`, and `diagnostics`. Diagnostics have `severity`, `code`, `message`, and optional `source` and `hint`. Resource policies expose global/project selectors, effective selected resources, unmatched patterns, and `selectorSources`; role inspection adds role and call selector layers plus model, tools, prompt, final system prompt, setup hooks, and setup diagnostics. Model-alias entries carry `name`, `kind`, `provenance`, and dynamic-alias `version` and `headline`.
+
+Treat `code` and named fields as the machine contract, tolerate omitted optional fields, and ignore unknown fields for forward compatibility. There is no schema-version field; do not parse the human-readable doctor report. For a completed report, the exit status is `0` unless a diagnostic has severity `error`, in which case it is `1`. `settingsSources` gives source paths for represented effective settings. `resourcePolicy.globalSettingsPath` and `projectSettingsPath` identify selector files, and top-level `resourcePolicy.selectorSources` carries only the global and project layers; role and call layers appear under `roleInspection.resources.selectorSources`.
 
 ## Standalone Subagents
 
@@ -246,7 +255,7 @@ agentSetupHooks: {
 }
 ```
 
-Hooks may mutate the prompt, options, session input, or transport, but the immutable prepared launch remains the capability ceiling. Keep hooks short and cancellation-aware. Hook failures prevent session creation and are not native-session retries. Each agent retry starts from a fresh setup baseline and runs hooks again.
+Hooks may mutate the prompt, options, session input, or transport, but the immutable prepared launch remains the capability ceiling. Resource-policy mutation is narrowing-only: adding a selector that widens skills, extensions, or tools fails setup with `INVALID_METADATA`; negated narrowing is accepted. Final resource selector order is global settings, trusted project settings, role frontmatter, call-level selectors, then hook-added narrowing. The runtime preserves hook negations in their original order, including negations interleaved with positive selectors, while applying them as the final overlay. Keep hooks short and cancellation-aware. Hook failures prevent session creation and are not native-session retries. Each agent retry starts from a fresh setup baseline and runs hooks again.
 
 ### Packaged roles
 
@@ -268,7 +277,7 @@ description: Reviews code for correctness
 model: reviewer-model
 thinking: high
 tools: ["!*", read, grep]
-skills: ["review-*", "!experimental-*"]
+skills: ["!*", "review-*"]
 extensions: ["**/*", "!**/unsafe.mjs"]
 contextFiles: [global, project]
 ---
@@ -298,7 +307,9 @@ Dynamic roles do not create inline role definitions. The selected role name must
 
 Use a dynamic role when the choice must be made at runtime. Use a static role when possible because it gives earlier unknown-role, model, and tool errors and produces a smaller launch snapshot.
 
-`piewf doctor --role <name>` is the read-only way to inspect the effective role, model, tools, resources, setup hooks, and prepared system prompt. Add `--prompt <text>` when a prompt-dependent hook must be inspected, or `--json` for a machine-readable `DoctorReport` that includes role inspection data.
+`piewf doctor --role <name>` or `piewf doctor <name>` is the read-only way to inspect the effective role, model, tools, resources, setup hooks, and prepared system prompt. Add `--prompt <text>` when a prompt-dependent hook must be inspected. With `--json`, either role form adds `roleTarget` and adds `roleInspection` when inspection succeeds.
+
+Role discovery is fail-closed. Invalid frontmatter or the rejected legacy selector in any packaged or global role file, or in any trusted-project role file, prevents the runtime from loading a partial role set. Doctor reports `ROLE_FRONTMATTER` or `AGENT_RESOURCE_SELECTOR_MIGRATION` plus `ROLE_LOAD_BLOCKED`; active role entries in the general report say `unavailable: role loading failed` and doctor exits `1`. See the [doctor reference](developers.html#operations) for exact diagnostics. A focused unavailable role reports `ROLE_NOT_FOUND`; a missing role at runtime fails with `UNKNOWN_AGENT_TYPE`.
 
 
 ## Verification checklist
