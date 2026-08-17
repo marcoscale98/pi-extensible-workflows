@@ -28,7 +28,11 @@ void test(`a clean real Pi session composes ${functionName} in a workflow script
   const root = mkdtempSync(join(tmpdir(), "pi-workflow-real-session-"));
   const agentDir = join(root, "agent");
   const sessionDir = join(root, "sessions");
-  const artifactDir = resolve(process.env.PI_WORKFLOW_TRACE_DIR ?? join(process.cwd(), ".tmp", "workflow-real-session"));
+  const packageRoot = resolve(fileURLToPath(new URL("..", import.meta.url)), "..");
+  const configuredTraceDir = process.env.PI_WORKFLOW_TRACE_DIR;
+  const artifactDir = configuredTraceDir === undefined
+    ? resolve(packageRoot, ".tmp", "workflow-real-session")
+    : resolve(packageRoot, configuredTraceDir);
   const tracePath = join(artifactDir, "trace.jsonl");
   const repository = createAmbientFixtureRepository(root);
   const worktree = createAmbientCaseWorktree(repository, "real-session");
