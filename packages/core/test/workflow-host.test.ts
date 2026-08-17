@@ -47,6 +47,20 @@ const typeCheckAgentContext = (context: WorkflowOrchestrationContext): void => {
   void worktreeResult;
   const parallelResult: Promise<{ first: Static<typeof outputSchema>; second: number }> = context.parallel("batch", { first: () => context.agent("prompt", { outputSchema }), second: () => 2 });
   void parallelResult;
+  const checkpointResult: Promise<boolean> = context.checkpoint({ name: "ship", prompt: "Approve shipment", context: { artifact: "build" } });
+  void checkpointResult;
+  // @ts-expect-error checkpoint requires a CheckpointInput
+  void context.checkpoint("ship");
+  // @ts-expect-error checkpoint context must be JSON-compatible
+  void context.checkpoint({ name: "ship", prompt: "Approve shipment", context: () => true });
+  const pipelineResult: Promise<{ first: string; second: string }> = context.pipeline("format", { first: 1, second: 2 }, { stringify: async (value: number) => `item:${String(value)}` });
+  void pipelineResult;
+  // @ts-expect-error pipeline stages must accept the item value type
+  void context.pipeline("format", { first: 1 }, { stringify: (value: string) => value });
+  // @ts-expect-error pipeline stages must produce JSON-compatible values
+  void context.pipeline("format", { first: 1 }, { invalid: () => new Date() });
+  const pipelineKeyedResult: Promise<{ first: number; second: number }> = context.pipeline("double", { first: 1, second: 2 }, { double: (value: number) => value * 2 });
+  void pipelineKeyedResult;
   const inputSchema = Type.Object({ value: Type.String() });
   const functionOutputSchema = Type.Object({ value: Type.String() });
   const typedFunction = defineWorkflowFunction({ description: "typed", input: inputSchema, output: functionOutputSchema, run: async (input) => ({ value: input.value }) });

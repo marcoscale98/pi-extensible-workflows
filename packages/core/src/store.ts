@@ -9,7 +9,7 @@ import {
   decodeOwnershipRecords, decodePersistedRun, decodeSummaryProjection, decodeSystemPromptArtifact,
   decodeWorktreeReferences, positiveInteger,
   type AwaitingCheckpoint, type BorrowedWorktreeBinding, type CompletedOperation, type EffectiveSystemPrompt,
-  type Journal, type LoadedPersistedRun, type PendingWorkflowDecision, type PersistedOwnershipNode,
+  type Journal, type PendingWorkflowDecision, type PersistedOwnershipNode,
   type PersistedRun, type RunSummary, type RunSummaryArtifacts, type WorktreeReference,
 } from "./decoders.js";
 import { atomicJson, atomicPrettyJson, atomicWriteFile, git, gitIdentity, json } from "./io.js";
@@ -103,7 +103,7 @@ export class RunStore {
     catch { return false; }
   }
 
-  async load(): Promise<{ run: LoadedPersistedRun; snapshot: Readonly<LaunchSnapshot> }> {
+  async load(): Promise<{ run: PersistedRun; snapshot: Readonly<LaunchSnapshot> }> {
     await this.stateLane.run(async () => undefined);
     const rawRun = await json(join(this.directory, "state.json"));
     const run = decodePersistedRun(rawRun, true);

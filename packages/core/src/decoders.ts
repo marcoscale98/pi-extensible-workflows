@@ -1,10 +1,9 @@
-import { AGENT_STATES, RUN_STATES, THINKING_LEVELS, type AgentAccounting, type AgentActivity, type AgentAttemptSummary, type AgentDefinition, type AgentRecord, type AgentResourceInspection, type AgentResourceSelectors, type BudgetApprovalRequest, type BudgetDimension, type BudgetEvent, type ContextFileScope, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunRecord, type WorkflowBudgetUsage, type WorkflowRunEvent } from "./types.js";
+import { AGENT_STATES, RUN_STATES, THINKING_LEVELS, type AgentAccounting, type AgentActivity, type AgentAttemptSummary, type AgentDefinition, type AgentRecord, type AgentResourceInspection, type AgentResourceSelectors, type BudgetApprovalRequest, type BudgetDimension, type BudgetEvent, type ContextFileScope, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunRecord, type WorkflowBudgetUsage, type WorkflowRetentionSettings, type WorkflowRunEvent } from "./types.js";
 import type { OwnershipRecord, ScheduledAgentOptions } from "./agent-execution.js";
 import { finiteNumber, isWorkflowErrorCode, jsonValue, object } from "./utils.js";
 
 export interface EffectiveSystemPrompt { sessionId: string; attempt: number; turn: number; sha256: string; prompt: string }
 export type PersistedRun = RunRecord;
-export type LoadedPersistedRun = PersistedRun;
 export interface RunSummaryAgent { id: string; name: string; label?: string; state: string; role?: string; attempts: number }
 export interface RunSummaryArtifacts { runDirectory: string; statePath: string; journalPath: string; snapshotPath: string; workflowPath: string; resultPath: string; summaryPath: string }
 export interface RunSummary { schemaVersion: 1; runId: string; sessionId: string; workflowName: string; state: RunRecord["state"]; createdAt: string; updatedAt: string; terminalAt?: string; usage: WorkflowBudgetUsage; agents: readonly RunSummaryAgent[]; error?: RunRecord["error"]; failedAt?: string; replayablePaths: readonly string[]; incompletePaths: readonly string[]; artifacts: RunSummaryArtifacts }
@@ -25,13 +24,13 @@ type PersistedOptions = ScheduledAgentOptions;
 const INVALID_PERSISTED_VALUE = Symbol("invalid persisted value");
 
 function integer(value: unknown): value is number { return finiteNumber(value) && Number.isInteger(value); }
+function safePositiveInteger(value: unknown): value is number { return integer(value) && Number.isSafeInteger(value) && value > 0; }
 export function positiveInteger(value: unknown): value is number { return integer(value) && value > 0; }
 function isThinking(value: unknown): value is NonNullable<ScheduledAgentOptions["thinking"]> { return THINKING_LEVELS.some((level) => level === value); }
 function isContextFileScope(value: unknown): value is ContextFileScope { return ["global", "project", "cwd"].some((candidate) => candidate === value); }
 function isLaunchMode(value: unknown): value is NonNullable<LaunchSnapshot["launchMode"]> { return value === "foreground" || value === "background"; }
 function isRunState(value: unknown): value is RunRecord["state"] { return RUN_STATES.some((candidate) => candidate === value); }
 function isAgentState(value: unknown): value is PersistedAgent["state"] { return AGENT_STATES.some((candidate) => candidate === value); }
-function isOwnershipState(value: unknown): value is OwnershipRecord["state"] { return AGENT_STATES.some((candidate) => candidate === value); }
 function isBudgetDimension(value: unknown): value is BudgetDimension { return ["tokens", "costUsd", "durationMs", "agentLaunches"].some((candidate) => candidate === value); }
 function isBudgetEventType(value: unknown): value is NonNullable<RunRecord["budgetEvents"]>[number]["type"] { return ["soft_crossed", "hard_overrun", "hard_exhausted", "adjustment_requested", "adjustment_approved", "adjustment_rejected"].some((candidate) => candidate === value); }
 function optionalString(value: unknown): string | undefined | typeof INVALID_PERSISTED_VALUE { return value === undefined || typeof value === "string" ? value : INVALID_PERSISTED_VALUE; }
@@ -181,6 +180,13 @@ function decodeBudget(value: unknown): NonNullable<RunRecord["budget"]> | undefi
   }
   return budget;
 }
+function decodeRetention(value: unknown): Readonly<WorkflowRetentionSettings> | typeof INVALID_PERSISTED_VALUE {
+  if (!object(value) || Object.keys(value).some((key) => key !== "olderThanDays" && key !== "maxTerminalRuns")) return INVALID_PERSISTED_VALUE;
+  const olderThanDays = value.olderThanDays;
+  const maxTerminalRuns = value.maxTerminalRuns;
+  if (olderThanDays !== undefined && !safePositiveInteger(olderThanDays) || maxTerminalRuns !== undefined && !safePositiveInteger(maxTerminalRuns)) return INVALID_PERSISTED_VALUE;
+  return Object.freeze({ ...(olderThanDays === undefined ? {} : { olderThanDays }), ...(maxTerminalRuns === undefined ? {} : { maxTerminalRuns }) });
+}
 function decodeWorkflowSettings(value: unknown): LaunchSnapshot["settings"] | undefined {
   if (!object(value) || !positiveInteger(value.concurrency)) return undefined;
   const backgroundWidget = optionalBoolean(value.backgroundWidget);
@@ -191,11 +197,12 @@ function decodeWorkflowSettings(value: unknown): LaunchSnapshot["settings"] | un
   const extensions = value.extensions === undefined || object(value.extensions) ? undefined : decodeStringArray(value.extensions);
   const extensionSettings = value.extensionSettings === undefined ? undefined : decodeWorkflowExtensions(value.extensionSettings);
   const effectiveExtensionSettings = extensionSettings ?? legacyExtensionSettings;
-  if (backgroundWidget === INVALID_PERSISTED_VALUE || (value.modelAliases !== undefined && !modelAliases) || value.skills !== undefined && !skills || value.tools !== undefined && !tools || value.extensions !== undefined && !extensions && !legacyExtensionSettings || value.extensionSettings !== undefined && !extensionSettings) return undefined;
+  const retention = value.retention === undefined ? undefined : decodeRetention(value.retention);
+  if (backgroundWidget === INVALID_PERSISTED_VALUE || (value.modelAliases !== undefined && !modelAliases) || value.skills !== undefined && !skills || value.tools !== undefined && !tools || value.extensions !== undefined && !extensions && !legacyExtensionSettings || value.extensionSettings !== undefined && !extensionSettings || retention === INVALID_PERSISTED_VALUE) return undefined;
   return {
     concurrency: value.concurrency,
     ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }), ...(skills === undefined ? {} : { skills }), ...(tools === undefined ? {} : { tools }),
-    ...(extensions === undefined ? {} : { extensions }), ...(effectiveExtensionSettings === undefined ? {} : { extensionSettings: effectiveExtensionSettings }),
+    ...(extensions === undefined ? {} : { extensions }), ...(effectiveExtensionSettings === undefined ? {} : { extensionSettings: effectiveExtensionSettings }), ...(retention === undefined ? {} : { retention }),
   };
 }
 function decodeWorkflowSettingsSources(value: unknown): NonNullable<LaunchSnapshot["settingsSources"]> | undefined {
@@ -204,8 +211,9 @@ function decodeWorkflowSettingsSources(value: unknown): NonNullable<LaunchSnapsh
   const extensions = value.extensions === undefined ? undefined : typeof value.extensions === "string" ? value.extensions : undefined;
   const tools = value.tools === undefined ? undefined : typeof value.tools === "string" ? value.tools : undefined;
   const extensionSettings = value.extensionSettings === undefined ? undefined : typeof value.extensionSettings === "string" ? value.extensionSettings : undefined;
-  if (value.skills !== undefined && skills === undefined || value.extensions !== undefined && extensions === undefined || value.tools !== undefined && tools === undefined || value.extensionSettings !== undefined && extensionSettings === undefined) return undefined;
-  return { concurrency: value.concurrency, modelAliases: value.modelAliases, ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(tools === undefined ? {} : { tools }), ...(extensionSettings === undefined ? {} : { extensionSettings }) };
+  const retention = value.retention === undefined ? undefined : typeof value.retention === "string" ? value.retention : undefined;
+  if (value.skills !== undefined && skills === undefined || value.extensions !== undefined && extensions === undefined || value.tools !== undefined && tools === undefined || value.extensionSettings !== undefined && extensionSettings === undefined || value.retention !== undefined && retention === undefined) return undefined;
+  return { concurrency: value.concurrency, modelAliases: value.modelAliases, ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(tools === undefined ? {} : { tools }), ...(extensionSettings === undefined ? {} : { extensionSettings }), ...(retention === undefined ? {} : { retention }) };
 }
 function decodeIdentity(value: unknown): PersistedIdentity | undefined {
   if (!object(value) || typeof value.callSite !== "string" || !positiveInteger(value.occurrence)) return undefined;
@@ -517,7 +525,7 @@ export function decodeSessionOwner(value: unknown): SessionOwner | undefined {
   return { pid: value.pid, token: value.token, startedAt: value.startedAt };
 }
 function decodeOwnershipRecord(value: unknown): OwnershipRecord | undefined {
-  if (!object(value) || typeof value.id !== "string" || typeof value.label !== "string" || !isOwnershipState(value.state)) return undefined;
+  if (!object(value) || typeof value.id !== "string" || typeof value.label !== "string" || !isAgentState(value.state)) return undefined;
   const parentId = optionalString(value.parentId);
   const prompt = optionalString(value.prompt);
   const options = decodeScheduledAgentOptions(value.options);

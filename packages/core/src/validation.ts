@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import * as acorn from "acorn";
 import { Script } from "node:vm";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { AgentDefinition, AgentResourceSelectors, AgentResourceSelectorSet, AgentResourcePolicy, CheckpointInput, ContextFileScope, JsonSchema, JsonValue, PreflightCapabilities, PreflightResult, RoleOverride, ShellOptions, StaticWorkflowCall, StaticWorkflowExecution, StaticWorkflowScope, ValidatedWorkflowLaunch, WorkflowCallKind, WorkflowErrorCode, WorkflowExtensionMetadata, WorkflowExtensionSettings, WorkflowMetadata, WorkflowRoleDirectoryRegistration, WorkflowSettings, WorkflowSettingsOverrides, WorkflowSettingsResolution, WorkflowSettingsSources, WorkflowValidationContext, WorkflowValidationParameters } from "./types.js";
+import type { AgentDefinition, AgentResourceSelectors, AgentResourceSelectorSet, AgentResourcePolicy, CheckpointInput, ContextFileScope, JsonSchema, JsonValue, PreflightCapabilities, PreflightResult, RoleOverride, ShellOptions, StaticWorkflowCall, StaticWorkflowExecution, StaticWorkflowScope, ValidatedWorkflowLaunch, WorkflowCallKind, WorkflowErrorCode, WorkflowExtensionMetadata, WorkflowExtensionSettings, WorkflowMetadata, WorkflowRetentionSettings, WorkflowRoleDirectoryRegistration, WorkflowSettings, WorkflowSettingsOverrides, WorkflowSettingsResolution, WorkflowSettingsSources, WorkflowValidationContext, WorkflowValidationParameters } from "./types.js";
 import type { WorkflowRegistryApi } from "./registry.js";
 import { registeredWorkflowRoleDirectoryRegistrations } from "./registry.js";
 import { annotateModelAliasError, deepFreeze, errorText, fail, isNodeError, jsonObject, jsonValue, modelAliasName, modelCapability, object, parseThinking, positiveInteger, resolveModelReference, resourcePatternHasMagic, unknownModel, validateModelAliases, validateResourcePattern } from "./utils.js";
@@ -85,6 +85,17 @@ function validateWorkflowExtensions(value: unknown, settingsPath: string, errorC
   if (value.herdr.enableFullyInspectableMode !== undefined && typeof value.herdr.enableFullyInspectableMode !== "boolean") fail(errorCode, `${base}.herdr.enableFullyInspectableMode must be a boolean`);
   return Object.freeze({ herdr: Object.freeze({ ...(value.herdr.enableFullyInspectableMode === undefined ? {} : { enableFullyInspectableMode: value.herdr.enableFullyInspectableMode }) }) });
 }
+function positiveRetentionInteger(value: unknown): value is number { return positiveInteger(value) && Number.isSafeInteger(value); }
+function validateRetention(value: unknown, settingsPath: string): Readonly<WorkflowRetentionSettings> | undefined {
+  if (value === undefined) return undefined;
+  const base = `${settingsPath}.retention`;
+  if (!object(value)) fail("INVALID_SETTINGS", `${base} must be an object`);
+  const unknown = Object.keys(value).find((key) => key !== "olderThanDays" && key !== "maxTerminalRuns");
+  if (unknown) fail("INVALID_SETTINGS", `Unknown retention setting at ${base}: ${unknown}`);
+  if (value.olderThanDays !== undefined && !positiveRetentionInteger(value.olderThanDays)) fail("INVALID_SETTINGS", `${base}.olderThanDays must be a positive integer`);
+  if (value.maxTerminalRuns !== undefined && !positiveRetentionInteger(value.maxTerminalRuns)) fail("INVALID_SETTINGS", `${base}.maxTerminalRuns must be a positive integer`);
+  return Object.freeze({ ...(value.olderThanDays === undefined ? {} : { olderThanDays: value.olderThanDays }), ...(value.maxTerminalRuns === undefined ? {} : { maxTerminalRuns: value.maxTerminalRuns }) });
+}
 function parseSettings(path: string, partial: false): Readonly<WorkflowSettings>;
 function parseSettings(path: string, partial: true): Readonly<WorkflowSettingsOverrides>;
 function parseSettings(path: string, partial: boolean): Readonly<WorkflowSettings | WorkflowSettingsOverrides> {
@@ -95,7 +106,7 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
     fail("CONFIG_ERROR", `Invalid workflow settings JSON at ${path}: ${errorText(error)}`);
   }
   if (!object(parsed)) fail("INVALID_SETTINGS", `Workflow settings at ${path} must be an object`);
-  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", ...(partial ? [] : ["backgroundWidget"]) ]);
+  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", "retention", ...(partial ? [] : ["backgroundWidget"]) ]);
   const unknown = Object.keys(parsed).find((key) => !allowed.has(key));
   if (Object.prototype.hasOwnProperty.call(parsed, "disabledAgentResources")) fail("INVALID_SETTINGS", `disabledAgentResources is no longer supported; use skills, extensions, and tools selectors (settings: ${path})`);
   if (unknown) fail("INVALID_SETTINGS", `Unknown workflow setting at ${path}: ${unknown}`);
@@ -108,10 +119,11 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
   const tools = validateSelectorList(parsed.tools, path, "tools");
   const extensions = validateSelectorList(parsed.extensions, path, "extensions");
   const extensionSettings = parsed.extensionSettings === undefined ? undefined : validateWorkflowExtensions(parsed.extensionSettings, path);
+  const retention = validateRetention(parsed.retention, path);
   return Object.freeze({
     ...(concurrency === undefined ? {} : { concurrency }), ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(modelAliases === undefined ? {} : { modelAliases }),
     ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }),
-    ...(extensionSettings === undefined ? {} : { extensionSettings }), ...(tools === undefined ? {} : { tools }),
+    ...(extensionSettings === undefined ? {} : { extensionSettings }), ...(tools === undefined ? {} : { tools }), ...(retention === undefined ? {} : { retention }),
   });
 }
 export function loadSettings(path = workflowSettingsPath()): Readonly<WorkflowSettings> { return parseSettings(path, false); }
@@ -137,6 +149,7 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
     modelAliases: projectHas("modelAliases") ? projectSettingsPath : globalSettingsPath,
     skills: sourceFor("skills"), extensions: sourceFor("extensions"), tools: sourceFor("tools"),
     ...(extensionSettings === undefined ? {} : { extensionSettings: projectHas("extensionSettings") ? projectSettingsPath : globalSettingsPath }),
+    ...(project.retention === undefined && global.retention === undefined ? {} : { retention: project.retention === undefined ? globalSettingsPath : projectSettingsPath }),
   };
   const effective = Object.freeze({
     concurrency: project.concurrency ?? global.concurrency,
@@ -146,6 +159,7 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
     ...(hasExtensionSelectors ? { extensions: effectiveSelectors.extensions } : {}),
     ...(extensionSettings === undefined ? {} : { extensionSettings }),
     ...(effectiveSelectors.tools?.length ? { tools: effectiveSelectors.tools } : global.tools !== undefined || project.tools !== undefined ? { tools: effectiveSelectors.tools } : {}),
+    ...((project.retention ?? global.retention) === undefined ? {} : { retention: project.retention ?? global.retention }),
   });
   return { globalSettingsPath, projectSettingsPath, projectTrusted, global, project, effective, sources };
 }

@@ -1,14 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { type AgentProviderFailure, type AgentProviderRecovery, WorkflowAgentExecutor } from "./agent-execution.js";
 import { type PersistedRun, type RunStore, type WorktreeReference } from "./persistence.js";
-import { deepFreeze, errorCode, errorText, fail, jsonValue, object } from "./utils.js";
+import { deepFreeze, errorCode, errorText, fail, isWorkflowErrorCode, jsonValue, object } from "./utils.js";
 import { validateAgentOptions, validateShellOptions, workflowPrompt } from "./validation.js";
 import { type WorkflowRegistryApi } from "./registry.js";
-import { ERROR_CODES, HARD_TERMINAL_RUN_STATES, WORKFLOW_AGENT_STATE_CHANGED_EVENT, WORKFLOW_BUDGET_EVENT, WORKFLOW_CHECKPOINT_STATE_CHANGED_EVENT, WORKFLOW_PHASE_CHANGED_EVENT, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WORKFLOW_RUN_STATE_CHANGED_EVENT, WORKFLOW_WORKTREE_CREATED_EVENT, WorkflowError, type AgentOptions, type AgentRecord, type BudgetEvent, type FunctionIdentity, type JsonValue, type ModelSpec, type ParallelResult, type ParallelTasks, type RunState, type WorkflowBridge, type WorkflowCheckpointState, type WorkflowErrorCode, type WorkflowErrorShape, type WorkflowEventBase, type WorkflowExecution, type WorkflowFunctionContext, type WorkflowMetadata, type WorkflowRunContext, type WorkflowWorktreeCallback, type WorkflowWorktreeReference } from "./types.js";
+import { HARD_TERMINAL_RUN_STATES, WORKFLOW_AGENT_STATE_CHANGED_EVENT, WORKFLOW_BUDGET_EVENT, WORKFLOW_CHECKPOINT_STATE_CHANGED_EVENT, WORKFLOW_PHASE_CHANGED_EVENT, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WORKFLOW_RUN_STATE_CHANGED_EVENT, WORKFLOW_WORKTREE_CREATED_EVENT, WorkflowError, type AgentOptions, type AgentRecord, type BudgetEvent, type FunctionIdentity, type JsonValue, type ModelSpec, type ParallelResult, type ParallelTasks, type PipelineItems, type PipelineResult, type PipelineStages, type RunState, type WorkflowBridge, type WorkflowCheckpointState, type WorkflowErrorShape, type WorkflowEventBase, type WorkflowExecution, type WorkflowFunctionContext, type WorkflowMetadata, type WorkflowRunContext, type WorkflowWorktreeCallback, type WorkflowWorktreeReference } from "./types.js";
 import { structuralPath as operationPath } from "./persistence.js";
 
 type WorkflowEventSink = { emit: (name: string, payload: unknown) => unknown };
-function isWorkflowErrorCode(value: unknown): value is WorkflowErrorCode { return ERROR_CODES.some((candidate) => candidate === value); }
 const inheritedHostAgentPath = new AsyncLocalStorage<readonly string[]>();
 const inheritedHostWorktreeOwner = new AsyncLocalStorage<string>();
 
@@ -227,7 +226,7 @@ async function hostParallel<Tasks extends ParallelTasks>(rawOperation: unknown, 
   return keyedJsonResult<Tasks>(results.flatMap((result) => "value" in result ? [[result.name, result.value] as const] : []));
 }
 
-async function hostPipeline(rawOperation: unknown, rawItems: unknown, rawStages: unknown): Promise<JsonValue> {
+async function hostPipeline<Items extends PipelineItems, Output extends JsonValue>(rawOperation: unknown, rawItems: unknown, rawStages: unknown): Promise<PipelineResult<Items, Output>> {
   if (typeof rawOperation !== "string" || !rawOperation.trim()) fail("INVALID_METADATA", "pipeline requires a stable explicit name");
   const items = namedRecord(rawItems, "pipeline items");
   const stages = namedRecord(rawStages, "pipeline stages");
@@ -256,7 +255,7 @@ async function hostPipeline(rawOperation: unknown, rawItems: unknown, rawStages:
   }));
   const failure = results.find((result) => result.error);
   if (failure?.error) throw failure.error;
-  return keyedJsonResult(results.flatMap((result) => "value" in result ? [[result.name, result.value] as const] : []));
+  return Object.fromEntries(results.flatMap((result) => "value" in result ? [[result.name, result.value] as const] : [])) as PipelineResult<Items, Output>;
 }
 
 export function nextNamedOccurrence(counters: Map<string, number>, label: string): string {
@@ -314,7 +313,7 @@ export function withWorkflowFunctions(bridge: WorkflowBridge, store: RunStore, r
       },
       prompt: workflowPrompt,
       parallel: <Tasks extends ParallelTasks>(operationName: string, tasks: Tasks) => hostParallel<Tasks>(operationName, tasks),
-      pipeline: (...args: readonly unknown[]) => hostPipeline(args[0], args[1], args[2]),
+      pipeline: <Items extends PipelineItems, Output extends JsonValue>(operationName: string, items: Items, stages: PipelineStages<Items[keyof Items], Output>) => hostPipeline<Items, Output>(operationName, items, stages),
       withWorktree: <Result extends JsonValue>(name: string, callback: WorkflowWorktreeCallback<Result>) => hostWithWorktree(name, callback, bridge.worktree, signal),
       checkpoint: async (...args: readonly unknown[]) => {
         if (!bridge.checkpoint || !object(args[0]) || !jsonValue(args[0])) fail("INTERNAL_ERROR", "No checkpoint bridge is available");

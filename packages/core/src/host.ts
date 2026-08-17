@@ -9,6 +9,7 @@ import { RunLifecycle, WorkflowEventPublisher, nextNamedOccurrence, withWorkflow
 import { createWorkflowRecovery, persistedFailure } from "./host-recovery.js";
 import { registerWorkflowNavigator, uiHostCapabilities } from "./host-navigator.js";
 import { acquireSessionLease, isPersistedRun, listPersistedSessionIds, listRunIds, RunStore, SessionLease, structuralPath as operationPath } from "./persistence.js";
+import { retainTerminalRuns } from "./retention.js";
 import type { PersistedRun, WorktreeReference } from "./persistence.js";
 import { validateBudget, WorkflowBudgetRuntime } from "./budget.js";
 import { SerialLane, asWorkflowError, createLaunchSnapshot, errorCode, errorText, fail, jsonValue, modelAliasErrorName, modelCapability, object, parseModelReference, parseThinking, positiveInteger, validateModelAliases } from "./utils.js";
@@ -100,8 +101,8 @@ function workflowLaunchSettings(cwd: string, projectTrusted: boolean, globalSett
 }
 function frozenResourcePolicy(policy: AgentResourcePolicy): () => AgentResourcePolicy { return () => structuredClone(policy); }
 function resumedSnapshotSettings(snapshot: Readonly<LaunchSnapshot>, resolution: WorkflowSettingsResolution, modelAliases: Readonly<Record<string, string>>): { settings: WorkflowSettings; settingsSources?: NonNullable<LaunchSnapshot["settingsSources"]> } {
-  const settings: WorkflowSettings = { ...snapshot.settings, concurrency: snapshot.settingsSources === undefined || snapshot.settingsSources.concurrency === "per-run options" ? snapshot.settings.concurrency : resolution.effective.concurrency, backgroundWidget: resolution.effective.backgroundWidget ?? true, ...(resolution.effective.skills === undefined ? {} : { skills: resolution.effective.skills }), ...(resolution.effective.extensions === undefined ? {} : { extensions: resolution.effective.extensions }), ...(resolution.effective.extensionSettings === undefined ? {} : { extensionSettings: resolution.effective.extensionSettings }), ...(resolution.effective.tools === undefined ? {} : { tools: resolution.effective.tools }), modelAliases };
-  const settingsSources = snapshot.settingsSources === undefined ? undefined : { ...snapshot.settingsSources, modelAliases: resolution.sources.modelAliases, ...(resolution.sources.skills === undefined ? {} : { skills: resolution.sources.skills }), ...(resolution.sources.extensions === undefined ? {} : { extensions: resolution.sources.extensions }), ...(resolution.sources.tools === undefined ? {} : { tools: resolution.sources.tools }), ...(resolution.sources.extensionSettings === undefined ? {} : { extensionSettings: resolution.sources.extensionSettings }), concurrency: snapshot.settingsSources.concurrency === "per-run options" ? "per-run options" : resolution.sources.concurrency };
+  const settings: WorkflowSettings = { ...snapshot.settings, concurrency: snapshot.settingsSources === undefined || snapshot.settingsSources.concurrency === "per-run options" ? snapshot.settings.concurrency : resolution.effective.concurrency, backgroundWidget: resolution.effective.backgroundWidget ?? true, ...(resolution.effective.skills === undefined ? {} : { skills: resolution.effective.skills }), ...(resolution.effective.extensions === undefined ? {} : { extensions: resolution.effective.extensions }), ...(resolution.effective.extensionSettings === undefined ? {} : { extensionSettings: resolution.effective.extensionSettings }), ...(resolution.effective.tools === undefined ? {} : { tools: resolution.effective.tools }), ...(resolution.effective.retention === undefined ? {} : { retention: resolution.effective.retention }), modelAliases };
+  const settingsSources = snapshot.settingsSources === undefined ? undefined : { ...snapshot.settingsSources, modelAliases: resolution.sources.modelAliases, ...(resolution.sources.skills === undefined ? {} : { skills: resolution.sources.skills }), ...(resolution.sources.extensions === undefined ? {} : { extensions: resolution.sources.extensions }), ...(resolution.sources.tools === undefined ? {} : { tools: resolution.sources.tools }), ...(resolution.sources.extensionSettings === undefined ? {} : { extensionSettings: resolution.sources.extensionSettings }), ...(resolution.sources.retention === undefined ? {} : { retention: resolution.sources.retention }), concurrency: snapshot.settingsSources.concurrency === "per-run options" ? "per-run options" : resolution.sources.concurrency };
   return { settings, ...(settingsSources === undefined ? {} : { settingsSources }) };
 }
 function mainAgentError(error: unknown): WorkflowError {
@@ -917,6 +918,10 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     registry.freeze();
     registerCatalog(ctx.cwd, projectTrusted(ctx));
     await ensureSessionLease(ctx.cwd, ctx.sessionManager.getSessionId());
+    let retention: WorkflowSettings["retention"];
+    try { retention = resolveWorkflowSettings(ctx.cwd, projectTrusted(ctx), workflowSettingsPath(extensionAgentDir)).effective.retention; } catch { retention = undefined; }
+    // Retention is optional housekeeping; a corrupt or racing run must not block resume.
+    if (retention !== undefined) void retainTerminalRuns({ cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), ...(home === undefined ? {} : { home }), allSessions: true, retention }).catch(() => undefined);
     for (const runId of await listRunIds(ctx.cwd, ctx.sessionManager.getSessionId(), home)) {
       if (runs.has(runId)) continue;
       const store = new RunStore(ctx.cwd, ctx.sessionManager.getSessionId(), runId, home);

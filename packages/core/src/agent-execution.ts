@@ -46,7 +46,7 @@ export interface PiResourceInspection {
 }
 import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceInspection, AgentResourcePolicy, AgentResourceSelectors, AgentResourceSelectorSources, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
 import { SerialLane, deepFreeze, errorText, jsonObject, jsonValue, object, modelAliasName, modelCapability, resolveModelReference, resourcePatternHasMagic, selectResourcesByLayers, unmatchedResourcePatterns } from "./utils.js";
-import { THINKING_LEVELS, roleNameOf, type ThinkingLevel } from "./types.js";
+import { THINKING_LEVELS, roleNameOf, type AgentState, type ThinkingLevel } from "./types.js";
 import { WorkflowError } from "./types.js";
 import { createLiveSessionHandoff } from "./session-handoff.js";
 import { normalizePiMessage, normalizePiSessionEvent, runtimeProgressToAgentProgress } from "./pi-runtime-adapter.js";
@@ -1174,7 +1174,7 @@ type ScheduledNode = {
   children: Set<string>;
   collected: boolean;
   collecting: boolean;
-  state: "queued" | "running" | "waiting_for_child" | "paused" | "retrying" | "completed" | "failed" | "cancelled";
+  state: AgentState;
   controller: AbortController;
   promise: Promise<ScheduledAgentResult> | undefined;
   resolve: ((result: ScheduledAgentResult) => void) | undefined;

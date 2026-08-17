@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { callUnchecked, decodeTestJson, decodeTestJsonRecord, decodeTestRunStart, decodeTestToolResult, isTestRecord, isTestWorkflowFailureDiagnostics, testExtensionApi, testExtensionContext } from "./support.js";
 import type { ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, ERROR_CODES, formatWorkflowFailure, formatWorkflowFailureDelivery, formatWorkflowFailureDiagnostics, RunStore, WorkflowError, WorkflowRegistry, type PersistedRun, type WorkflowFailureDiagnostics } from "../src/index.js";
+import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, ERROR_CODES, formatWorkflowFailure, formatWorkflowFailureDelivery, formatWorkflowFailureDiagnostics, RunStore, WorkflowError, WorkflowRegistry, type PersistedRun, type WorkflowFailureDiagnostics, type WorkflowFunctionContext } from "../src/index.js";
 import type { SessionInput } from "../src/agent-execution.js";
 import { testTransport, type TestPiSession } from "./test-transport.js";
 import { contextualWorkflowAction } from "./support.js";
@@ -34,7 +34,7 @@ void test("rejects global collisions, invalid metadata, schemas, input, and outp
   assert.throws(() => { new WorkflowRegistry().register({ ...extension, version: "v1" }); }, (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   assert.throws(() => { new WorkflowRegistry().register({ ...extension, functions: { run: { ...extension.functions.run, description: "", input: { type: "string" } } } }); }, WorkflowError);
   const journal = { get: () => undefined, put: () => {} };
-  const context = { run: Object.freeze({ cwd: "/repo", sessionId: "session", runId: "run", workflow: Object.freeze({ name: "test" }), args: null, signal: new AbortController().signal }), invoke: async () => null, agent: async () => null, shell: async () => ({ exitCode: 0, stdout: "", stderr: "" }), prompt: (template: string) => template, parallel: async () => { throw new Error("unused"); }, pipeline: async () => null, withWorktree: async () => { throw new Error("unused"); }, checkpoint: async () => true, phase: () => {}, log: () => {} };
+  const context: WorkflowFunctionContext = { run: Object.freeze({ cwd: "/repo", sessionId: "session", runId: "run", workflow: Object.freeze({ name: "test" }), args: null, signal: new AbortController().signal }), invoke: async () => null, agent: async () => null, shell: async () => ({ exitCode: 0, stdout: "", stderr: "" }), prompt: (template: string) => template, parallel: async () => { throw new Error("unused"); }, pipeline: async () => { throw new Error("unused"); }, withWorktree: async () => { throw new Error("unused"); }, checkpoint: async () => true, phase: () => {}, log: () => {} };
   await assert.rejects(registry.invokeFunction("run", { value: 1 }, context, "bad-input", journal), (error: unknown) => error instanceof WorkflowError && error.code === "RESULT_INVALID");
   await assert.rejects(registry.invokeFunction("run", { value: "x" }, context, "bad-output", journal), (error: unknown) => error instanceof WorkflowError && error.code === "RESULT_INVALID");
 });

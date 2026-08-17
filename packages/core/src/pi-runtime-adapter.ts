@@ -1,8 +1,7 @@
 import type { RuntimeAgentHandoff, RuntimeAgentProgress, RuntimeAgentState, RuntimeHandoffState, RuntimeToolCallProgress } from "./runtime/agent-runner.js";
 import type { AgentProgress } from "./agent-execution.js";
 import type { LiveSessionHandoff, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionState } from "./types.js";
-
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+import { THINKING_LEVELS } from "./types.js";
 const TURN_START_EVENTS = new Set(["turn_start", "turn_started", "turnStarted"]);
 const AGENT_START_EVENTS = new Set(["agent_start"]);
 const TURN_END_EVENTS = new Set(["turn_end", "turnEnded", "agent_end", "agent_settled"]);
@@ -10,7 +9,7 @@ type RecordValue = Record<string, unknown>;
 
 function record(value: unknown): RecordValue | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as RecordValue : undefined; }
 function stringValue(value: unknown): string | undefined { return typeof value === "string" ? value : undefined; }
-function isThinking(value: unknown): value is NonNullable<WorkflowAgentSessionState["thinking"]> { return typeof value === "string" && THINKING_LEVELS.has(value); }
+function isThinking(value: unknown): value is NonNullable<WorkflowAgentSessionState["thinking"]> { return THINKING_LEVELS.some((level) => level === value); }
 function finiteNumber(value: unknown): number | undefined { return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
 
 function normalizeMessage(value: unknown): WorkflowAgentMessage | undefined {

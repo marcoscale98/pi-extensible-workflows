@@ -82,11 +82,12 @@ Supported settings shape:
   "skills": ["*", "!experimental-*"],
   "extensions": ["**/*", "!**/unsafe.mjs"],
   "extensionSettings": { "herdr": { "enableFullyInspectableMode": true } },
-  "tools": ["*", "!write"]
+  "tools": ["*", "!write"],
+  "retention": { "olderThanDays": 30, "maxTerminalRuns": 200 }
 }
 ```
 The supported resource fields are direct `skills`, `extensions`, and `tools` arrays. `skills` matches discovered skill names, `extensions` matches discovered normalized extension paths, and `tools` matches only the current root or parent tool boundary. Selectors never create unavailable resources. The legacy `disabledAgentResources` field is rejected; it is not an alias for these fields. `extensionSettings.herdr` is the only valid location for Herdr configuration; the obsolete `extensions.herdr` object is rejected.
-The strict top-level settings keys are exactly `concurrency`, `backgroundWidget`, `modelAliases`, `skills`, `extensions`, `extensionSettings`, and `tools`. `backgroundWidget` is accepted only in the global file, and project settings may use the other keys. `extensionSettings` currently accepts only `herdr.enableFullyInspectableMode`; Herdr reads it only from global settings, so a project-scope value is accepted by the generic parser but ignored by Herdr.
+The strict top-level settings keys are exactly `concurrency`, `backgroundWidget`, `modelAliases`, `skills`, `extensions`, `extensionSettings`, `tools`, and `retention`. `backgroundWidget` is accepted only in the global file, and project settings may use the other keys. `retention` accepts positive integer `olderThanDays` and `maxTerminalRuns` limits. It is applied best-effort at session start to hard-terminal runs only (`completed`, `failed`, `stopped`); dependency and worktree safety rules can retain additional runs.
 
 ### Concurrency
 

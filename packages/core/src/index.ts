@@ -21,3 +21,5 @@ export { PiRuntimeAgentRunner, createPiRuntimeAgentRunner, isRuntimeAgentProvide
 export type { PiRuntimeAgentRunnerCallbacks, PiRuntimeAgentRunnerOptions } from "./pi-runtime-runner.js";
 export * from "./herdr.js";
 export * from "./runtime/index.js";
+export { retainTerminalRuns } from "./retention.js";
+export type { RetentionCleanupOptions, RetentionCleanupReport } from "./retention.js";

@@ -51,6 +51,7 @@ export function roleNameOf(value: unknown): string | undefined {
   const hasStringProperty = <Key extends string>(candidate: Record<string, unknown>, key: Key): candidate is Record<Key, string> => typeof candidate[key] === "string";
   return hasStringProperty(value, "name") ? value.name : undefined;
 }
+// Extra keys are reserved for extensions and forwarded as JSON to agentOptions; core options remain typed.
 export interface AgentOptions<Schema extends TSchema = never> {
   label?: string;
   model?: string;
@@ -66,6 +67,10 @@ export interface AgentOptions<Schema extends TSchema = never> {
 }
 export type ParallelTasks = Record<string, () => JsonValue | Promise<JsonValue>>;
 export type ParallelResult<Tasks extends ParallelTasks> = { [Key in keyof Tasks]: Awaited<ReturnType<Tasks[Key]>> };
+export type PipelineItems = Record<string, JsonValue>;
+export type PipelineStage<Input extends JsonValue, Output extends JsonValue> = (value: Input) => Output | Promise<Output>;
+export type PipelineStages<Input extends JsonValue, Output extends JsonValue> = Record<string, PipelineStage<Input, Output>>;
+export type PipelineResult<Items extends PipelineItems, Output extends JsonValue> = { [Key in keyof Items]: Output };
 export interface ShellOptions { timeoutMs?: number; env?: Record<string, string> }
 export interface ShellResult { exitCode: number | null; stdout: string; stderr: string }
 export type BudgetDimension = "tokens" | "costUsd" | "durationMs" | "agentLaunches";
@@ -94,9 +99,10 @@ export interface WorkflowModelAlias { resolve: (context: Readonly<WorkflowModelA
 export interface WorkflowMetadata { name: string; description?: string }
 export interface HerdrExtensionSettings { enableFullyInspectableMode?: boolean }
 export interface WorkflowExtensionSettings { herdr?: Readonly<HerdrExtensionSettings> }
-export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[] }
-export interface WorkflowSettingsOverrides { concurrency?: number; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[] }
-export interface WorkflowSettingsSources { concurrency: string; modelAliases: string; skills?: string; extensions?: string; tools?: string; extensionSettings?: string }
+export interface WorkflowRetentionSettings { olderThanDays?: number; maxTerminalRuns?: number }
+export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; retention?: Readonly<WorkflowRetentionSettings> }
+export interface WorkflowSettingsOverrides { concurrency?: number; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; retention?: Readonly<WorkflowRetentionSettings> }
+export interface WorkflowSettingsSources { concurrency: string; modelAliases: string; skills?: string; extensions?: string; tools?: string; extensionSettings?: string; retention?: string }
 export interface WorkflowSettingsResolution { globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; global: Readonly<WorkflowSettings>; project: Readonly<WorkflowSettingsOverrides>; effective: Readonly<WorkflowSettings>; sources: Readonly<WorkflowSettingsSources> }
 export interface AgentResourceSelectors { skills?: readonly string[]; extensions?: readonly string[]; tools?: readonly string[] }
 export interface AgentResourceSelectorSet { skills: readonly string[]; extensions: readonly string[]; tools?: readonly string[] }
@@ -218,7 +224,7 @@ export interface LaunchSnapshot {
 }
 export interface PreflightCapabilities { models: ReadonlySet<string>; tools: ReadonlySet<string>; agentTypes: ReadonlySet<string>; modelAliases?: Readonly<Record<string, string>>; knownModels?: ReadonlySet<string>; settingsPath?: string; skipModelAvailability?: boolean }
 export interface PreflightResult { metadata: WorkflowMetadata; referenced: { phases: readonly string[]; models: readonly string[]; tools: readonly string[]; agentTypes: readonly string[] }; schemas: readonly JsonSchema[]; dynamicAgentRoles: boolean }
-export interface WorkflowOrchestrationContext { agent: { <Schema extends TSchema>(prompt: string, options: Readonly<AgentOptions<Schema> & { outputSchema: Schema }>): Promise<Static<Schema>>; (prompt: string, options?: Readonly<AgentOptions>): Promise<JsonValue> }; shell: (command: string, options?: ShellOptions) => Promise<ShellResult>; prompt: (template: string, values: Readonly<Record<string, JsonValue>>) => string; parallel: <Tasks extends ParallelTasks>(operationName: string, tasks: Tasks) => Promise<ParallelResult<Tasks>>; pipeline: (...args: readonly unknown[]) => Promise<JsonValue>; withWorktree: <Result extends JsonValue>(name: string, callback: WorkflowWorktreeCallback<Result>) => Promise<Result>; checkpoint: (...args: readonly unknown[]) => Promise<boolean>; phase: (name: string) => void; log: (message: string) => void }
+export interface WorkflowOrchestrationContext { agent: { <Schema extends TSchema>(prompt: string, options: Readonly<AgentOptions<Schema> & { outputSchema: Schema }>): Promise<Static<Schema>>; (prompt: string, options?: Readonly<AgentOptions>): Promise<JsonValue> }; shell: (command: string, options?: ShellOptions) => Promise<ShellResult>; prompt: (template: string, values: Readonly<Record<string, JsonValue>>) => string; parallel: <Tasks extends ParallelTasks>(operationName: string, tasks: Tasks) => Promise<ParallelResult<Tasks>>; pipeline: <Items extends PipelineItems, Output extends JsonValue>(operationName: string, items: Items, stages: PipelineStages<Items[keyof Items], Output>) => Promise<PipelineResult<Items, Output>>; withWorktree: <Result extends JsonValue>(name: string, callback: WorkflowWorktreeCallback<Result>) => Promise<Result>; checkpoint: (input: CheckpointInput) => Promise<boolean>; phase: (name: string) => void; log: (message: string) => void }
 export interface WorkflowRunContext { cwd: string; sessionId: string; runId: string; workflow: Readonly<WorkflowMetadata>; args: JsonValue; signal: AbortSignal }
 export interface WorkflowFunctionContext extends WorkflowOrchestrationContext { run: Readonly<WorkflowRunContext>; invoke: (name: string, input: Readonly<Record<string, JsonValue>>) => Promise<JsonValue> }
 export type WorkflowWorktreeCallback<Result extends JsonValue = JsonValue> = (reference: Readonly<WorkflowWorktreeReference>) => Result | Promise<Result>;

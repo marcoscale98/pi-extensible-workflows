@@ -9,6 +9,7 @@ import { getAgentDir, parseFrontmatter, SessionManager } from "@earendil-works/p
 import { CAPTURE_ERROR_PREFIX, CAPTURE_IDENTITY, resolveWorkflowSkillPath } from "./eval-capture-extension.js";
 export { resolveWorkflowSkillPath } from "./eval-capture-extension.js";
 import { ERROR_CODES, errorText, inspectWorkflowScript, isObject, loadAgentDefinitions, roleNameOf, runWorkflow, WORKFLOW_CALL_KINDS, WorkflowError, type AgentIdentity, type JsonSchema, type JsonValue, type StaticWorkflowCall, type StaticWorkflowExecution, type WorkflowErrorCode } from "./index.js";
+import { isWorkflowErrorCode } from "./utils.js";
 
 export type SignificantAction = { kind: "tool"; name: string } | { kind: "text" } | { kind: "thinking" };
 export type SequenceExpectation = readonly string[] | { equals?: readonly string[]; startsWith?: readonly string[] };
@@ -849,7 +850,6 @@ function decodeChildStringArray(value: unknown): string[] | undefined { return d
 function decodeChildNumberArray(value: unknown): number[] | undefined { return decodeChildArray(value, decodeChildNumber); }
 function decodeChildJson(value: unknown): JsonValue | undefined { return isJson(value) ? value : undefined; }
 function isEvalCaseStatus(value: unknown): value is EvalCaseResult["status"] { return value === "passed" || value === "failed" || value === "timed_out" || value === "budget_exceeded" || value === "skipped"; }
-function isWorkflowErrorCode(value: unknown): value is WorkflowErrorCode { return ERROR_CODES.some((candidate) => candidate === value); }
 function decodeChildUsage(value: unknown): ParentUsage | undefined {
   if (!isObject(value)) return undefined;
   const input = decodeChildNumber(value.input); const output = decodeChildNumber(value.output); const cacheRead = decodeChildNumber(value.cacheRead); const cacheWrite = decodeChildNumber(value.cacheWrite); const totalTokens = decodeChildNumber(value.totalTokens); const cost = decodeChildNumber(value.cost);
