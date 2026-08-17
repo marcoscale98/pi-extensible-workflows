@@ -391,6 +391,11 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   let disposal: Promise<void> | undefined;
   let aborting: Promise<void> | undefined;
   const lifecycle = new SerialLane();
+  /*
+   * Lifecycle transitions: active -> suspending -> suspended; active|suspended -> resuming -> active;
+   * suspending|resuming -> suspended on failure; active|suspending|suspended|resuming -> disposing -> disposed.
+   * Only suspend, resume, and disposeSession, including their queued lifecycle operations, may write state.
+   */
   let state: "active" | "suspending" | "suspended" | "resuming" | "disposing" | "disposed" = "active";
   let suspendOperation: Promise<void> | undefined;
   let resumeOperation: Promise<void> | undefined;
