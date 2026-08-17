@@ -17,7 +17,7 @@ import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIf
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
 import backgroundWidget, { type BackgroundWidgetAPI } from "./background-widget.js";
 import { showChangelogNotice } from "./changelog.js";
-import { LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowFailureDiagnostics, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
+import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowFailureDiagnostics, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import {
   SETTLED_AGENT_STATES,
   catalogResultValue,
@@ -81,7 +81,6 @@ export { formatWorkflowFailure, formatWorkflowFailureDelivery, formatWorkflowFai
 export { RunLifecycle } from "./host-runtime.js";
 
 const INTERNAL_WORKFLOW_TOOLS: readonly string[] = ["workflow", "workflow_respond", "workflow_stop", "workflow_status", "workflow_resume", "workflow_retry", "workflow_catalog"];
-const HARD_TERMINAL_RUN_STATES: ReadonlySet<string> = new Set(["completed", "failed", "stopped"]);
 const SHUTDOWN_TERMINAL_RUN_STATES: ReadonlySet<string> = new Set(["completed", "failed", "stopped", "budget_exhausted"]);
 const FAILURE_DELIVERY_STATES: ReadonlySet<RunState> = new Set(["failed", "stopped", "interrupted", "budget_exhausted"]);
 function snapshotResourcePolicy(snapshot: Readonly<LaunchSnapshot>, cwd: string, projectTrusted: boolean, globalSettingsPath: string): AgentResourcePolicy {
@@ -344,43 +343,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   const foregroundDeliveries = new Map<string, ForegroundDelivery>();
   const foregroundResumeClaims = new WeakSet<RunStore>();
   const terminalDeliveryQueues = new WeakMap<RunStore, Promise<void>>();
-  const liveActivities = new Map<string, Map<string, AgentActivity>>();
-  const liveEventTimes = new Map<string, Map<string, number>>();
-  const liveAgentSessions = new Map<string, import("./types.js").WorkflowAgentSession>();
-  const liveAgentPrepared = new Map<string, Readonly<import("./types.js").PreparedAgentSession>>();
-  const liveAgentHandoffs = new Map<string, import("./types.js").LiveSessionHandoff>();
-  const setLiveAgentSession = (runId: string, agentId: string, session?: import("./types.js").WorkflowAgentSession) => { const key = `${runId}:${agentId}`; if (session) liveAgentSessions.set(key, session); else liveAgentSessions.delete(key); };
-  const setLiveAgentHandoff = (runId: string, agentId: string, attempt: AgentAttempt) => {
-    const key = `${runId}:${agentId}`;
-    if (attempt.liveSession && attempt.prepared && attempt.handoff) { liveAgentPrepared.set(key, attempt.prepared); liveAgentHandoffs.set(key, attempt.handoff); } else { liveAgentPrepared.delete(key); liveAgentHandoffs.delete(key); }
-  };
-  const setLiveActivity = (runId: string, agentId: string, activity?: AgentActivity) => {
-    const activities = liveActivities.get(runId);
-    if (activity) {
-      if (activities) activities.set(agentId, activity);
-      else liveActivities.set(runId, new Map([[agentId, activity]]));
-    } else {
-      activities?.delete(agentId);
-      if (activities?.size === 0) liveActivities.delete(runId);
-    }
-  };
-  const setLiveEventTime = (runId: string, agentId: string, timestamp?: number) => {
-    if (timestamp === undefined) return;
-    const timestamps = liveEventTimes.get(runId);
-    if (timestamps) timestamps.set(agentId, timestamp);
-    else liveEventTimes.set(runId, new Map([[agentId, timestamp]]));
-  };
-  const withLiveActivities = (run: PersistedRun): PersistedRun => {
-    const activities = liveActivities.get(run.id);
-    const timestamps = liveEventTimes.get(run.id);
-    if (!activities?.size && !timestamps?.size) return run;
-    return { ...run, agents: run.agents.map((agent) => {
-      const activity = activities?.get(agent.id);
-      const lastEventAt = timestamps?.get(agent.id);
-      if (activity === undefined && lastEventAt === undefined) return agent;
-      return { ...agent, ...(activity === undefined ? {} : { activity }), ...(lastEventAt === undefined ? {} : { lastEventAt }) };
-    }) };
-  };
+  const liveAgents = new LiveAgentRegistry();
+  const withLiveActivities = (run: PersistedRun): PersistedRun => liveAgents.overlay(run);
   const terminalRunStates = new Map<string, "completed" | "failed" | "stopped">();
   let sessionLease: SessionLease | undefined;
   let sessionLeasePromise: Promise<SessionLease> | undefined;
@@ -573,17 +537,17 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
           runState = { ...loaded.run, ...run.budget.snapshot(), agents: loaded.run.agents.map((agent) => agent.id === id ? agentWithProgress(agent, progress) : agent) };
         }
         if (!runState.agents.some((agent) => agent.id === id)) return;
-        setLiveActivity(runId, id, progress.activity);
-        setLiveEventTime(runId, id, progress.lastEventAt);
+        liveAgents.setActivity(runId, id, progress.activity);
+        liveAgents.setEventTime(runId, id, progress.lastEventAt);
         run.update?.(workflowToolUpdate(withLiveActivities(runState)));
       };
       const onAttempt = async (attempt: AgentAttempt) => {
-        setLiveAgentSession(runId, id, attempt.liveSession);
-        setLiveAgentHandoff(runId, id, attempt);
+        liveAgents.setSession(runId, id, attempt.liveSession);
+        liveAgents.setHandoff(runId, id, attempt);
         await scheduler.flush(runId);
         scheduler.attemptStarted(id);
         const lastEventAt = Date.now();
-        setLiveEventTime(runId, id, lastEventAt);
+        liveAgents.setEventTime(runId, id, lastEventAt);
         await scheduler.flush(runId);
         const before = (await run.store.load()).run;
         await persistActiveAgentAttempt(run.store, id, attempt);
@@ -598,12 +562,12 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const completed = (await run.store.load()).run;
       await eventPublisher.agentStates(run.store, run.metadata, before.agents, completed.agents);
       const persisted = await persistRunState(run.store, run.metadata, (current) => ({ ...current, ...run.budget.snapshot() }));
-      setLiveActivity(runId, id);
-      setLiveAgentSession(runId, id);
+      liveAgents.setActivity(runId, id);
+      liveAgents.setSession(runId, id);
       run.update?.(workflowToolUpdate(withLiveActivities(persisted)));
       return result.value;
     } catch (error) {
-      setLiveAgentSession(runId, id);
+      liveAgents.setSession(runId, id);
       const attempts = getAgentAttempts(error);
       if (attempts?.length) {
         const before = (await run.store.load()).run;
@@ -612,7 +576,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         await eventPublisher.agentStates(run.store, run.metadata, before.agents, failed.agents);
       }
       const persisted = await persistRunState(run.store, run.metadata, (current) => ({ ...current, ...run.budget.snapshot() }));
-      setLiveActivity(runId, id);
+      liveAgents.setActivity(runId, id);
       run.update?.(workflowToolUpdate(withLiveActivities(persisted)));
       throw error;
     }
@@ -652,11 +616,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     scheduler.removeRun(runId);
     terminalRunStates.set(runId, run.lifecycle.state as "completed" | "failed" | "stopped");
     run.checkpointResolvers.clear();
-    liveActivities.delete(runId);
-    liveEventTimes.delete(runId);
-    for (const key of liveAgentSessions.keys()) if (key.startsWith(`${runId}:`)) liveAgentSessions.delete(key);
-    for (const key of liveAgentPrepared.keys()) if (key.startsWith(`${runId}:`)) liveAgentPrepared.delete(key);
-    for (const key of liveAgentHandoffs.keys()) if (key.startsWith(`${runId}:`)) liveAgentHandoffs.delete(key);
+    liveAgents.deleteRun(runId);
     eventPublisher.removeRun(runId);
     runs.delete(runId);
   };
@@ -1015,7 +975,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         loaded = { ...loaded, run: (await store.load()).run };
       } else if (loaded.run.activeShells !== undefined || loaded.run.activeShellStartedAt !== undefined || loaded.run.activeShellsByPhase !== undefined) {
         await store.updateState((current) => {
-          if (["completed", "failed", "stopped"].includes(current.state)) return current;
+          if (HARD_TERMINAL_RUN_STATES.has(current.state)) return current;
           const next = { ...current };
           delete next.activeShells;
           delete next.activeShellStartedAt;
@@ -1141,7 +1101,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
           detach: async () => {
             let moved: boolean | undefined;
             await store.updateState((current) => {
-              if (["completed", "failed", "stopped"].includes(current.state) || current.delivery?.mode !== "foreground" || current.delivery.state !== "attached") return current;
+              if (HARD_TERMINAL_RUN_STATES.has(current.state) || current.delivery?.mode !== "foreground" || current.delivery.state !== "attached") return current;
               moved = true;
               return { ...current, delivery: { mode: "background", state: "pending" } };
             });
@@ -1167,11 +1127,12 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const providerPause = async () => { if (!foregroundAttached) deliver(pi, `Workflow ${checked.metadata.name} paused: provider limit.`); await lifecycle.providerPause(); };
       const providerErrorRecovery = createProviderErrorRecovery(ctx, availableModels, () => { runController.abort(); });
       const executor = createAgentExecutor({ cwd: ctx.cwd, model: rootModel, tools: new Set(rootTools), resourceSelectors: launch.resourcePolicy.effective, availableModels, knownModels, modelAliases, settingsPath, agentDefinitions, runStore: store, providerPause, agentResourcePolicy: frozenResourcePolicy(launch.resourcePolicy), runContext });
-      runs.set(runId, { executor, store, metadata: checked.metadata, model: rootModel, lifecycle, budget: budgetRuntime, abortController: runController, foreground: foregroundAttached, projectTrusted: () => projectTrusted(ctx), checkpointResolvers: new Map(), ...(providerErrorRecovery ? { providerErrorRecovery } : {}), ...(params.foreground && onUpdate ? { update: onUpdate } : {}) });
+      const runRecord: WorkflowRunRecord = { executor, store, metadata: checked.metadata, model: rootModel, lifecycle, budget: budgetRuntime, abortController: runController, foreground: foregroundAttached, projectTrusted: () => projectTrusted(ctx), checkpointResolvers: new Map(), ...(providerErrorRecovery ? { providerErrorRecovery } : {}), ...(params.foreground && onUpdate ? { update: onUpdate } : {}) };
+      runs.set(runId, runRecord);
       if (params.foreground && onUpdate) onUpdate(workflowToolUpdate((await store.load()).run));
       scheduler.addRun(runId, settings.concurrency, () => runs.get(runId)?.budget.checkAgentLaunch());
       const execution = runWorkflow(script, args, withWorkflowFunctions({ shell: (command, options, signal, identity) => shellForRun(store, checked.metadata, lifecycle, command, options, signal, identity), agent: workflowAgentHandler(store, checked.metadata, lifecycle, executor, ctx.cwd, runId, captureRole), worktree: async (owner) => resolveWorktree(store, checked.metadata, owner), checkpoint: checkpointBridge(runId, store, checked.metadata, () => runs.get(runId)?.foreground ?? foregroundAttached, ctx.hasUI ? ctx.ui : undefined, headless), phase: phaseBridge(store, checked.metadata, lifecycle), log: logBridge(store, lifecycle, checked.metadata.name) }, store, runContext, registry), runController.signal);
-      (runs.get(runId) as NonNullable<ReturnType<typeof runs.get>>).execution = execution;
+      runRecord.execution = execution;
       await eventPublisher.runStarted(store, checked.metadata);
       const finish = execution.result.then(async (value) => {
         await scheduler.flush(runId);
@@ -1194,7 +1155,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         throw typed;
       });
       const completion = finish.finally(() => cleanupTerminalRun(runId));
-      (runs.get(runId) as NonNullable<ReturnType<typeof runs.get>>).completion = completion;
+      runRecord.completion = completion;
       const deliverFailureContent = (error: unknown): string => {
         const diagnostic = failureDiagnosticsFrom(error);
         return diagnostic ? formatWorkflowFailureDelivery(diagnostic) : formatWorkflowFailureDeliveryFallback(checked.metadata.name, runId, store.directory, error);
@@ -1331,7 +1292,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     },
   };
   pi.registerTool(workflowTool);
-  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked, setNavigatorOpen: (open) => { if (open) backgroundWidgetController.suspend(); else backgroundWidgetController.resume(); } });
+  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked, setNavigatorOpen: (open) => { if (open) backgroundWidgetController.suspend(); else backgroundWidgetController.resume(); } });
   pi.on("session_shutdown", async () => {
     try {
       await Promise.all([...runs.entries()].map(async ([runId, run]) => {
@@ -1356,6 +1317,60 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       }
     }
   });
+}
+
+/**
+ * In-memory per-agent state that must not be persisted: the live session handle, the prepared
+ * session, the handoff, and the freshest activity sample. One map keyed by run then agent replaces
+ * five parallel maps that previously had to stay consistent by hand; deleteRun() is the single
+ * cleanup point when a run reaches a hard-terminal state.
+ */
+type LiveAgentState = { session?: import("./types.js").WorkflowAgentSession; prepared?: Readonly<import("./types.js").PreparedAgentSession>; handoff?: import("./types.js").LiveSessionHandoff; activity?: AgentActivity; lastEventAt?: number };
+class LiveAgentRegistry {
+  readonly #byRun = new Map<string, Map<string, LiveAgentState>>();
+  get(runId: string, agentId: string): Readonly<LiveAgentState> | undefined { return this.#byRun.get(runId)?.get(agentId); }
+  setSession(runId: string, agentId: string, session?: import("./types.js").WorkflowAgentSession): void {
+    if (session) this.#state(runId, agentId).session = session;
+    else this.#clear(runId, agentId, (state) => { delete state.session; });
+  }
+  setHandoff(runId: string, agentId: string, attempt: AgentAttempt): void {
+    if (attempt.liveSession && attempt.prepared && attempt.handoff) { const state = this.#state(runId, agentId); state.prepared = attempt.prepared; state.handoff = attempt.handoff; }
+    else this.#clear(runId, agentId, (state) => { delete state.prepared; delete state.handoff; });
+  }
+  setActivity(runId: string, agentId: string, activity?: AgentActivity): void {
+    if (activity) this.#state(runId, agentId).activity = activity;
+    else this.#clear(runId, agentId, (state) => { delete state.activity; });
+  }
+  setEventTime(runId: string, agentId: string, timestamp?: number): void {
+    if (timestamp !== undefined) this.#state(runId, agentId).lastEventAt = timestamp;
+  }
+  deleteRun(runId: string): void { this.#byRun.delete(runId); }
+  /** Overlays live activity and freshness onto a persisted run; returns the input when nothing is live. */
+  overlay(run: PersistedRun): PersistedRun {
+    const agents = this.#byRun.get(run.id);
+    if (!agents?.size) return run;
+    const next = run.agents.map((agent) => {
+      const live = agents.get(agent.id);
+      if (!live || (live.activity === undefined && live.lastEventAt === undefined)) return agent;
+      return { ...agent, ...(live.activity === undefined ? {} : { activity: live.activity }), ...(live.lastEventAt === undefined ? {} : { lastEventAt: live.lastEventAt }) };
+    });
+    return next.some((agent, index) => agent !== run.agents[index]) ? { ...run, agents: next } : run;
+  }
+  #state(runId: string, agentId: string): LiveAgentState {
+    const agents = this.#byRun.get(runId) ?? new Map<string, LiveAgentState>();
+    this.#byRun.set(runId, agents);
+    const state = agents.get(agentId) ?? {};
+    agents.set(agentId, state);
+    return state;
+  }
+  #clear(runId: string, agentId: string, remove: (state: LiveAgentState) => void): void {
+    const agents = this.#byRun.get(runId);
+    const state = agents?.get(agentId);
+    if (!agents || !state) return;
+    remove(state);
+    if (Object.keys(state).length === 0) agents.delete(agentId);
+    if (agents.size === 0) this.#byRun.delete(runId);
+  }
 }
 
 function displayAgentName(label: string | undefined, role: string | undefined, model: ModelSpec): string {

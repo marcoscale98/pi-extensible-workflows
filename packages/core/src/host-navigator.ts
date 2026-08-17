@@ -86,10 +86,10 @@ export type WorkflowNavigatorDependencies = {
   stopWorkflowRun: (runId: string) => Promise<{ runId: string; state: string; stopped: boolean; reason?: "unknown_run" | "already_terminal" }>;
   moveForegroundToBackground: (runId: string) => Promise<{ runId: string; state: "running"; detached: true }>;
   isForegroundAttached: (runId: string) => boolean;
-  withLiveActivities: (run: PersistedRun) => PersistedRun;
-  liveAgentSessions: Map<string, import("./types.js").WorkflowAgentSession>;
-  liveAgentPrepared: Map<string, Readonly<import("./types.js").PreparedAgentSession>>;
-  liveAgentHandoffs: Map<string, import("./types.js").LiveSessionHandoff>;
+  liveAgents: {
+    get(runId: string, agentId: string): Readonly<{ session?: import("./types.js").WorkflowAgentSession; prepared?: Readonly<import("./types.js").PreparedAgentSession>; handoff?: import("./types.js").LiveSessionHandoff }> | undefined;
+    overlay(run: PersistedRun): PersistedRun;
+  };
   registry: WorkflowRegistryApi;
   projectTrusted: (context: unknown) => boolean;
   resumeHostContext: (context: unknown) => WorkflowRecoveryContext;
@@ -98,7 +98,7 @@ export type WorkflowNavigatorDependencies = {
   setNavigatorOpen?: (open: boolean) => void;
 };
 export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): void {
-  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, withLiveActivities, liveAgentSessions, liveAgentPrepared, liveAgentHandoffs, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked, setNavigatorOpen } = deps;
+  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked, setNavigatorOpen } = deps;
   const command = {
     description: "Open the workflow picker; workflow actions are available contextually",
     handler: async (args, ctx) => {
@@ -115,7 +115,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
             const loaded = await store.load();
             const summary = await store.loadSummary().catch(() => undefined);
             const terminalAt = summary?.terminalAt === undefined ? undefined : Date.parse(summary.terminalAt);
-            return { store, loaded: { ...loaded, run: withLiveActivities(loaded.run) }, resolvedAt: terminalAt !== undefined && Number.isFinite(terminalAt) ? terminalAt : undefined };
+            return { store, loaded: { ...loaded, run: liveAgents.overlay(loaded.run) }, resolvedAt: terminalAt !== undefined && Number.isFinite(terminalAt) ? terminalAt : undefined };
           }
           catch { if (!await store.isComplete()) await store.delete(true).catch(() => undefined); return undefined; }
         }));
@@ -303,7 +303,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
           const loadDashboard = async () => {
             const loaded = await store.load();
             const activeRun = runs.get(store.runId);
-            const liveRun = withLiveActivities({ ...loaded.run, ...(activeRun ? { usage: activeRun.budget.usage } : {}) });
+            const liveRun = liveAgents.overlay({ ...loaded.run, ...(activeRun ? { usage: activeRun.budget.usage } : {}) });
             const checkpoints = await store.awaitingCheckpoints();
             const worktrees = await store.worktrees();
             const completedOperations = ctx.mode === "tui" ? await store.replayableOperations().catch(() => []) : [];
@@ -352,13 +352,14 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
           const agentAttemptActionContext = (dashboard: Awaited<ReturnType<typeof loadDashboard>>, agent: AgentRecord): AgentAttemptActionContext | undefined => {
             const attempt = (agent.attemptDetails ?? []).reduce<AgentAttemptSummary | undefined>((latest, candidate) => !latest || candidate.attempt > latest.attempt ? candidate : latest, undefined);
             if (!attempt) return undefined;
-            const liveCandidate = liveAgentSessions.get(`${dashboard.run.id}:${agent.id}`);
+            const liveAgent = liveAgents.get(dashboard.run.id, agent.id);
+            const liveCandidate = liveAgent?.session;
             const live = liveCandidate && attempt.session && liveCandidate.reference.transport === attempt.session.transport && liveCandidate.reference.sessionId === attempt.session.sessionId ? liveCandidate : undefined;
             const run = runs.get(dashboard.run.id);
             const ui = { notify: (message: string, level: "info" | "warning" | "error" = "info") => { ctx.ui.notify(message, level); }, confirm: (title: string, message: string) => confirmWithBlocked(ctx.ui, reportBlocked, title, message), select: (title: string, options: readonly string[]) => { return ctx.ui.select(title, [...options]); }, input: (title: string, placeholder?: string) => ctx.ui.input(title, placeholder), setWorkingMessage: (message?: string) => { ctx.ui.setWorkingMessage(message); } };
             const attemptSnapshot = deepFreeze(structuredClone(attempt));
-            const prepared = live ? liveAgentPrepared.get(`${dashboard.run.id}:${agent.id}`) : undefined;
-            const handoff = live ? liveAgentHandoffs.get(`${dashboard.run.id}:${agent.id}`) : undefined;
+            const prepared = live ? liveAgent?.prepared : undefined;
+            const handoff = live ? liveAgent?.handoff : undefined;
             return { run: deepFreeze(structuredClone(dashboard.run)), agent: deepFreeze(structuredClone(agent)), attempt: attemptSnapshot, ...(attemptSnapshot.session ? { session: attemptSnapshot.session } : {}), ...(live ? { liveSession: live } : {}), ...(prepared ? { prepared } : {}), ...(handoff ? { handoff } : {}), signal: run?.abortController.signal ?? new AbortController().signal, ui: Object.freeze(ui) };
           };
           const visibleAgentAttemptActions = (dashboard: Awaited<ReturnType<typeof loadDashboard>>, agent: AgentRecord): readonly [string, import("./types.js").AgentAttemptAction][] => {

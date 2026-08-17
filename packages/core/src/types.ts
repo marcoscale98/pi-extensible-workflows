@@ -3,6 +3,12 @@ import type { CreateAgentSessionOptions, InlineExtension, SessionManager, ToolDe
 import type { Static, TSchema } from "typebox";
 export const RUN_STATES = ["queued", "running", "pausing", "paused", "awaiting_input", "completed", "failed", "stopped", "interrupted", "budget_exhausted"] as const;
 export const AGENT_STATES = ["queued", "running", "waiting_for_child", "paused", "retrying", "completed", "failed", "cancelled"] as const;
+export type RunState = (typeof RUN_STATES)[number];
+export type AgentState = (typeof AGENT_STATES)[number];
+// Shared terminal-state vocabularies: a hard-terminal run and a settled agent are decided here once,
+// so display, persistence, and lifecycle code cannot drift apart on what "finished" means.
+export const HARD_TERMINAL_RUN_STATES: ReadonlySet<RunState> = new Set(["completed", "failed", "stopped"]);
+export const SETTLED_AGENT_STATES: ReadonlySet<AgentState> = new Set(["completed", "failed", "cancelled"]);
 export const WORKFLOW_CALL_KINDS = ["agent", "parallel", "pipeline", "checkpoint", "phase", "withWorktree", "shell"] as const;
 export type WorkflowCallKind = (typeof WORKFLOW_CALL_KINDS)[number];
 export const WORKFLOW_RUN_STARTED_EVENT = "workflow:run-started";
@@ -22,8 +28,6 @@ export const ERROR_CODES = [
   "CANCELLED", "WORKER_UNRESPONSIVE", "WORKTREE_FAILED", "RESUME_INCOMPATIBLE", "BUDGET_EXHAUSTED", "INTERNAL_ERROR",
   ] as const;
 
-export type RunState = (typeof RUN_STATES)[number];
-export type AgentState = (typeof AGENT_STATES)[number];
 export type WorkflowErrorCode = (typeof ERROR_CODES)[number];
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type JsonSchema = { [key: string]: JsonValue };

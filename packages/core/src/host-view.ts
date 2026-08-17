@@ -16,7 +16,8 @@ import {
   type WorkflowPhaseTreeNode,
 } from "./host-phases.js";
 
-export const SETTLED_AGENT_STATES: ReadonlySet<import("./types.js").AgentState> = new Set(["completed", "failed", "cancelled"]);
+export { SETTLED_AGENT_STATES } from "./types.js";
+import { SETTLED_AGENT_STATES } from "./types.js";
 export interface WorkflowProgressStyles {
   accent(text: string): string;
   success(text: string): string;
