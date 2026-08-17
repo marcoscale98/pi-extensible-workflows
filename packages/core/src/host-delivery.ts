@@ -2,7 +2,101 @@ import { join } from "node:path";
 import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
 import { structuralPath as operationPath, type PersistedRun, type RunStore } from "./persistence.js";
 import { ERROR_CODES, WorkflowError, type JsonValue, type WorkflowErrorCode, type WorkflowFailureAgent, type WorkflowFailureDiagnostics, type WorkflowMetadata, type WorkflowSiblingAgent } from "./types.js";
-import { errorCode, errorText, isWorkflowAuthored, object } from "./utils.js";
+import { errorCode, errorText, fail, isWorkflowAuthored, object, SerialLane } from "./utils.js";
+const FAILURE_DELIVERY_STATES: ReadonlySet<PersistedRun["state"]> = new Set(["failed", "stopped", "interrupted", "budget_exhausted"]);
+
+export type ForegroundDetachResult = { runId: string; state: "running"; detached: true; run: PersistedRun };
+export type ForegroundDelivery = { store: RunStore; inline: boolean; detached: boolean; detach: () => Promise<ForegroundDetachResult>; timer?: ReturnType<typeof setImmediate> };
+export type PendingFailureDiagnostic = { diagnostic: WorkflowFailureDiagnostics; store: RunStore };
+
+type ForegroundDeliveryControllerOptions = {
+  runs: ReadonlyMap<string, { store: RunStore }>;
+  deliver?: (content: string) => void;
+};
+
+export class ForegroundDeliveryController {
+  readonly foregroundDeliveries = new Map<string, ForegroundDelivery>();
+  readonly pendingFailureDiagnostics = new Map<string, PendingFailureDiagnostic>();
+  readonly foregroundResumeClaims = new WeakSet<RunStore>();
+  readonly terminalDeliveryLanes = new WeakMap<RunStore, SerialLane>();
+
+  constructor(private readonly options: ForegroundDeliveryControllerOptions) {}
+
+  deliverTerminal = (store: RunStore, content: string | (() => string | Promise<string>), failure = false): Promise<void> => {
+    const lane = this.terminalDeliveryLanes.get(store) ?? new SerialLane();
+    this.terminalDeliveryLanes.set(store, lane);
+    return lane.run(async () => {
+      let claimed: boolean | undefined;
+      await store.updateState((current) => {
+        if (failure && !FAILURE_DELIVERY_STATES.has(current.state)) return current;
+        if (current.delivery?.state === "delivered") { this.foregroundResumeClaims.delete(store); return current; }
+        if (this.foregroundResumeClaims.has(store) && current.delivery?.mode === "foreground" && current.delivery.state === "attached") { this.foregroundResumeClaims.delete(store); return current; }
+        if (current.delivery?.mode === "foreground" && current.delivery.state === "attached") { claimed = true; return { ...current, delivery: { ...current.delivery, state: "delivered" } }; }
+        if (!current.delivery) { claimed = true; return current; }
+        claimed = true;
+        return { ...current, delivery: { ...current.delivery, mode: "background", state: "delivered" } };
+      });
+      if (claimed !== true) return;
+      if (failure && !FAILURE_DELIVERY_STATES.has((await store.load()).run.state)) {
+        await store.updateState((current) => !FAILURE_DELIVERY_STATES.has(current.state) && current.delivery?.state === "delivered" ? { ...current, delivery: { ...current.delivery, state: "pending" } } : current);
+        return;
+      }
+      this.options.deliver?.(typeof content === "function" ? await content() : content);
+    });
+  };
+
+  scheduleForegroundDelivery = (toolCallId: string, send: () => Promise<void>): void => {
+    const delivery = this.foregroundDeliveries.get(toolCallId);
+    if (!delivery || delivery.inline || typeof this.options.deliver !== "function") return;
+    //NOTE: Give Pi one event-loop turn to deliver an uninterrupted tool result before promoting.
+    delivery.timer = setImmediate(() => {
+      delete delivery.timer;
+      void send().finally(() => this.foregroundDeliveries.delete(toolCallId));
+    });
+  };
+
+  foregroundDeliveryCandidates = (runId: string): Array<[string, ForegroundDelivery]> => [...this.foregroundDeliveries.entries()].filter(([, delivery]) => this.options.runs.has(delivery.store.runId) && !delivery.inline && !delivery.detached && delivery.store.runId === runId);
+
+  moveForegroundToBackground = async (runId: string): Promise<ForegroundDetachResult> => {
+    const candidates = this.foregroundDeliveryCandidates(runId);
+    if (!candidates.length) throw new WorkflowError("RUN_NOT_FOUND", `No attached foreground workflow ${runId}`);
+    return candidates[0]?.[1].detach() ?? fail("RUN_NOT_FOUND", "No attached foreground workflow is running");
+  };
+
+  isForegroundAttached = (runId: string): boolean => this.foregroundDeliveryCandidates(runId).length > 0;
+
+  queueForegroundDelivery = async (toolCallId: string, content: string | (() => string | Promise<string>), foregroundResultReady: Promise<void>, failure = false): Promise<void> => {
+    const delivery = this.foregroundDeliveries.get(toolCallId);
+    if (!delivery) return;
+    const deliverDetached = async (): Promise<void> => {
+      this.pendingFailureDiagnostics.delete(toolCallId);
+      await this.deliverTerminal(delivery.store, content, failure);
+      this.foregroundDeliveries.delete(toolCallId);
+    };
+    if (delivery.detached) {
+      await deliverDetached();
+      return;
+    }
+    await foregroundResultReady;
+    const currentDelivery = this.foregroundDeliveries.get(toolCallId);
+    if (!currentDelivery) return;
+    if (currentDelivery.detached) {
+      await deliverDetached();
+      return;
+    }
+    await delivery.store.updateState((current) => {
+      if (!current.delivery || current.delivery.state === "delivered") return current;
+      return { ...current, delivery: { ...current.delivery, mode: "background", state: "pending" } };
+    });
+    if (delivery.inline) return;
+    this.scheduleForegroundDelivery(toolCallId, async () => {
+      if (delivery.inline || delivery.detached) return;
+      this.pendingFailureDiagnostics.delete(toolCallId);
+      await this.deliverTerminal(delivery.store, content, failure);
+    });
+  };
+}
+
 const workflowFailureDiagnostics = new WeakMap<WorkflowError, WorkflowFailureDiagnostics>();
 export function markWorkflowFailureDiagnostics(error: WorkflowError, diagnostic: WorkflowFailureDiagnostics): void { workflowFailureDiagnostics.set(error, diagnostic); }
 
