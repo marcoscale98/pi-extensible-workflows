@@ -1638,6 +1638,36 @@ void test("scheduler flush waits for terminal ownership persistence", async () =
   await scheduler.flush();
   assert.equal((writes.at(-1)?.[0] as { state: string }).state, "completed");
 });
+
+void test("scheduler reports a failed ownership write to its own run instead of rejecting without an owner", async () => {
+  const rejections: unknown[] = [];
+  const onRejection = (reason: unknown) => { rejections.push(reason); };
+  process.on("unhandledRejection", onRejection);
+  try {
+    const scheduler = new FairAgentScheduler(async () => "done", 4, async (runId) => { if (runId === "failing") throw new Error("ownership write failed"); });
+    scheduler.addRun("failing", 1);
+    scheduler.addRun("healthy", 1);
+    assert.equal((await scheduler.spawn("failing", "work", { label: "worker", cwd: "/repo", tools: [] }).result).ok, true);
+    assert.equal((await scheduler.spawn("healthy", "work", { label: "worker", cwd: "/repo", tools: [] }).result).ok, true);
+    // Another run's synchronization point never observes the failing run's persistence error.
+    await scheduler.flush("healthy");
+    await assert.rejects(scheduler.flush("failing"), (error: unknown) => error instanceof Error && error.message === "ownership write failed");
+    await scheduler.flush("failing");
+    await scheduler.flush();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(rejections, []);
+  } finally {
+    process.off("unhandledRejection", onRejection);
+  }
+});
+
+void test("scheduler flush without a run reports any pending persistence failure once", async () => {
+  const scheduler = new FairAgentScheduler(async () => "done", 1, async () => { throw new Error("ownership write failed"); });
+  scheduler.addRun("run", 1);
+  assert.equal((await scheduler.spawn("run", "work", { label: "worker", cwd: "/repo", tools: [] }).result).ok, true);
+  await assert.rejects(scheduler.flush(), (error: unknown) => error instanceof Error && error.message === "ownership write failed");
+  await scheduler.flush();
+});
 void test("releases consumed scheduler result payloads while retaining node metadata", async () => {
   const references: WeakRef<object>[] = [];
   const scheduler = new FairAgentScheduler(async ({ prompt }) => {

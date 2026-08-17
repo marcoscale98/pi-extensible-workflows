@@ -461,7 +461,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   const phaseBridge = (store: RunStore, metadata: WorkflowMetadata, lifecycle: RunLifecycle) => {
     let cursor = 0;
     return async (phase: string): Promise<void> => {
-      await scheduler.flush();
+      await scheduler.flush(store.runId);
       await lifecycle.enter();
       try {
         let previousPhase: string | undefined;
@@ -580,11 +580,11 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const onAttempt = async (attempt: AgentAttempt) => {
         setLiveAgentSession(runId, id, attempt.liveSession);
         setLiveAgentHandoff(runId, id, attempt);
-        await scheduler.flush();
+        await scheduler.flush(runId);
         scheduler.attemptStarted(id);
         const lastEventAt = Date.now();
         setLiveEventTime(runId, id, lastEventAt);
-        await scheduler.flush();
+        await scheduler.flush(runId);
         const before = (await run.store.load()).run;
         await persistActiveAgentAttempt(run.store, id, attempt);
         const active = (await run.store.load()).run;
@@ -647,7 +647,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     const run = runs.get(runId);
     if (!run || !HARD_TERMINAL_RUN_STATES.has(run.lifecycle.state)) return;
     await scheduler.cancelRun(runId);
-    await scheduler.flush();
+    await scheduler.flush(runId);
     if (runs.get(runId) !== run) return;
     scheduler.removeRun(runId);
     terminalRunStates.set(runId, run.lifecycle.state as "completed" | "failed" | "stopped");
@@ -671,7 +671,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     run.abortController.abort();
     run.execution?.cancel();
     await scheduler.cancelRun(run.store.runId);
-    await scheduler.flush();
+    await scheduler.flush(run.store.runId);
     await cleanupTerminalRun(runId);
     return { runId, state: "stopped", stopped: true };
   };
@@ -1174,7 +1174,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       (runs.get(runId) as NonNullable<ReturnType<typeof runs.get>>).execution = execution;
       await eventPublisher.runStarted(store, checked.metadata);
       const finish = execution.result.then(async (value) => {
-        await scheduler.flush();
+        await scheduler.flush(runId);
         if (budgetRuntime.hardExhausted) throw new WorkflowError("BUDGET_EXHAUSTED", "Budgeted work was attempted after hard exhaustion");
         const resultPath = await store.saveResult(value);
         const resultBytes = await store.resultBytes();
@@ -1182,7 +1182,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         await eventPublisher.runCompleted(store, checked.metadata, resultPath);
         return { value, resultPath, resultBytes };
       }).catch(async (error: unknown) => {
-        await scheduler.flush();
+        await scheduler.flush(runId);
         const typed = error instanceof WorkflowError ? error : new WorkflowError("INTERNAL_ERROR", String(error));
         if (!["stopped", "interrupted", "budget_exhausted"].includes(lifecycle.state)) await lifecycle.terminal(typed.code === "CANCELLED" ? "stopped" : typed.code === "BUDGET_EXHAUSTED" ? "budget_exhausted" : "failed", typed.code);
         const persisted = await persistRunState(store, checked.metadata, (current) => persistedFailure({ ...current, ...budgetRuntime.snapshot() }, typed));

@@ -1199,6 +1199,7 @@ export class FairAgentScheduler {
   #active = 0;
   #nextId = 0;
   #persistence = Promise.resolve();
+  readonly #persistenceErrors = new Map<string, Error>();
 
   constructor(private readonly runner: ScheduledAgentRunner, readonly sessionLimit = 16, private readonly writeOwnership?: OwnershipWriter) {
     if (!Number.isInteger(sessionLimit) || sessionLimit < 1 || sessionLimit > 16) throw new WorkflowError("INVALID_SETTINGS", "Session concurrency must be an integer from 1 to 16");
@@ -1386,7 +1387,17 @@ export class FairAgentScheduler {
     for (const node of this.#nodes.values()) if (node.runId === runId && node.parentId) this.#nodes.get(node.parentId)?.children.add(node.id);
   }
 
-  async flush(): Promise<void> { await this.#persistence; }
+  async flush(runId?: string): Promise<void> {
+    await this.#persistence;
+    // Errors are keyed per run so one run's ownership-write failure is never thrown at another
+    // run's synchronization point. A flush without a runId (shutdown) reports any run's failure.
+    const key = runId ?? this.#persistenceErrors.keys().next().value;
+    if (key === undefined) return;
+    const error = this.#persistenceErrors.get(key);
+    if (error === undefined) return;
+    this.#persistenceErrors.delete(key);
+    throw error;
+  }
 
   #inherit(parent: ScheduledNode | undefined, options: ScheduledAgentOptions): Readonly<ScheduledAgentOptions> {
     if (!options.label.trim() || !options.cwd || !Array.isArray(options.tools)) throw new WorkflowError("INVALID_METADATA", "Agents require label, cwd, and tools");
@@ -1456,7 +1467,10 @@ export class FairAgentScheduler {
   #persist(runId: string): void {
     if (!this.writeOwnership) return;
     const ownership = this.snapshot().filter(({ id }) => id.startsWith(`${runId}:`));
-    this.#persistence = this.#persistence.then(() => this.writeOwnership?.(runId, ownership)).then(() => undefined);
+    // An ownership write is scheduled, never awaited: the rejection handler must be attached here,
+    // or a failed write becomes an unhandled rejection that terminates the host process. flush() is
+    // the one place that observes it, so the failure is reported instead of discarded.
+    this.#persistence = this.#persistence.then(() => this.writeOwnership?.(runId, ownership)).then(() => undefined, (error: unknown) => { if (!this.#persistenceErrors.has(runId)) this.#persistenceErrors.set(runId, error instanceof Error ? error : new WorkflowError("INTERNAL_ERROR", String(error))); });
   }
 }
 

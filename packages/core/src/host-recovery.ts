@@ -134,7 +134,7 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
     const execution = runWorkflow(script, loaded.snapshot.args, withWorkflowFunctions({ shell: (command, options, signal, identity) => shellForRun(run.store, run.metadata, run.lifecycle, command, options, signal, identity), agent: workflowAgentHandler(run.store, run.metadata, run.lifecycle, run.executor, run.store.cwd, run.store.runId), worktree: async (owner) => resolveWorktree(run.store, run.metadata, owner), checkpoint: checkpointBridge(run.store.runId, run.store, run.metadata, foreground, hasUI ? ui : undefined), phase: phaseBridge(run.store, run.metadata, run.lifecycle), log: logBridge(run.store, run.lifecycle, run.metadata.name) }, run.store, runContext, registry), controller.signal);
     run.execution = execution;
     const completion = execution.result.then(async (value) => {
-      await scheduler.flush();
+      await scheduler.flush(run.store.runId);
       if (run.budget.hardExhausted) throw new WorkflowError("BUDGET_EXHAUSTED", "Budgeted work was attempted after hard exhaustion");
       const resultPath = await run.store.saveResult(value);
       const resultBytes = await run.store.resultBytes();
@@ -142,7 +142,7 @@ export function createWorkflowRecovery(deps: WorkflowRecoveryDependencies) {
       await eventPublisher.runCompleted(run.store, run.metadata, resultPath);
       return { value, resultPath, resultBytes };
     }).catch(async (error: unknown) => {
-      await scheduler.flush();
+      await scheduler.flush(run.store.runId);
       const typed = error instanceof WorkflowError ? error : new WorkflowError(errorCode(error) ?? "INTERNAL_ERROR", errorText(error));
       if (!["stopped", "interrupted", "budget_exhausted"].includes(run.lifecycle.state)) await run.lifecycle.terminal(typed.code === "BUDGET_EXHAUSTED" ? "budget_exhausted" : "failed", typed.code);
       const persisted = await persistRunState(run.store, run.metadata, (current) => persistedFailure({ ...current, ...run.budget.snapshot() }, typed));
