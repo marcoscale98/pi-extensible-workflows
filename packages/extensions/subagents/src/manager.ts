@@ -3,8 +3,10 @@ import { chmod, link, mkdir, open, readFile, readdir, rename, rm, stat } from "n
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
+  addAccounting,
   errorCode,
   errorText,
+  finiteNumber,
   isNodeError,
   jsonValue,
   loadAgentDefinitions,
@@ -13,6 +15,7 @@ import {
   resolveAgentResourcePolicy,
   resolveWorkflowSettings,
   roleNameOf,
+  sumAccounting,
   structuralPath,
   validateModelAliasAvailability,
   WorkflowAgentExecutor,
@@ -31,8 +34,9 @@ import {
   type ModelSpec,
   type WorkflowAgentSessionState,
   type WorkflowRunContext,
+  SerialLane,
 } from "pi-extensible-workflows";
-import { atomicWriteFile, json as readJson, processAlive } from "pi-extensible-workflows/persistence";
+import { atomicJson, json as readJson, processAlive } from "pi-extensible-workflows/persistence";
 import {
   SUBAGENT_ATTEMPT_DETAILS_LIMIT,
   SUBAGENT_MAX_RETRIES,
@@ -133,7 +137,7 @@ type LiveRun = {
   concurrencyReleased: boolean;
   notificationSent: boolean;
   terminalResolved: boolean;
-  writes: Promise<void>;
+  writes: SerialLane;
 };
 type SubagentOwnerLease = {
   readonly token: string;
@@ -243,13 +247,6 @@ async function secureDirectory(directory: string): Promise<void> {
   await chmod(directory, 0o700);
 }
 
-async function atomicJson(path: string, value: unknown): Promise<void> {
-  const serialized = JSON.stringify(value);
-  if (typeof serialized !== "string") throw new WorkflowError("INTERNAL_ERROR", `Cannot serialize JSON for ${path}`);
-  await atomicWriteFile(path, `${serialized}\n`);
-}
-
-
 async function currentProcessStart(): Promise<number> {
   if (process.platform === "linux") {
     try { return (await stat(`/proc/${String(process.pid)}`)).ctimeMs; }
@@ -269,8 +266,6 @@ function decodeOwnerMarker(value: unknown): SubagentOwnerMarker | undefined {
   if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid < 0 || !finiteNumber(processStart) || processStart < 0 || typeof sessionId !== "string" || !sessionId.trim() || typeof token !== "string" || !token.trim() || typeof acquiredAt !== "number" || !Number.isSafeInteger(acquiredAt) || acquiredAt < 0) return undefined;
   return { pid, processStart, sessionId, token, acquiredAt };
 }
-
-function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 
 async function createOwnerMarker(liveness: SubagentLiveness | undefined): Promise<SubagentOwnerMarker> {
   const pid = liveness?.pid ?? process.pid;
@@ -383,17 +378,6 @@ function internalStorageError(error: unknown, operation: string): WorkflowError 
   return new WorkflowError("INTERNAL_ERROR", `${operation}: ${errorText(error)}`);
 }
 
-function zeroAccounting(): AgentAccounting {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-}
-function addAccounting(left: AgentAccounting, right: AgentAccounting): AgentAccounting {
-  return { input: left.input + right.input, output: left.output + right.output, cacheRead: left.cacheRead + right.cacheRead, cacheWrite: left.cacheWrite + right.cacheWrite, cost: left.cost + right.cost };
-}
-function sumAccounting(values: Iterable<AgentAccounting>): AgentAccounting {
-  let total = zeroAccounting();
-  for (const value of values) total = addAccounting(total, value);
-  return total;
-}
 function boundedAttemptText(value: string): string { return value.length > MAX_PERSISTED_ATTEMPT_STRING_CHARS ? value.slice(0, MAX_PERSISTED_ATTEMPT_STRING_CHARS) : value; }
 function boundedAttemptStrings(values: readonly string[]): readonly string[] { return values.slice(0, MAX_PERSISTED_ATTEMPT_ARRAY_ITEMS).map(boundedAttemptText); }
 function boundedAttemptLocator(value: JsonValue | undefined): JsonValue | undefined {
@@ -879,9 +863,7 @@ async function reconcilePersistedRuns(root: string, liveness: SubagentLiveness |
 }
 
 function enqueueWrite(run: LiveRun, operation: () => Promise<void>): Promise<void> {
-  const write = run.writes.then(operation);
-  run.writes = write.catch(() => undefined);
-  return write;
+  return run.writes.run(operation);
 }
 
 function terminalSummary(run: LiveRun): TerminalSummary {
@@ -1041,7 +1023,7 @@ class PersistentSubagentManager implements SubagentManager {
       return new WorkflowAgentExecutor(root, transport).execute(snapshot.prompt, options, controller.signal, [], setSteer);
     });
     const onStatus = this.dependencies.onStatus;
-    const run: LiveRun = { id, sessionId, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, terminal, resolveTerminal, update: snapshot.mode === "foreground" ? context.onUpdate : undefined, observe: onStatus === undefined ? undefined : (status) => { onStatus(status, snapshot); }, state: "running", error: undefined, value: undefined, cancelled: false, session: undefined, sessionCleanups: new WeakMap(), activeSessions: new Set(), prepared: undefined, handoff: undefined, progress: undefined, activeAttempt: undefined, finalizedAttemptAccounting: new Map(), attemptDetails: undefined, attempts: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, terminalResolved: false, writes: Promise.resolve() };
+    const run: LiveRun = { id, sessionId, request: snapshot, directory, startedAt, owner: { ...owner }, controller, promise: execution, terminal, resolveTerminal, update: snapshot.mode === "foreground" ? context.onUpdate : undefined, observe: onStatus === undefined ? undefined : (status) => { onStatus(status, snapshot); }, state: "running", error: undefined, value: undefined, cancelled: false, session: undefined, sessionCleanups: new WeakMap(), activeSessions: new Set(), prepared: undefined, handoff: undefined, progress: undefined, activeAttempt: undefined, finalizedAttemptAccounting: new Map(), attemptDetails: undefined, attempts: undefined, worktree: undefined, worktreeContext: undefined, worktreeCleanup: undefined, steerHandler: undefined, pendingSteers: [], steerFlush: undefined, externalAbort: undefined, externalSignal: undefined, executorOwnsSession: executorOwnership.default, disposed: false, concurrencyReleased: false, notificationSent: false, terminalResolved: false, writes: new SerialLane() };
     current.run = run;
     this.activeRuns.set(id, run);
     const externalSignal = context.signal;

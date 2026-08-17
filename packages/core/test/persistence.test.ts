@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
 import { acquireSessionLease, createLaunchSnapshot, DEFAULT_SETTINGS, FairAgentScheduler, WorkflowError } from "../src/index.js";
 import { hasLiveSessionLease, listRunIds, projectStorageKey, RunStore, runsDirectory, structuralPath } from "../src/persistence.js";
@@ -105,6 +105,36 @@ void test("stores exact cwd and Pi session snapshots and rejects cross-session l
   await assert.rejects(otherSession.load(), (error: unknown) => error instanceof WorkflowError && error.code === "RESUME_INCOMPATIBLE");
   assert.notEqual(projectStorageKey(join(home, "a", "same-name")), projectStorageKey(join(home, "b", "same-name")));
 });
+void test("enforces run identity for every state access and mutation", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-store-identity-"));
+  const cwd = join(home, "project");
+  const store = new RunStore(cwd, "session-a", "run-a", home);
+  const persisted = run(relative(process.cwd(), cwd));
+  const mismatches = [
+    { name: "cwd", value: { ...persisted, cwd: join(home, "other-project") } },
+    { name: "session", value: { ...persisted, sessionId: "session-b" } },
+    { name: "run", value: { ...persisted, id: "run-b" } },
+  ];
+  const internalIdentityError = (error: unknown) => error instanceof WorkflowError && error.code === "INTERNAL_ERROR" && error.message === "Run identity does not match its session-scoped store";
+  const persistedIdentityError = (error: unknown) => error instanceof WorkflowError && error.code === "RESUME_INCOMPATIBLE" && error.message === "Persisted run belongs to another cwd or Pi session";
+
+  for (const mismatch of mismatches) await assert.rejects(store.create(mismatch.value, snapshot), internalIdentityError, mismatch.name);
+  await store.create(persisted, snapshot);
+
+  for (const mismatch of mismatches) {
+    writeFileSync(join(store.directory, "state.json"), `${JSON.stringify(mismatch.value)}\n`);
+    await assert.rejects(store.load(), persistedIdentityError, `${mismatch.name} load`);
+    await assert.rejects(store.updateState((current) => current), persistedIdentityError, `${mismatch.name} update current`);
+    await assert.rejects(store.loadStatus(), (error: unknown) => error instanceof WorkflowError && error.code === "RUN_NOT_FOUND" && error.message === "Persisted run does not belong to this project", `${mismatch.name} status`);
+  }
+
+  for (const mismatch of mismatches) await assert.rejects(store.saveState(mismatch.value), internalIdentityError, `${mismatch.name} save`);
+  writeFileSync(join(store.directory, "state.json"), `${JSON.stringify(persisted)}\n`);
+  const resultMismatch = mismatches[2];
+  assert.ok(resultMismatch);
+  await assert.rejects(store.updateState(() => resultMismatch.value), internalIdentityError, "update result");
+  assert.deepEqual((await store.load()).run, persisted);
+});
 void test("persists exact multiline Unicode workflow source without rewriting it", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-workflow-source-"));
   const cwd = join(home, "project");
@@ -187,18 +217,41 @@ void test("migrates version-1 system-prompt artifacts when appending", async () 
     { sessionId: "native-a", attempt: 1, turn: 2, sha256: createHash("sha256").update("new prompt").digest("hex"), prompt: "new prompt" },
   ]);
 });
-void test("serializes concurrent state updates without losing fields", async () => {
+void test("serializes concurrent state updates in call order without losing fields", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-state-"));
   const cwd = join(home, "project");
   const store = new RunStore(cwd, "session-a", "run-a", home);
   await store.create(run(cwd), snapshot);
-  await Promise.all([
-    store.updateState((current) => ({ ...current, phase: "review" })),
-    store.updateState((current) => ({ ...current, error: { code: "AGENT_FAILED", message: "boom" } })),
-  ]);
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  let markFirstStarted!: () => void;
+  const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+  const order: string[] = [];
+  const first = store.updateState(async (current) => {
+    order.push("phase:start");
+    markFirstStarted();
+    await firstGate;
+    order.push("phase:end");
+    return { ...current, phase: "review" };
+  });
+  const second = store.updateState((current) => { order.push("error"); return { ...current, error: { code: "AGENT_FAILED", message: "boom" } }; });
+  await firstStarted;
+  assert.deepEqual(order, ["phase:start"]);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, ["phase:start", "phase:end", "error"]);
   const saved = (await store.load()).run;
   assert.equal(saved.phase, "review");
   assert.deepEqual(saved.error, { code: "AGENT_FAILED", message: "boom" });
+});
+void test("a failed state write does not block later writes", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-state-failure-"));
+  const cwd = join(home, "project");
+  const store = new RunStore(cwd, "session-a", "run-a", home);
+  await store.create(run(cwd), snapshot);
+  await assert.rejects(store.updateState(() => { throw new Error("update failed"); }), /update failed/);
+  await store.updateState((current) => ({ ...current, phase: "recovered" }));
+  assert.equal((await store.load()).run.phase, "recovered");
 });
 void test("deduplicates run events by type and message", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-event-dedup-"));

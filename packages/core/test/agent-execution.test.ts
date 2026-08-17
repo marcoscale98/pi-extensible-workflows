@@ -456,6 +456,20 @@ void test("does not mask agent failures when system prompt persistence also fail
   await assert.rejects(executor.execute("Do work", { label: "worker", workflowName: "flow" }), (error: unknown) => error instanceof WorkflowError && error.code === "AGENT_FAILED" && error.message === "provider failed");
 });
 
+void test("uses errorText for object-valued budget failures", async () => {
+  const failure: unknown = { message: "budget object failure" };
+  const executor = new WorkflowAgentExecutor(root, testTransport(async () => ({
+    transport: "local", session: { transport: "local", sessionId: "object-budget-failure", locator: { sessionFile: "/sessions/object-budget-failure.jsonl" } }, messages: [assistant("done")], getSessionStats: sessionStats,
+    async prompt() {},
+    dispose() {},
+  })));
+  await assert.rejects(executor.execute("Do work", { label: "worker", workflowName: "flow", budget: {
+    beforeAttempt() {},
+    beforeTurn() { throw failure; },
+    afterTurn() {},
+    instruction: () => undefined,
+  } }), (error: unknown) => error instanceof WorkflowError && error.code === "BUDGET_EXHAUSTED" && error.message === "budget object failure");
+});
 
 void test("runs prioritized setup hooks with fresh retry baselines and safe attempt summaries", async () => {
   const order: string[] = [];

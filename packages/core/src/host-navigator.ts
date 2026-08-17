@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { type ExtensionUIContext, SettingsManager, truncateToVisualLines, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { listRunIds, RunStore, type AwaitingCheckpoint, type PersistedRun, type WorktreeReference } from "./persistence.js";
 import { type WorkflowRegistryApi } from "./registry.js";
-import { deepFreeze, object, resolveModelReference, validateModelAliases } from "./utils.js";
+import { deepFreeze, errorText, object, resolveModelReference, validateModelAliases } from "./utils.js";
 import { saveModelAliases, resolveWorkflowSettings, workflowProjectSettingsPath, workflowSettingsPath } from "./validation.js";
 import { openWorkflowArtifact, workflowPromptArtifact, workflowResultArtifact, workflowScriptArtifact, type WorkflowArtifact } from "./workflow-artifacts.js";
 import { agentActionLabels, agentBreadcrumb, formatCheckpointReview, formatNavigatorRun, formatWorkflowPhaseDashboard, navigatorAttentionSort, navigatorRunLabels, SETTLED_AGENT_STATES, themeWorkflowProgressStyles, visibleAgentAttemptActions as visibleRegisteredAgentAttemptActions } from "./host-view.js";
@@ -187,7 +187,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
           else ctx.ui.notify("Workflow action is no longer available.", "warning");
           return "dashboard";
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = errorText(error);
           if (action === "stop") status(`Could not stop workflow ${runId ?? ""}: ${message}`);
           ctx.ui.notify(`Cannot ${action ?? "workflow action"}${runId ? ` for ${runId}` : ""}: ${message}`, "warning");
           return "dashboard";
@@ -208,12 +208,12 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
         };
         const save = (aliases: Readonly<Record<string, string>>): boolean => {
           try { saveModelAliases(aliasSettingsPath, aliases); ctx.ui.notify(`Saved model aliases to ${aliasSettingsPath}.`, "info"); return true; }
-          catch (error) { ctx.ui.notify(`${aliasSettingsPath}: ${error instanceof Error ? error.message : String(error)}`, "error"); return false; }
+          catch (error) { ctx.ui.notify(`${aliasSettingsPath}: ${errorText(error)}`, "error"); return false; }
         };
         for (;;) {
           let aliases: Readonly<Record<string, string>>;
           try { const resolution = resolveWorkflowSettings(ctx.cwd, trustedProject, settingsPath); aliases = resolution.effective.modelAliases ?? {}; aliasSettingsPath = resolution.sources.modelAliases; }
-          catch (error) { ctx.ui.notify(`${trustedProject ? workflowProjectSettingsPath(ctx.cwd) : settingsPath}: ${error instanceof Error ? error.message : String(error)}`, "error"); return; }
+          catch (error) { ctx.ui.notify(`${trustedProject ? workflowProjectSettingsPath(ctx.cwd) : settingsPath}: ${errorText(error)}`, "error"); return; }
           const names = Object.keys(aliases).sort();
           const listing = names.length ? names.map((name) => `${name} = ${aliases[name] ?? ""}`).join("\n") : "(none)";
           const options = ["Add alias", ...names.map((name) => `Edit ${name}`), ...names.map((name) => `Delete ${name}`), "Back"];
@@ -226,7 +226,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
             const target = await selectTarget(aliases);
             if (!target) continue;
             const next = { ...aliases, [name]: target };
-            try { validateModelAliases(next, aliasSettingsPath); } catch (error) { ctx.ui.notify(`${aliasSettingsPath}: ${error instanceof Error ? error.message : String(error)}`, "error"); continue; }
+            try { validateModelAliases(next, aliasSettingsPath); } catch (error) { ctx.ui.notify(`${aliasSettingsPath}: ${errorText(error)}`, "error"); continue; }
             const parsed = resolveModelReference(target, next, new Set(available()), aliasSettingsPath);
             if (!available().includes(`${parsed.provider}/${parsed.model}`)) {
               ctx.ui.notify(`Warning: ${target} is not currently available in Pi.`, "warning");
@@ -240,7 +240,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
             const target = await selectTarget(aliases);
             if (!target) continue;
             const next = { ...aliases, [edit[1]]: target };
-            try { validateModelAliases(next, aliasSettingsPath); } catch (error) { ctx.ui.notify(`${aliasSettingsPath}: ${error instanceof Error ? error.message : String(error)}`, "error"); continue; }
+            try { validateModelAliases(next, aliasSettingsPath); } catch (error) { ctx.ui.notify(`${aliasSettingsPath}: ${errorText(error)}`, "error"); continue; }
             const parsed = resolveModelReference(target, next, new Set(available()), aliasSettingsPath);
             if (!available().includes(`${parsed.provider}/${parsed.model}`)) {
               ctx.ui.notify(`Warning: ${target} is not currently available in Pi.`, "warning");
@@ -297,7 +297,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
               await clipboard(value);
               ctx.ui.notify(`Copied ${artifact}.`, "info");
             } catch (error) {
-              ctx.ui.notify(`Failed to copy ${artifact}: ${error instanceof Error ? error.message : String(error)}`, "error");
+              ctx.ui.notify(`Failed to copy ${artifact}: ${errorText(error)}`, "error");
             }
           };
           const loadDashboard = async () => {
@@ -396,7 +396,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
               const extensionAction = visibleAgentAttemptActions(dashboard, selected).find(([, candidate]) => candidate.label === action);
               if (extensionAction) {
                 const context = agentAttemptActionContext(dashboard, selected);
-                if (context) { try { await extensionAction[1].run(context); } catch (error) { ctx.ui.notify(`Agent attempt action failed: ${error instanceof Error ? error.message : String(error)}`, "error"); } }
+                if (context) { try { await extensionAction[1].run(context); } catch (error) { ctx.ui.notify(`Agent attempt action failed: ${errorText(error)}`, "error"); } }
                 return;
               }
               if (action === "Copy agent ID") { await copyArtifact(selected.id, "agent ID"); continue; }
@@ -414,7 +414,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
               if (action === "Adjust budget") {
                 const input = await uiHostCapabilities(ctx.ui)?.input?.call(ctx.ui, "Budget patch (JSON)", "{\"tokens\":{\"hard\":null}}");
                 if (input === undefined) return;
-                try { budgetPatch = JSON.parse(input); } catch (error) { ctx.ui.notify(`Cannot parse budget patch: ${error instanceof Error ? error.message : String(error)}`, "warning"); return; }
+                try { budgetPatch = JSON.parse(input); } catch (error) { ctx.ui.notify(`Cannot parse budget patch: ${errorText(error)}`, "warning"); return; }
               }
             }
             try {
@@ -491,7 +491,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                         ctx.ui.notify(`Cannot open ${label}: external editor ${detail}.`, "warning");
                       }
                     } catch (error) {
-                      ctx.ui.notify(`Cannot open ${label}: ${error instanceof Error ? error.message : String(error)}`, "warning");
+                      ctx.ui.notify(`Cannot open ${label}: ${errorText(error)}`, "warning");
                     } finally {
                       editorRunning = false;
                     }
@@ -527,7 +527,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                       if (!disposed) tui.requestRender();
                     }).then(() => updateDashboard()).catch((error: unknown) => {
                       if (disposed) return;
-                      stopStatus = `Could not stop workflow ${store.runId}: ${error instanceof Error ? error.message : String(error)}`;
+                      stopStatus = `Could not stop workflow ${store.runId}: ${errorText(error)}`;
                       setWorkflowStatus(stopStatus);
                       tui.requestRender();
                     }).finally(() => {
@@ -615,7 +615,7 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
                               const actionContext = extensionAction ? agentAttemptActionContext(view, agent) : undefined;
                               if (extensionAction && actionContext) {
                                 actionMode = false;
-                                void Promise.resolve(extensionAction[1].run(actionContext)).catch((error: unknown) => { ctx.ui.notify(`Agent attempt action failed: ${error instanceof Error ? error.message : String(error)}`, "error"); }).finally(() => { void updateDashboard(); });
+                                void Promise.resolve(extensionAction[1].run(actionContext)).catch((error: unknown) => { ctx.ui.notify(`Agent attempt action failed: ${errorText(error)}`, "error"); }).finally(() => { void updateDashboard(); });
                               }
                             }
                           }

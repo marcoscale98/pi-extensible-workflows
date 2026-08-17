@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Value } from "typebox/value";
 import type { AgentAttemptAction, JsonSchema, JsonValue, RegisteredAgentSetupHook, WorkflowCatalog, WorkflowCatalogContext, WorkflowCatalogError, WorkflowCatalogFunction, WorkflowCatalogIndex, WorkflowCatalogModelAlias, WorkflowExtension, WorkflowFunction, WorkflowFunctionContext, WorkflowJournal, WorkflowModelAlias, WorkflowModelAliasResolverContext, WorkflowRoleDirectoryRegistration } from "./types.js";
-import { deepFreeze, errorCode, fail, jsonValue, object } from "./utils.js";
+import { deepFreeze, errorCode, errorText, fail, jsonValue, object } from "./utils.js";
 import { loadSettings, resolveWorkflowSettings, validateSchema } from "./validation.js";
 
 const RESERVED_GLOBALS = new Set(["agent", "shell", "prompt", "checkpoint", "parallel", "pipeline", "phase", "withWorktree", "log", "args", "Promise", "JSON", "Math", "Date", "eval", "Function", "WebAssembly", "process", "require", "module", "exports", "console", "fetch", "XMLHttpRequest", "WebSocket", "performance", "crypto", "setTimeout", "setInterval", "setImmediate", "queueMicrotask", "Intl", "SharedArrayBuffer", "Atomics", "globalThis", "global", "undefined", "NaN", "Infinity", "extensions", "workflow_catalog"]);
@@ -20,7 +20,7 @@ function normalizeRoleDirectory(value: unknown): string {
       if (isAbsolute(value)) return value;
     }
   } catch (error) {
-    fail("INVALID_METADATA", `Invalid workflow role directory: ${error instanceof Error ? error.message : String(error)}`);
+    fail("INVALID_METADATA", `Invalid workflow role directory: ${errorText(error)}`);
   }
   fail("INVALID_METADATA", "Workflow role directories require file URLs or absolute filesystem paths");
 }
@@ -180,7 +180,7 @@ export class WorkflowRegistry {
       try { target = await alias.resolve(Object.freeze({ cwd: context.cwd, projectTrusted: context.projectTrusted, rootModel: Object.freeze({ ...context.rootModel }), knownModels: new Set(context.knownModels), availableModels: new Set(context.availableModels), signal: context.signal })); }
       catch (error) {
         if (isAborted() || error instanceof Error && error.name === "AbortError" || errorCode(error) === "CANCELLED") fail("CANCELLED", `Model alias resolver cancelled: ${alias.name} (${alias.headline})`);
-        fail("CONFIG_ERROR", `Model alias resolver failed for ${alias.name} (${alias.headline}): ${error instanceof Error ? error.message : String(error)}`);
+        fail("CONFIG_ERROR", `Model alias resolver failed for ${alias.name} (${alias.headline}): ${errorText(error)}`);
       }
       if (isAborted()) fail("CANCELLED", `Model alias resolver cancelled: ${alias.name} (${alias.headline})`);
       if (typeof target !== "string" || !target.trim()) fail("CONFIG_ERROR", `Model alias resolver returned an invalid target for ${alias.name} (${alias.headline})`);

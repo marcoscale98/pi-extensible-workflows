@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { WorkflowError, type JsonValue, type LaunchSnapshot, type WorkflowBudgetUsage, type WorkflowRunEvent } from "./types.js";
-import { isNodeError, loadLaunchSnapshot, object } from "./utils.js";
+import { WorkflowError, type JsonValue, type LaunchSnapshot, type WorkflowBudgetUsage, type WorkflowErrorCode, type WorkflowRunEvent } from "./types.js";
+import { coerceWorkflowError, errorText, isNodeError, loadLaunchSnapshot, object, SerialLane } from "./utils.js";
 import {
   decodeBooleanCheckpointResult, decodeBorrowedWorktreeBindings, decodeJournal, decodeLaunchSnapshot,
   decodeOwnershipRecords, decodePersistedRun, decodeSummaryProjection, decodeSystemPromptArtifact,
@@ -45,23 +45,26 @@ async function createSystemPromptStorage(directory: string, writeArtifact: boole
 
 export class RunStore {
   readonly directory: string;
-  private journalWrite: Promise<void> = Promise.resolve();
+  private journalLane = new SerialLane();
   // ponytail: serializes one RunStore instance; cross-process run sharing remains unsupported.
-  private stateWrite: Promise<void> = Promise.resolve();
-  private summaryWrite: Promise<void> = Promise.resolve();
-  private worktreeWrite: Promise<void> = Promise.resolve();
-  private borrowedWorktreeWrite: Promise<void> = Promise.resolve();
-  private snapshotWrite: Promise<void> = Promise.resolve();
-  private launchSnapshotWrite: Promise<void> = Promise.resolve();
+  private stateLane = new SerialLane();
+  private summaryLane = new SerialLane();
+  private worktreeLane = new SerialLane();
+  private borrowedWorktreeLane = new SerialLane();
+  private snapshotLane = new SerialLane();
+  private launchSnapshotLane = new SerialLane();
   // ponytail: the session lease prevents concurrent RunStore writers for one run.
-  private systemPromptWrite: Promise<void> = Promise.resolve();
+  private systemPromptLane = new SerialLane();
   constructor(readonly cwd: string, readonly sessionId: string, readonly runId: string, readonly home = homedir()) {
     this.cwd = resolve(cwd);
     this.directory = join(runsDirectory(this.cwd, sessionId, home), safePart(runId));
   }
+  #assertRunIdentity(run: PersistedRun, code: WorkflowErrorCode, message: string): void {
+    if (resolve(run.cwd) !== this.cwd || run.sessionId !== this.sessionId || run.id !== this.runId) throw new WorkflowError(code, message);
+  }
 
   async create(run: PersistedRun, snapshot: Readonly<LaunchSnapshot>): Promise<void> {
-    if (resolve(run.cwd) !== this.cwd || run.sessionId !== this.sessionId || run.id !== this.runId) throw new WorkflowError("INTERNAL_ERROR", "Run identity does not match its session-scoped store");
+    this.#assertRunIdentity(run, "INTERNAL_ERROR", "Run identity does not match its session-scoped store");
     const temporary = join(dirname(this.directory), `.${safePart(this.runId)}.${String(process.pid)}.${randomUUID()}.tmp`);
     await mkdir(dirname(this.directory), { recursive: true, mode: 0o700 });
     await mkdir(temporary, { mode: 0o700 });
@@ -82,7 +85,7 @@ export class RunStore {
     }
   }
   private async refreshSummary(): Promise<void> {
-    const write = this.summaryWrite.then(async () => {
+    const write = this.summaryLane.run(async () => {
       const run = decodePersistedRun(await json(join(this.directory, "state.json")), true);
       const journal = decodeJournal(await json(join(this.directory, "journal.json")));
       const previous = await json(join(this.directory, "summary.json")).then(decodeSummaryProjection).catch(() => undefined);
@@ -90,7 +93,6 @@ export class RunStore {
       const fallbackCreatedAt = await stat(join(this.directory, "state.json")).then((value) => new Date(value.mtimeMs).toISOString());
       await atomicJson(join(this.directory, "summary.json"), summaryFromRun(run, this.directory, journal, previous, fallbackCreatedAt));
     });
-    this.summaryWrite = write.catch(() => undefined);
     await write;
   }
   //NOTE: summary.json is an optional derived cache (see OPTIONAL_RUN_FILES); a missed refresh self-heals because every reader (loadSummary, CLI inspector) recomputes from state/journal. Keep this best-effort so a cache hiccup never fails the primary write.
@@ -102,27 +104,27 @@ export class RunStore {
   }
 
   async load(): Promise<{ run: LoadedPersistedRun; snapshot: Readonly<LaunchSnapshot> }> {
-    await this.stateWrite;
+    await this.stateLane.run(async () => undefined);
     const rawRun = await json(join(this.directory, "state.json"));
     const run = decodePersistedRun(rawRun, true);
     if (!run) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted run is invalid");
-    if (resolve(run.cwd) !== this.cwd || run.sessionId !== this.sessionId || run.id !== this.runId) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted run belongs to another cwd or Pi session");
+    this.#assertRunIdentity(run, "RESUME_INCOMPATIBLE", "Persisted run belongs to another cwd or Pi session");
     if (!object(rawRun) || !Array.isArray(rawRun.agentSessions) || Object.hasOwn(rawRun, "nativeSessions")) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted run uses an unsupported agent session format");
     const snapshot = decodeLaunchSnapshot(await json(join(this.directory, "snapshot.json")));
     if (!snapshot) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted launch snapshot is invalid");
     return { run, snapshot: loadLaunchSnapshot(snapshot) };
   }
   async loadStatus(): Promise<PersistedRun> {
-    await this.stateWrite;
+    await this.stateLane.run(async () => undefined);
     const run = decodePersistedRun(await json(join(this.directory, "state.json")), true);
     if (!run) throw new WorkflowError("RUN_NOT_FOUND", "Persisted run is invalid");
-    if (resolve(run.cwd) !== this.cwd || run.sessionId !== this.sessionId || run.id !== this.runId) throw new WorkflowError("RUN_NOT_FOUND", "Persisted run does not belong to this project");
+    this.#assertRunIdentity(run, "RUN_NOT_FOUND", "Persisted run does not belong to this project");
     return run;
   }
   async loadSummary(): Promise<RunSummary> {
-    await this.stateWrite;
-    await this.journalWrite;
-    await this.summaryWrite;
+    await this.stateLane.run(async () => undefined);
+    await this.journalLane.run(async () => undefined);
+    await this.summaryLane.run(async () => undefined);
     const run = decodePersistedRun(await json(join(this.directory, "state.json")), true);
     const journal = decodeJournal(await json(join(this.directory, "journal.json")));
     const previous = await json(join(this.directory, "summary.json")).then(decodeSummaryProjection).catch(() => undefined);
@@ -135,33 +137,30 @@ export class RunStore {
   }
 
   async saveState(run: PersistedRun): Promise<void> {
-    const write = this.stateWrite.then(async () => {
-      if (resolve(run.cwd) !== this.cwd || run.sessionId !== this.sessionId || run.id !== this.runId) throw new WorkflowError("INTERNAL_ERROR", "Run identity does not match its session-scoped store");
+    const write = this.stateLane.run(async () => {
+      this.#assertRunIdentity(run, "INTERNAL_ERROR", "Run identity does not match its session-scoped store");
       await atomicJson(join(this.directory, "state.json"), run);
       this.refreshSummaryBestEffort();
     });
-    this.stateWrite = write.catch(() => undefined);
     await write;
   }
 
   async updateState(update: (run: PersistedRun) => PersistedRun | Promise<PersistedRun>): Promise<PersistedRun> {
-    const write = this.stateWrite.then(async () => {
+    const write = this.stateLane.run(async () => {
       const current = decodePersistedRun(await json(join(this.directory, "state.json")));
       if (!current) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted run is invalid");
-      if (resolve(current.cwd) !== this.cwd || current.sessionId !== this.sessionId || current.id !== this.runId) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted run belongs to another cwd or Pi session");
+      this.#assertRunIdentity(current, "RESUME_INCOMPATIBLE", "Persisted run belongs to another cwd or Pi session");
       const result = await update(current);
-      if (resolve(result.cwd) !== this.cwd || result.sessionId !== this.sessionId || result.id !== this.runId) throw new WorkflowError("INTERNAL_ERROR", "Run identity does not match its session-scoped store");
+      this.#assertRunIdentity(result, "INTERNAL_ERROR", "Run identity does not match its session-scoped store");
       await atomicJson(join(this.directory, "state.json"), result);
       this.refreshSummaryBestEffort();
       return result;
     });
-    this.stateWrite = write.then(() => undefined, () => undefined);
     return write;
   }
 
   async saveSnapshot(snapshot: Readonly<LaunchSnapshot>): Promise<void> {
-    const write = this.launchSnapshotWrite.then(() => atomicJson(join(this.directory, "snapshot.json"), snapshot));
-    this.launchSnapshotWrite = write.catch(() => undefined);
+    const write = this.launchSnapshotLane.run(() => atomicJson(join(this.directory, "snapshot.json"), snapshot));
     await write;
   }
 
@@ -247,15 +246,14 @@ export class RunStore {
     return entries;
   }
   async recordSystemPrompt(entry: Omit<EffectiveSystemPrompt, "sha256">): Promise<void> {
-    const write = this.systemPromptWrite.then(async () => {
+    const write = this.systemPromptLane.run(async () => {
       await this.prepareSystemPromptStorage();
       await this.appendSystemPromptV2(entry);
     });
-    this.systemPromptWrite = write.catch(() => undefined);
     await write;
   }
   async systemPrompts(): Promise<readonly EffectiveSystemPrompt[]> {
-    await this.systemPromptWrite;
+    await this.systemPromptLane.run(async () => undefined);
     const artifact = await this.readSystemPromptArtifact();
     if (artifact === undefined) return [];
     if (artifact.version === 1) return artifact.entries ?? [];
@@ -264,7 +262,7 @@ export class RunStore {
   }
 
   private async updateJournal<T>(update: (journal: Journal) => T | Promise<T>): Promise<T> {
-    const write = this.journalWrite.then(async () => {
+    const write = this.journalLane.run(async () => {
       const journalPath = join(this.directory, "journal.json");
       const journal = decodeJournal(await json(journalPath));
       if (!journal) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted journal is invalid");
@@ -274,7 +272,6 @@ export class RunStore {
       this.refreshSummaryBestEffort();
       return result;
     });
-    this.journalWrite = write.then(() => undefined, () => undefined);
     return write;
   }
 
@@ -298,7 +295,7 @@ export class RunStore {
     if (seen.has(this.runId)) throw new WorkflowError("RESUME_INCOMPATIBLE", "Retry provenance contains a cycle");
     const nextSeen = new Set(seen);
     nextSeen.add(this.runId);
-    await this.journalWrite;
+    await this.journalLane.run(async () => undefined);
     const loaded = await this.load();
     const operations = new Map<string, CompletedOperation>();
     if (loaded.run.retry?.sourceRunId) {
@@ -332,7 +329,7 @@ export class RunStore {
   }
 
   async awaitingCheckpoints(): Promise<readonly AwaitingCheckpoint[]> {
-    await this.journalWrite;
+    await this.journalLane.run(async () => undefined);
     const journal = decodeJournal(await json(join(this.directory, "journal.json")));
     if (!journal) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted journal is invalid");
     return Object.values(journal.awaiting ?? {});
@@ -341,7 +338,7 @@ export class RunStore {
     await this.updateJournal((journal) => { journal.decisions ??= {}; journal.decisions[request.proposalId] = request; });
   }
   async pendingWorkflowDecisions(): Promise<readonly PendingWorkflowDecision[]> {
-    await this.journalWrite;
+    await this.journalLane.run(async () => undefined);
     const journal = decodeJournal(await json(join(this.directory, "journal.json")));
     if (!journal) throw new WorkflowError("RESUME_INCOMPATIBLE", "Persisted journal is invalid");
     return Object.values(journal.decisions ?? {});
@@ -402,8 +399,15 @@ export class RunStore {
     return record;
   }
 
+  async #loadWorktreeRecords(missingOk = true): Promise<WorktreeReference[]> {
+    const rawRecords = await json(join(this.directory, "worktrees.json")).catch((error: unknown) => { if (missingOk && isNodeError(error, "ENOENT")) return []; throw error; });
+    const records = decodeWorktreeReferences(rawRecords);
+    if (!records) throw new WorkflowError("WORKTREE_FAILED", "Worktree records are invalid");
+    return records;
+  }
+
   private async borrowedWorktreeRecords(wait = true): Promise<readonly BorrowedWorktreeBinding[]> {
-    if (wait) await this.borrowedWorktreeWrite;
+    if (wait) await this.borrowedWorktreeLane.run(async () => undefined);
     const rawRecords = await json(join(this.directory, "borrowed-worktrees.json")).catch((error: unknown) => { if (isNodeError(error, "ENOENT")) return []; throw error; });
     const records = decodeBorrowedWorktreeBindings(rawRecords);
     if (!records) throw new WorkflowError("WORKTREE_FAILED", "Borrowed worktree bindings are invalid");
@@ -429,8 +433,7 @@ export class RunStore {
       if (!["completed", "failed", "stopped"].includes(loaded.run.state)) throw new Error(`Source run ${sourceRunId} is not terminal`);
       return source;
     } catch (error) {
-      if (error instanceof WorkflowError && error.code === "WORKTREE_FAILED") throw error;
-      throw new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+      throw coerceWorkflowError("WORKTREE_FAILED", error);
     }
   }
 
@@ -453,12 +456,11 @@ export class RunStore {
       await validate(source, nextSeen);
     };
     try { await validate(this, new Set()); }
-    catch (error) { throw error instanceof WorkflowError && error.code === "RESUME_INCOMPATIBLE" ? error : new WorkflowError("RESUME_INCOMPATIBLE", error instanceof Error ? error.message : String(error)); }
+    catch (error) { throw coerceWorkflowError("RESUME_INCOMPATIBLE", error); }
   }
 
   private async ownedWorktree(owner: string, cwd?: string): Promise<WorktreeReference> {
-    const records = decodeWorktreeReferences(await json(join(this.directory, "worktrees.json")));
-    if (!records) throw new Error("Worktree records are invalid");
+    const records = await this.#loadWorktreeRecords(false);
     const matches = records.filter((candidate) => candidate.owner === owner);
     if (matches.length !== 1) throw new Error(`Missing or duplicate worktree record for ${owner}`);
     const record = matches[0];
@@ -477,7 +479,7 @@ export class RunStore {
       if (resolved.owner !== binding.owner) throw new Error(`Borrowed worktree binding does not match source owner for ${binding.name}`);
       return resolved;
     } catch (error) {
-      throw error instanceof WorkflowError && error.code === "WORKTREE_FAILED" ? error : new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+      throw coerceWorkflowError("WORKTREE_FAILED", error);
     }
   }
 
@@ -495,8 +497,7 @@ export class RunStore {
       if (!resolved || resolved.sourceRunId !== binding.sourceRunId || resolved.owner !== binding.owner) throw new WorkflowError("WORKTREE_FAILED", `Borrowed worktree binding for ${name} is not inherited from its parent run`);
       return resolved;
     }
-    const records = decodeWorktreeReferences(await json(join(this.directory, "worktrees.json")));
-    if (!records) throw new WorkflowError("WORKTREE_FAILED", "Worktree records are invalid");
+    const records = await this.#loadWorktreeRecords(false);
     const matches = records.filter((candidate) => candidate.owner === owner);
     if (matches.length === 0) {
       const loaded = await this.load();
@@ -508,7 +509,7 @@ export class RunStore {
       const reference = await this.ownedWorktree(owner);
       return { reference, sourceRunId: this.runId, owner };
     } catch (error) {
-      throw new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+      throw coerceWorkflowError("WORKTREE_FAILED", error);
     }
   }
 
@@ -519,8 +520,7 @@ export class RunStore {
   }
   async validateDeletionWorktrees(): Promise<void> {
     try {
-      const records = decodeWorktreeReferences(await json(join(this.directory, "worktrees.json")));
-      if (!records) throw new Error("Worktree records are invalid");
+      const records = await this.#loadWorktreeRecords(false);
       const owners = new Set<string>();
       const paths = new Set<string>();
       for (const record of records) {
@@ -533,7 +533,7 @@ export class RunStore {
       const entries = await readdir(join(this.directory, "worktrees"), { withFileTypes: true }).catch((error: unknown) => { if (isNodeError(error, "ENOENT")) return [] as import("node:fs").Dirent[]; throw error; });
       for (const entry of entries) if (!entry.isDirectory() || entry.isSymbolicLink() || !paths.has(resolve(join(this.directory, "worktrees", entry.name)))) throw new Error(`Unrecorded worktree artifact: ${join(this.directory, "worktrees", entry.name)}`);
     } catch (error) {
-      throw new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+      throw coerceWorkflowError("WORKTREE_FAILED", error);
     }
   }
 
@@ -544,25 +544,24 @@ export class RunStore {
       if (loaded.run.parentRunId !== undefined) await this.validateParentRun(loaded.run.parentRunId);
       for (const binding of await this.borrowedWorktreeRecords()) await this.resolveBorrowedWorktree(binding, new Set([this.runId]));
     } catch (error) {
-      throw error instanceof WorkflowError && error.code === "WORKTREE_FAILED" ? error : new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+      throw coerceWorkflowError("WORKTREE_FAILED", error);
     }
   }
   async validateNamedWorktrees(): Promise<void> {
     try {
-      const records = decodeWorktreeReferences(await json(join(this.directory, "worktrees.json")));
-      if (!records) throw new Error("Worktree records are invalid");
+      const records = await this.#loadWorktreeRecords(false);
       for (const record of records) {
         const owner = record.owner;
         if (this.worktreeName(owner)) await this.validateWorktree(owner);
       }
     } catch (error) {
-      throw error instanceof WorkflowError && error.code === "WORKTREE_FAILED" ? error : new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+      throw coerceWorkflowError("WORKTREE_FAILED", error);
     }
   }
 
   async ownsWorktree(owner: string): Promise<boolean> {
-    const records = decodeWorktreeReferences(await json(join(this.directory, "worktrees.json")));
-    return records?.filter((candidate) => candidate.owner === owner).length === 1;
+    const records = await this.#loadWorktreeRecords(false);
+    return records.filter((candidate) => candidate.owner === owner).length === 1;
   }
 
   private async cleanupMarker(markerPath: string): Promise<void> {
@@ -602,17 +601,15 @@ export class RunStore {
       }
       return await this.ownedWorktree(owner, cwd);
     } catch (error) {
-      throw error instanceof WorkflowError && error.code === "WORKTREE_FAILED" ? error : new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+      throw coerceWorkflowError("WORKTREE_FAILED", error);
     }
   }
 
   async worktree(owner: string): Promise<WorktreeReference> {
-    const write = this.worktreeWrite.then(async () => {
+    const write = this.worktreeLane.run(async () => {
       const loaded = await this.load();
-      const recordsPath = join(this.directory, "worktrees.json");
-      const rawRecords = await json(recordsPath).catch((error: unknown) => { if (isNodeError(error, "ENOENT")) return []; throw error; });
-      let records = decodeWorktreeReferences(rawRecords);
-      if (!records) throw new WorkflowError("WORKTREE_FAILED", "Worktree records are invalid");
+      const recordsPath = resolve(this.directory, "worktrees.json");
+      let records = await this.#loadWorktreeRecords();
       const name = this.worktreeName(owner);
       const binding = name ? await this.borrowedWorktree(name) : undefined;
       if (binding) return (await this.resolveBorrowedWorktree(binding, new Set([this.runId]))).reference;
@@ -659,15 +656,14 @@ export class RunStore {
         if (branchCreated) await git(this.cwd, ["branch", "-D", branch]).catch(() => undefined);
         await rm(markerPath, { force: true });
         try {
-          const persisted = decodeWorktreeReferences(await json(recordsPath));
-          const match = persisted?.filter((candidate) => candidate.owner === owner);
-          const candidate = match?.length === 1 ? match[0] : undefined;
-          if (candidate && persisted) { this.structuralWorktree(owner, candidate); records = persisted.filter((current) => current !== candidate); await atomicJson(recordsPath, records); }
+          const persisted = await this.#loadWorktreeRecords();
+          const match = persisted.filter((candidate) => candidate.owner === owner);
+          const candidate = match.length === 1 ? match[0] : undefined;
+          if (candidate) { this.structuralWorktree(owner, candidate); records = persisted.filter((current) => current !== candidate); await atomicJson(recordsPath, records); }
         } catch { /* Ownership changed or disappeared: do not delete anything. */ }
-        throw new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+        throw new WorkflowError("WORKTREE_FAILED", errorText(error));
       }
     });
-    this.worktreeWrite = write.then(() => undefined, () => undefined);
     return write;
   }
 
@@ -677,7 +673,7 @@ export class RunStore {
   }
 
   private async bindBorrowedWorktree(binding: BorrowedWorktreeBinding): Promise<void> {
-    const write = this.borrowedWorktreeWrite.then(async () => {
+    const write = this.borrowedWorktreeLane.run(async () => {
       const records = [...await this.borrowedWorktreeRecords(false)];
       const existing = records.find((candidate) => candidate.name === binding.name);
       if (existing) {
@@ -687,12 +683,11 @@ export class RunStore {
       records.push(binding);
       await atomicJson(join(this.directory, "borrowed-worktrees.json"), records);
     });
-    this.borrowedWorktreeWrite = write.then(() => undefined, () => undefined);
     await write;
   }
   async snapshotWorktree(owner: string): Promise<string> {
     try {
-      const write = this.snapshotWrite.then(async () => {
+      const write = this.snapshotLane.run(async () => {
         const record = await this.worktree(owner);
         for (let attempt = 0; attempt < 3; attempt += 1) {
           await git(record.path, ["add", "-A"]);
@@ -706,16 +701,13 @@ export class RunStore {
         }
         return (await git(record.path, ["rev-parse", "HEAD"])).trim();
       });
-      this.snapshotWrite = write.then(() => undefined, () => undefined);
       return await write;
     } catch (error) {
-      throw error instanceof WorkflowError && error.code === "WORKTREE_FAILED" ? error : new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error));
+      throw coerceWorkflowError("WORKTREE_FAILED", error);
     }
   }
   async worktrees(): Promise<readonly WorktreeReference[]> {
-    const rawRecords = await json(join(this.directory, "worktrees.json")).catch((error: unknown) => { if (isNodeError(error, "ENOENT")) return []; throw error; });
-    const records = decodeWorktreeReferences(rawRecords);
-    if (!records) throw new WorkflowError("WORKTREE_FAILED", "Worktree records are invalid");
+    const records = await this.#loadWorktreeRecords();
     const bindings = await this.borrowedWorktreeRecords();
     const boundOwners = new Set(bindings.map((binding) => binding.owner));
     const owned = await Promise.all(records.filter((record) => !boundOwners.has(record.owner)).map(async (record) => { try { return await this.validateWorktree(record.owner); } catch { return undefined; } }));
@@ -723,12 +715,8 @@ export class RunStore {
     return [...owned.filter((record): record is WorktreeReference => record !== undefined), ...borrowed];
   }
   async validNamedWorktrees(): Promise<readonly string[]> {
-    const load = async (path: string): Promise<unknown> => {
-      try { return await json(path); } catch (error) { if (isNodeError(error, "ENOENT")) return []; throw error; }
-    };
     const names = new Set<string>();
-    const rawRecords = await load(join(this.directory, "worktrees.json"));
-    const records = decodeWorktreeReferences(rawRecords) ?? [];
+    const records = await this.#loadWorktreeRecords();
     let bindings: readonly BorrowedWorktreeBinding[];
     try { bindings = await this.borrowedWorktreeRecords(); }
     catch (error) { if (error instanceof WorkflowError && error.code === "WORKTREE_FAILED") return []; throw error; }
@@ -765,12 +753,10 @@ export class RunStore {
 
   async delete(confirmed: boolean): Promise<void> {
     if (!confirmed) throw new WorkflowError("CANCELLED", "Run deletion requires confirmation");
-    const rawRecords = await json(join(this.directory, "worktrees.json")).catch((error: unknown) => { if (isNodeError(error, "ENOENT")) return []; throw error; });
-    const records = decodeWorktreeReferences(rawRecords);
-    if (!records) throw new WorkflowError("WORKTREE_FAILED", "Worktree records are invalid");
+    const records = await this.#loadWorktreeRecords();
     const validated = records.map((record) => {
       try { return this.structuralWorktree(record.owner, record); }
-      catch (error) { throw new WorkflowError("WORKTREE_FAILED", error instanceof Error ? error.message : String(error)); }
+      catch (error) { throw new WorkflowError("WORKTREE_FAILED", errorText(error)); }
     });
     await this.cleanupOrphanWorktrees();
     for (const record of validated) {

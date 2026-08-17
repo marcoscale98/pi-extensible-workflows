@@ -83,6 +83,19 @@ void test("strict role frontmatter rejects malformed metadata", () => {
   for (const content of invalid) assert.throws(() => parseRoleMarkdown(content, true), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
 });
 
+void test("strips single and double quotes from loose role metadata even when unpaired", () => {
+  assert.deepEqual(parseRoleMarkdown("---\nmodel: 'openai/gpt\"\nthinking: 'high\"\ntools: ['read\", \"grep']\nskills: ['role-skill\", \"other-skill']\nextensions: ['role.ts\", \"other.ts']\ndescription: 'Review role\"\ncontextFiles: ['global\", \"project']\n---\nbody", false), {
+    prompt: "body",
+    model: "openai/gpt",
+    thinking: "high",
+    tools: ["read", "grep"],
+    skills: ["role-skill", "other-skill"],
+    extensions: ["role.ts", "other.ts"],
+    description: "Review role",
+    contextFiles: ["global", "project"],
+  });
+});
+
 void test("accepts role system prompt override metadata", () => {
   for (const key of ["overrideSystemPrompt", "override_system_prompt", "is_system_prompt"]) {
     assert.deepEqual(parseRoleMarkdown(`---\n${key}: true\n---\nbody`, true), { prompt: "body", overrideSystemPrompt: true });

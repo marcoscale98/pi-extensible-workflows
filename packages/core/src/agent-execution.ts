@@ -6,7 +6,6 @@ import { Type } from "@earendil-works/pi-ai";
 import { Compile } from "typebox/compile";
 import { createAgentSession, DefaultPackageManager, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext, ModelRegistry, SessionStartEvent, ToolDefinition } from "@earendil-works/pi-coding-agent";
-type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type HerdrModelContext = { readonly model: ExtensionContext["model"]; readonly modelRegistry: ModelRegistry | undefined };
 type AgentMessage = { role: string; content?: unknown; stopReason?: string; errorMessage?: string; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } } };
 type LocalSessionShutdownReason = "quit" | "resume";
@@ -46,8 +45,8 @@ export interface PiResourceInspection {
   readonly systemPromptSource?: string;
 }
 import type { AgentAccounting, AgentActivity, AgentIdentity, AgentResourceInspection, AgentResourcePolicy, AgentResourceSelectors, AgentResourceSelectorSources, AgentSetup, AgentSetupSummary, AgentTransport, AgentTransportContext, ContextFileScope, JsonSchema, JsonValue, LiveSessionHandoff, ModelSpec, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, RoleOverride, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult, WorkflowRunContext } from "./types.js";
-import { deepFreeze, jsonObject, jsonValue, object, modelAliasName, modelCapability, resolveModelReference, resourcePatternHasMagic, selectResourcesByLayers, unmatchedResourcePatterns } from "./utils.js";
-import { roleNameOf } from "./types.js";
+import { SerialLane, deepFreeze, errorText, jsonObject, jsonValue, object, modelAliasName, modelCapability, resolveModelReference, resourcePatternHasMagic, selectResourcesByLayers, unmatchedResourcePatterns } from "./utils.js";
+import { THINKING_LEVELS, roleNameOf, type ThinkingLevel } from "./types.js";
 import { WorkflowError } from "./types.js";
 import { createLiveSessionHandoff } from "./session-handoff.js";
 import { normalizePiMessage, normalizePiSessionEvent, runtimeProgressToAgentProgress } from "./pi-runtime-adapter.js";
@@ -205,7 +204,7 @@ async function preparePiPrompt(native: PiSession, text: string): Promise<PiPromp
     if (!inputHandled) {
       const skillExpanded = typeof expandSkillCommand === "function" ? expandSkillCommand.call(session, current) : current;
       try { expandedPrompt = await expandPromptTemplateForInspection(skillExpanded, Array.isArray(templates) ? templates : []); }
-      catch (error) { diagnostics.push({ type: "error", message: `Pi prompt template expansion is unavailable: ${error instanceof Error ? error.message : String(error)}`, source: "Pi session" }); }
+      catch (error) { diagnostics.push({ type: "error", message: `Pi prompt template expansion is unavailable: ${errorText(error)}`, source: "Pi session" }); }
     }
     const result = !inputHandled && runner && baseOptions !== undefined ? await runner.emitBeforeAgentStart(expandedPrompt, undefined, baseSystemPrompt, baseOptions) : undefined;
     const prepared = result as { messages?: readonly unknown[]; systemPrompt?: unknown } | undefined;
@@ -236,7 +235,7 @@ export function flushExtensionProviders(resourceLoader: DefaultResourceLoader, m
     try {
       modelRuntime.registerProvider(name, config);
     } catch (error) {
-      failures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+      failures.push(`${name}: ${errorText(error)}`);
     }
   }
   runtime.pendingProviderRegistrations = [];
@@ -244,7 +243,7 @@ export function flushExtensionProviders(resourceLoader: DefaultResourceLoader, m
     try {
       modelRuntime.registerNativeProvider(provider);
     } catch (error) {
-      failures.push(`${provider.id || "native provider"}: ${error instanceof Error ? error.message : String(error)}`);
+      failures.push(`${provider.id || "native provider"}: ${errorText(error)}`);
     }
   }
   runtime.pendingNativeProviderRegistrations = [];
@@ -391,7 +390,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
   let nativeShutdownReason: LocalSessionShutdownReason | undefined;
   let disposal: Promise<void> | undefined;
   let aborting: Promise<void> | undefined;
-  let lifecycle: Promise<void> | undefined;
+  const lifecycle = new SerialLane();
   let state: "active" | "suspending" | "suspended" | "resuming" | "disposing" | "disposed" = "active";
   let suspendOperation: Promise<void> | undefined;
   let resumeOperation: Promise<void> | undefined;
@@ -460,13 +459,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     coreUnsubscribe = next.agent?.subscribe?.((event) => { trackNotification(notifyPiSessionEvent(notify, event), generation); });
     sessionUnsubscribe = next.subscribe?.((event) => { trackNotification(notifyPiSessionEvent(notify, event, true), generation); });
   };
-  const enqueue = (operation: () => Promise<void>): Promise<void> => {
-    const previous = lifecycle;
-    const next = previous ? previous.then(operation, operation) : operation();
-    lifecycle = next;
-    void next.then(() => { if (lifecycle === next) lifecycle = undefined; }, () => { if (lifecycle === next) lifecycle = undefined; });
-    return next;
-  };
+  const enqueue = (operation: () => Promise<void>): Promise<void> => lifecycle.run(operation);
   const shutdownNative = (reason: LocalSessionShutdownReason, targetSessionFile?: string): Promise<void> => {
     nativeShutdownReason = reason;
     return nativeHandle.shutdown(reason, targetSessionFile);
@@ -606,7 +599,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
 }
 export const localAgentTransport: AgentTransport = Object.freeze({ id: "local", createSession: createLocalWorkflowAgentSession });
 function changedOption(options: Readonly<Record<string, JsonValue>>, baseline: Readonly<Record<string, JsonValue>>, key: string): boolean { return JSON.stringify(options[key]) !== JSON.stringify(baseline[key]); }
-function validThinking(value: unknown): value is ThinkingLevel { return typeof value === "string" && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value); }
+function validThinking(value: unknown): value is ThinkingLevel { return THINKING_LEVELS.some((level) => level === value); }
 interface ChildAgentToolParams {
   prompt: string;
   label: string;
@@ -752,7 +745,7 @@ function resolvePiRuntime(): PiRuntimeResolution {
     if (!existsSync(entrypoint)) throw new Error(`the originating Pi CLI entrypoint is unavailable: ${entrypoint}`);
     return { runtime: Object.freeze({ executable: process.execPath, entrypoint }) };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { error: errorText(error) };
   }
 }
 const piRuntimeResolution = resolvePiRuntime();
@@ -1084,7 +1077,7 @@ export class WorkflowAgentExecutor {
           ...(options.budget ? { turnPolicy: {
             beforeTurn: () => {
               try { options.budget?.beforeTurn(); }
-              catch (error) { throw error instanceof WorkflowError ? error : new WorkflowError("BUDGET_EXHAUSTED", error instanceof Error ? error.message : String(error)); }
+              catch (error) { throw error instanceof WorkflowError ? error : new WorkflowError("BUDGET_EXHAUSTED", errorText(error)); }
             },
             afterTurn: (usage: RuntimeUsage, final: boolean, requestInstruction?: boolean) => {
               const active = session;
@@ -1240,7 +1233,7 @@ export class FairAgentScheduler {
         const value = await this.runner({ id, runId, tuiIndex, ...(parentId ? { parentId } : {}), prompt, options: effective, signal: node.controller.signal, setSteer: (handler) => { node.steer = handler; } });
         this.#settle(node, { id, ok: true, value });
       } catch (error) {
-        const typed = error instanceof WorkflowError ? error : new WorkflowError("AGENT_FAILED", error instanceof Error ? error.message : String(error));
+        const typed = error instanceof WorkflowError ? error : new WorkflowError("AGENT_FAILED", errorText(error));
         this.#settle(node, { id, ok: false, error: { code: typed.code, message: typed.message } });
       }
     };
@@ -1426,7 +1419,7 @@ export class FairAgentScheduler {
       const item = run.queue.shift() as { node?: ScheduledNode; start: () => void };
       if (item.node) {
         try { run.beforeLaunch?.(); }
-        catch (error) { const typed = error instanceof WorkflowError ? error : new WorkflowError("AGENT_FAILED", error instanceof Error ? error.message : String(error)); this.#settle(item.node, { id: item.node.id, ok: false, error: { code: typed.code, message: typed.message } }); continue; }
+        catch (error) { const typed = error instanceof WorkflowError ? error : new WorkflowError("AGENT_FAILED", errorText(error)); this.#settle(item.node, { id: item.node.id, ok: false, error: { code: typed.code, message: typed.message } }); continue; }
       }
       run.active += 1; this.#active += 1; item.start();
     }

@@ -4,7 +4,7 @@ import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { highlightCode, initTheme, SessionManager, truncateToVisualLines, type SessionEntry, type SessionInfo } from "@earendil-works/pi-coding-agent";
-import { formatBudgetStatus, inspectWorkflowScript, type AgentSetupSummary, type ModelSpec, type StaticWorkflowCall } from "pi-extensible-workflows";
+import { errorText, formatBudgetStatus, inspectWorkflowScript, type AgentSetupSummary, type ModelSpec, type StaticWorkflowCall } from "pi-extensible-workflows";
 import { listPersistedSessionIds, listRunIds, RunStore, type PersistedRun, type RunSummary } from "pi-extensible-workflows/persistence";
 
 export interface ModelUsage { model: string; cost: number }
@@ -233,7 +233,7 @@ export async function loadSessionReport(path: string, home = homedir()): Promise
     let parseError: string | undefined;
     if (script) {
       try { staticCalls = inspectWorkflowScript(script); }
-      catch (error) { parseError = error instanceof Error ? error.message : String(error); }
+      catch (error) { parseError = errorText(error); }
     }
     workflows.push({
       name,

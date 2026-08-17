@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, loadingRegistry, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
+import { atomicJson } from "pi-extensible-workflows/persistence";
 import extension, {
   createSubagentManager,
   createSubagentTools,
@@ -31,6 +32,21 @@ const toolNames = [
   "subagents_stop",
   "subagents_retry",
 ];
+
+test("exports atomicJson from persistence and rejects non-serializable values", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-atomic-json-"));
+  try {
+    const path = join(cwd, "value.json");
+    await atomicJson(path, { answer: 42 });
+    assert.equal(await readFile(path, "utf8"), '{"answer":42}\n');
+
+    for (const [index, value] of [undefined, () => undefined, Symbol("invalid")].entries()) {
+      await assert.rejects(atomicJson(join(cwd, `invalid-${String(index)}.json`), value));
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 function testContext() {
   return {};

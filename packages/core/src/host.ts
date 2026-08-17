@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Type, type Api, type Model } from "@earendil-works/pi-ai";
+import { Type, type Api, type Model, type Static, type TSchema } from "@earendil-works/pi-ai";
 import { copyToClipboard, getAgentDir, ModelSelectorComponent, SettingsManager, type ExtensionAPI, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { FairAgentScheduler, getAgentAttempts, WorkflowAgentExecutor, localAgentTransport, type AgentActivity, type AgentAttempt, type AgentDefinition, type AgentProgress, type AgentProviderFailure, type AgentProviderRecovery } from "./agent-execution.js";
 import { RunLifecycle, WorkflowEventPublisher, nextNamedOccurrence, withWorkflowFunctions, workflowRunContext, type WorkflowRunRecord, type WorkflowToolUpdate } from "./host-runtime.js";
@@ -11,7 +11,7 @@ import { registerWorkflowNavigator, uiHostCapabilities } from "./host-navigator.
 import { acquireSessionLease, isPersistedRun, listPersistedSessionIds, listRunIds, RunStore, SessionLease, structuralPath as operationPath } from "./persistence.js";
 import type { PersistedRun, WorktreeReference } from "./persistence.js";
 import { validateBudget, WorkflowBudgetRuntime } from "./budget.js";
-import { asWorkflowError, createLaunchSnapshot, errorCode, errorText, fail, jsonValue, modelAliasErrorName, modelCapability, object, parseModelReference, parseThinking, positiveInteger, validateModelAliases } from "./utils.js";
+import { SerialLane, asWorkflowError, createLaunchSnapshot, errorCode, errorText, fail, jsonValue, modelAliasErrorName, modelCapability, object, parseModelReference, parseThinking, positiveInteger, validateModelAliases } from "./utils.js";
 import { loadAgentDefinitions, loadSettings, preflight, resolveAgentResourcePolicy, resolveWorkflowSettings, validateCheckpoint, validateModelAliasAvailability, validateWorkflowLaunchWithRegistry, workflowProjectSettingsPath, workflowSettingsPath } from "./validation.js";
 import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIfIdle, retainWorkflowRegistry, type WorkflowRegistryApi } from "./registry.js";
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
@@ -282,8 +282,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   });
   const runs = new Map<string, WorkflowRunRecord>();
   let releaseWorkflowRegistry: (() => void) | undefined;
-  let providerRecoveryQueue = Promise.resolve();
-  const enqueueProviderRecovery = <T>(task: () => Promise<T>): Promise<T> => { const next = providerRecoveryQueue.then(task, task); providerRecoveryQueue = next.then(() => undefined, () => undefined); return next; };
+  const providerRecoveryLane = new SerialLane();
+  const enqueueProviderRecovery = <T>(task: () => Promise<T>): Promise<T> => providerRecoveryLane.run(task);
   // The recovery adapter implements only getAvailableSnapshot, refresh, getModel, and getError from ModelRuntime, plus setDefaultModelAndProvider from SettingsManager; the constructor below is the one third-party boundary because it cannot create another authenticated runtime.
   type ModelSelectorRuntimeAdapter = Pick<ModelRuntime, "getAvailableSnapshot" | "refresh" | "getModel" | "getError">;
   type ModelSelectorSettingsAdapter = Pick<SettingsManager, "setDefaultModelAndProvider">;
@@ -342,7 +342,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   const pendingFailureDiagnostics = new Map<string, PendingFailureDiagnostic>();
   const foregroundDeliveries = new Map<string, ForegroundDelivery>();
   const foregroundResumeClaims = new WeakSet<RunStore>();
-  const terminalDeliveryQueues = new WeakMap<RunStore, Promise<void>>();
+  const terminalDeliveryLanes = new WeakMap<RunStore, SerialLane>();
   const liveAgents = new LiveAgentRegistry();
   const withLiveActivities = (run: PersistedRun): PersistedRun => liveAgents.overlay(run);
   const terminalRunStates = new Map<string, "completed" | "failed" | "stopped">();
@@ -384,8 +384,9 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     return { content: [{ type: "text" as const, text: serializeWorkflowFailureDiagnostics(pending.diagnostic) }], details: { ...pending.diagnostic, run }, isError: true };
   });
   const deliverTerminal = (store: RunStore, content: string | (() => string | Promise<string>), failure = false): Promise<void> => {
-    const previous = terminalDeliveryQueues.get(store) ?? Promise.resolve();
-    const delivery = previous.then(async () => {
+    const lane = terminalDeliveryLanes.get(store) ?? new SerialLane();
+    terminalDeliveryLanes.set(store, lane);
+    return lane.run(async () => {
       let claimed: boolean | undefined;
       await store.updateState((current) => {
         if (failure && !FAILURE_DELIVERY_STATES.has(current.state)) return current;
@@ -403,8 +404,6 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       }
       deliver(pi, typeof content === "function" ? await content() : content);
     });
-    terminalDeliveryQueues.set(store, delivery.catch(() => undefined));
-    return delivery;
   };
   const scheduleForegroundDelivery = (toolCallId: string, send: () => Promise<void>): void => {
     const delivery = foregroundDeliveries.get(toolCallId);
@@ -724,57 +723,67 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       return decision;
     };
   };
-
-  pi.registerTool({
-    name: "workflow_respond",
-    label: "Workflow Respond",
-    description: "Approve or reject one pending workflow checkpoint or budget decision",
-    parameters: Type.Object({ runId: Type.String(), name: Type.Optional(Type.String()), proposalId: Type.Optional(Type.String()), approved: Type.Boolean() }, { additionalProperties: false }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      try {
-        if (params.proposalId) {
-          const result = await recovery.answerBudgetDecision(params.runId, params.proposalId, params.approved, false, ctx, signal);
-          if (!result) { const denied = { state: "budget_exhausted" as const, approved: false, reason: "proposal_not_pending" }; return { content: [{ type: "text" as const, text: JSON.stringify(denied) }], details: denied }; }
-          return { content: [{ type: "text" as const, text: completionControlContent(result, params.runId) }], details: { ...result, reason: params.approved ? "approved" : "rejected" } };
+  const registerControlTool = <P extends TSchema>(
+    name: string,
+    label: string,
+    description: string,
+    parameters: P,
+    run: (params: Static<P>, signal: AbortSignal, ctx: unknown) => Promise<{ text: string; details: unknown }>,
+  ) => {
+    pi.registerTool({
+      name,
+      label,
+      description,
+      parameters,
+      async execute(_id, params, signal: AbortSignal, _onUpdate, ctx) {
+        try {
+          const result = await run(params, signal, ctx);
+          return { content: [{ type: "text" as const, text: result.text }], details: result.details };
+        } catch (error) {
+          throw mainAgentError(error);
         }
-        if (!params.name) throw new WorkflowError("INVALID_METADATA", "workflow_respond requires name or proposalId");
-        const accepted = await answerCheckpoint(params.runId, params.name, params.approved);
-        return { content: [{ type: "text" as const, text: accepted ? "Checkpoint response accepted." : "Checkpoint is not awaiting a response." }], details: { accepted, state: accepted ? "checkpoint_answered" : "not_pending", approved: params.approved, reason: "checkpoint" } };
-      } catch (error) {
-        throw mainAgentError(error);
+      },
+      renderCall(args, theme) { return styledTextBlock(workflowControlCall(name, args, theme)); },
+      renderResult(result, options, theme, context) { return workflowCatalogBlock(workflowControlResult(name, context.args, result, options.expanded, theme, context.isError), options.expanded); },
+    });
+  };
+
+  registerControlTool(
+    "workflow_respond",
+    "Workflow Respond",
+    "Approve or reject one pending workflow checkpoint or budget decision",
+    Type.Object({ runId: Type.String(), name: Type.Optional(Type.String()), proposalId: Type.Optional(Type.String()), approved: Type.Boolean() }, { additionalProperties: false }),
+    async (params, signal, ctx) => {
+      if (params.proposalId) {
+        const result = await recovery.answerBudgetDecision(params.runId, params.proposalId, params.approved, false, ctx, signal);
+        if (!result) { const denied = { state: "budget_exhausted" as const, approved: false, reason: "proposal_not_pending" }; return { text: JSON.stringify(denied), details: denied }; }
+        return { text: completionControlContent(result, params.runId), details: { ...result, reason: params.approved ? "approved" : "rejected" } };
       }
+      if (!params.name) throw new WorkflowError("INVALID_METADATA", "workflow_respond requires name or proposalId");
+      const accepted = await answerCheckpoint(params.runId, params.name, params.approved);
+      return { text: accepted ? "Checkpoint response accepted." : "Checkpoint is not awaiting a response.", details: { accepted, state: accepted ? "checkpoint_answered" : "not_pending", approved: params.approved, reason: "checkpoint" } };
     },
-    renderCall(args, theme) { return styledTextBlock(workflowControlCall("workflow_respond", args, theme)); },
-    renderResult(result, options, theme, context) { return workflowCatalogBlock(workflowControlResult("workflow_respond", context.args, result, options.expanded, theme, context.isError), options.expanded); },
-  });
-  pi.registerTool({
-    name: "workflow_stop",
-    label: "Workflow Stop",
-    description: "Stop an active workflow run by ID",
-    parameters: Type.Object({ runId: Type.String() }, { additionalProperties: false }),
-    async execute(_id, params) {
-      try {
-        const result = await stopWorkflowRun(params.runId);
-        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
-      } catch (error) {
-        throw mainAgentError(error);
-      }
+  );
+  registerControlTool(
+    "workflow_stop",
+    "Workflow Stop",
+    "Stop an active workflow run by ID",
+    Type.Object({ runId: Type.String() }, { additionalProperties: false }),
+    async (params) => {
+      const result = await stopWorkflowRun(params.runId);
+      return { text: JSON.stringify(result), details: result };
     },
-    renderCall(args, theme) { return styledTextBlock(workflowControlCall("workflow_stop", args, theme)); },
-    renderResult(result, options, theme, context) { return workflowCatalogBlock(workflowControlResult("workflow_stop", context.args, result, options.expanded, theme, context.isError), options.expanded); },
-  });
-  pi.registerTool({
-    name: "workflow_status",
-    label: "Workflow Status",
-    description: "Read a compact summary of a workflow run in the current project",
-    parameters: WORKFLOW_STATUS_PARAMETERS,
-    async execute(_id, params, _signal, _onUpdate, ctx) {
-      try { const result = await workflowStatusRun(params.runId, ctx); return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result }; }
-      catch (error) { throw mainAgentError(error); }
+  );
+  registerControlTool(
+    "workflow_status",
+    "Workflow Status",
+    "Read a compact summary of a workflow run in the current project",
+    WORKFLOW_STATUS_PARAMETERS,
+    async (params, _signal, ctx) => {
+      const result = await workflowStatusRun(params.runId, ctx);
+      return { text: JSON.stringify(result), details: result };
     },
-    renderCall(args, theme) { return styledTextBlock(workflowControlCall("workflow_status", args, theme)); },
-    renderResult(result, options, theme, context) { return workflowCatalogBlock(workflowControlResult("workflow_status", context.args, result, options.expanded, theme, context.isError), options.expanded); },
-  });
+  );
   let catalogRegistered = false;
   let sessionStarted = false;
   const registerCatalog = (cwd: string, trustedProject: boolean) => {
@@ -921,30 +930,26 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     const completed = await recovery.coldResumeRun(run, hasUI, ui, projectTrusted(context), recoveryContext, foreground, foreground);
     return completed ? { workflowName: run.metadata.name, state: "completed", attached: false, value: completed.value } : { workflowName: run.metadata.name, state: "running", attached: false };
   };
-  pi.registerTool({
-    name: "workflow_retry",
-    label: "Workflow Retry",
-    description: "Retry a failed workflow run by replaying its completed structural operations",
-    parameters: WORKFLOW_RETRY_PARAMETERS,
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      try { const result = await recovery.retryWorkflowRun(params.runId, ctx, signal, params.foreground, params.expectedState); return { content: [{ type: "text" as const, text: completionControlContent(result) }], details: result }; }
-      catch (error) { throw mainAgentError(error); }
+  registerControlTool(
+    "workflow_retry",
+    "Workflow Retry",
+    "Retry a failed workflow run by replaying its completed structural operations",
+    WORKFLOW_RETRY_PARAMETERS,
+    async (params, signal, ctx) => {
+      const result = await recovery.retryWorkflowRun(params.runId, ctx, signal, params.foreground, params.expectedState);
+      return { text: completionControlContent(result), details: result };
     },
-    renderCall(args, theme) { return styledTextBlock(workflowControlCall("workflow_retry", args, theme)); },
-    renderResult(result, options, theme, context) { return workflowCatalogBlock(workflowControlResult("workflow_retry", context.args, result, options.expanded, theme, context.isError), options.expanded); },
-  });
-  pi.registerTool({
-    name: "workflow_resume",
-    label: "Workflow Resume",
-    description: "Resume an exhausted workflow with unchanged or patched aggregate budgets",
-    parameters: Type.Object({ runId: Type.String(), expectedState: Type.Optional(Type.String({ description: "Persisted source state observed before recovery" })), budget: Type.Optional(Type.Unknown()), foreground: Type.Optional(Type.Boolean({ description: "Override the source launch mode for this recovery" })) }, { additionalProperties: false }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
-      try { const result = await recovery.resumeWorkflowRun(params.runId, params.budget, ctx, signal, params.foreground, true, params.expectedState); return { content: [{ type: "text" as const, text: completionControlContent(result) }], details: result }; }
-      catch (error) { throw mainAgentError(error); }
+  );
+  registerControlTool(
+    "workflow_resume",
+    "Workflow Resume",
+    "Resume an exhausted workflow with unchanged or patched aggregate budgets",
+    Type.Object({ runId: Type.String(), expectedState: Type.Optional(Type.String({ description: "Persisted source state observed before recovery" })), budget: Type.Optional(Type.Unknown()), foreground: Type.Optional(Type.Boolean({ description: "Override the source launch mode for this recovery" })) }, { additionalProperties: false }),
+    async (params, signal, ctx) => {
+      const result = await recovery.resumeWorkflowRun(params.runId, params.budget, ctx, signal, params.foreground, true, params.expectedState);
+      return { text: completionControlContent(result), details: result };
     },
-    renderCall(args, theme) { return styledTextBlock(workflowControlCall("workflow_resume", args, theme)); },
-    renderResult(result, options, theme, context) { return workflowCatalogBlock(workflowControlResult("workflow_resume", context.args, result, options.expanded, theme, context.isError), options.expanded); },
-  });
+  );
   pi.on("session_start", async (_event, ctx) => {
     if (sessionStarted) return;
     sessionStarted = true;

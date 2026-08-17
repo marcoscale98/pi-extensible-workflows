@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { WorkflowError } from "./types.js";
 
 const execute = promisify(execFile);
 export const gitIdentity = {
@@ -31,7 +32,9 @@ export function atomicWriteFile(path: string, content: string, sync = false): Pr
 }
 
 export async function atomicJson(path: string, value: unknown): Promise<void> {
-  await atomicWriteFile(path, `${JSON.stringify(value)}\n`);
+  const serialized = JSON.stringify(value);
+  if (typeof serialized !== "string") throw new WorkflowError("INTERNAL_ERROR", `Cannot serialize JSON for ${path}`);
+  await atomicWriteFile(path, `${serialized}\n`);
 }
 
 export async function atomicPrettyJson(path: string, value: unknown): Promise<void> {

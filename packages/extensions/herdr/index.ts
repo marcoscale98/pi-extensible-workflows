@@ -11,6 +11,7 @@ import {
   WORKFLOW_RUN_COMPLETED_EVENT,
   WORKFLOW_RUN_STATE_CHANGED_EVENT,
   createHerdrAgentReporter,
+  errorText,
   herdrAvailable,
   herdrCommandRunner,
   loadSettings,
@@ -223,11 +224,11 @@ async function createToolBridge(session: HerdrSession, prepared: Readonly<Prepar
         const result = await definition.execute(request.toolCallId, request.params, controller.signal, (update: unknown) => { send({ type: "update", value: update }); }, bridgeContext(controller.signal, () => { controller.abort(); }));
         send({ type: "result", value: result });
       } catch (error) {
-        send({ type: "error", error: error instanceof Error ? error.message : String(error) });
+        send({ type: "error", error: errorText(error) });
       }
     };
     socket.setEncoding("utf8");
-    socket.on("data", (chunk) => { buffer += chunk.toString(); let newline; while ((newline = buffer.indexOf("\n")) >= 0) { const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1); if (!line) continue; try { void handle(JSON.parse(line)); } catch (error) { send({ type: "error", error: error instanceof Error ? error.message : String(error) }); } } });
+    socket.on("data", (chunk) => { buffer += chunk.toString(); let newline; while ((newline = buffer.indexOf("\n")) >= 0) { const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1); if (!line) continue; try { void handle(JSON.parse(line)); } catch (error) { send({ type: "error", error: errorText(error) }); } } });
     socket.on("close", () => { controller.abort(); sockets.delete(socket); });
     socket.on("error", () => { controller.abort(); sockets.delete(socket); });
   });

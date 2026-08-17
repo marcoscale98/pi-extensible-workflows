@@ -1,4 +1,4 @@
-export { atomicWriteFile, json } from "./io.js";
+export { atomicJson, atomicWriteFile, json } from "./io.js";
 export {
   projectStorageKey, projectSessionsDirectory, runsDirectory, listPersistedSessionIds, structuralPath,
 } from "./paths.js";

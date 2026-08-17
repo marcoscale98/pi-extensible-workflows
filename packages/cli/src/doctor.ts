@@ -272,7 +272,7 @@ function inspectRole(path: string, activeTools: ReadonlySet<string>, knownModels
       diagnostics.push(legacyAgentResourceSelectorDiagnostic(path));
       return undefined;
     }
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorText(error);
     diagnostics.push(diagnostic("error", "ROLE_FRONTMATTER", source ? `${roleProvenance(source)} contains invalid role at "${path}": ${message}` : message, path, "Fix the role YAML frontmatter."));
     return undefined;
   }
@@ -309,15 +309,15 @@ async function inspectRoleSession(cwd: string, agentDir: string, roleName: strin
   const options: AgentExecutionOptions = { label: roleName, workflowName: "doctor", role: roleName };
   let prepared: Awaited<ReturnType<typeof prepareAgentSetupForInspection>>;
   try { prepared = await prepareAgentSetupForInspection(root, prompt, options, transport); }
-  catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", error instanceof Error ? error.message : String(error), rolePath)); diagnostics.push(...setupDiagnostics); return undefined; }
+  catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", errorText(error), rolePath)); diagnostics.push(...setupDiagnostics); return undefined; }
   if (prepared.failure) {
     const error = prepared.failure.error;
     const code = prepared.failure.hook ? "ROLE_SETUP_HOOK" : "ROLE_INSPECTION";
-    setupDiagnostics.push(diagnostic("error", code, `${prepared.failure.hook ? `Role setup hook ${prepared.failure.hook} failed: ` : ""}${error instanceof Error ? error.message : String(error)}`, prepared.failure.hook ?? rolePath));
+    setupDiagnostics.push(diagnostic("error", code, `${prepared.failure.hook ? `Role setup hook ${prepared.failure.hook} failed: ` : ""}${errorText(error)}`, prepared.failure.hook ?? rolePath));
     diagnostics.push(...setupDiagnostics);
     return undefined;
   }
-  const session = await (async () => { try { return await createLocalPiSession({ ...prepared.setup.sessionInput, sessionManager: SessionManager.inMemory() }); } catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", error instanceof Error ? error.message : String(error), rolePath)); return undefined; } })();
+  const session = await (async () => { try { return await createLocalPiSession({ ...prepared.setup.sessionInput, sessionManager: SessionManager.inMemory() }); } catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", errorText(error), rolePath)); return undefined; } })();
   if (!session) { diagnostics.push(...setupDiagnostics); return undefined; }
   try {
     const promptResult = await session.preparePrompt(prompt);
@@ -328,7 +328,7 @@ async function inspectRoleSession(cwd: string, agentDir: string, roleName: strin
     const policy = prepared.setup.sessionInput.resourcePolicy ?? basePolicy;
     for (const item of [...resources.diagnostics, ...promptResult.diagnostics]) setupDiagnostics.push(diagnostic(item.type === "error" ? "error" : "warning", "ROLE_INSPECTION", item.message, item.source));
     return { role: roleName, path: rolePath, model: actualModel, tools: state?.tools.map(({ name }) => name) ?? [...prepared.setup.sessionInput.tools], resources: { selectors: { skills: [...policy.effective.skills], extensions: [...policy.effective.extensions], tools: [...(policy.effective.tools ?? [])] }, skills: policy.selectedSkills ?? resources.skills, extensions: policy.selectedExtensions ?? resources.extensions, tools: policy.selectedTools ?? prepared.setup.sessionInput.tools, unmatchedSkills: policy.unmatchedSkills, unmatchedExtensions: policy.unmatchedExtensions, unmatchedTools: policy.unmatchedTools ?? [], selectorSources: policy.selectorSources }, systemPrompt: { probe: prompt, expandedProbe: promptResult.expandedPrompt, text: promptResult.systemPrompt, ...(resources.systemPromptSource ? { source: resources.systemPromptSource } : {}) }, setup: { hooks: prepared.summary.hookNames, diagnostics: setupDiagnostics } };
-  } catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", error instanceof Error ? error.message : String(error), rolePath)); diagnostics.push(...setupDiagnostics); return undefined; }
+  } catch (error) { setupDiagnostics.push(diagnostic("error", "ROLE_INSPECTION", errorText(error), rolePath)); diagnostics.push(...setupDiagnostics); return undefined; }
   finally { await session.dispose(); }
 }
 function resourcePolicySource(settingsSource: string): string { return settingsSource; }
@@ -361,7 +361,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
     settings = resolved.effective;
     settingsSources = resolved.sources;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorText(error);
     const source = message.includes(projectSettingsPath) ? projectSettingsPath : settingsPath;
     if (!diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
   }
@@ -369,7 +369,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   try {
     resourcePolicy = matchResourcePolicy(resolveAgentResourcePolicy(cwd, pi.trust.trusted, settingsPath), pi);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorText(error);
     const source = message.includes(projectSettingsPath) ? projectSettingsPath : settingsPath;
     if (!diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
     resourcePolicy = emptyResourcePolicy(settingsPath, cwd, pi.trust.trusted);
@@ -397,7 +397,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   const definitions = new Map<string, AgentDefinition>();
   const extensionScan = scanExtensionRoleFiles(registeredWorkflowRoleDirectoryRegistrations());
   for (const { registration, error } of extensionScan.errors) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorText(error);
     diagnostics.push(diagnostic("error", "ROLE_DIRECTORY", `${extensionLabel(registration.extension)} role directory "${registration.path}" could not be scanned: ${message}`, registration.path, "Fix or remove the registered role directory."));
   }
   for (const registration of extensionScan.empty) diagnostics.push(diagnostic("warning", "ROLE_DIRECTORY_EMPTY", `${extensionLabel(registration.extension)} role directory "${registration.path}" contains no .md role files`, registration.path, "Add packaged role files or remove the directory registration."));
@@ -469,7 +469,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
           }
           roleInspection = await inspectRoleSession(cwd, agentDir, options.role, definition, activeRole.path, resourcePolicy, rootModel, [...activeTools], roleAliases, knownModels, availableModels, settingsPath, options.prompt ?? "", registry.agentSetupHooks(), diagnostics);
           if (roleInspection) diagnostics.push(...roleInspection.setup.diagnostics);
-        } catch (error) { diagnostics.push(diagnostic("error", "ROLE_INSPECTION_MODEL", error instanceof Error ? error.message : String(error), activeRole.path)); }
+        } catch (error) { diagnostics.push(diagnostic("error", "ROLE_INSPECTION_MODEL", errorText(error), activeRole.path)); }
       }
     }
   }

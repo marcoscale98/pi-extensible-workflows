@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { validateBudget } from "pi-extensible-workflows";
 import { RUN_STATES, type RunState } from "pi-extensible-workflows";
-import { isNodeError, jsonValue, validateModelAliases } from "pi-extensible-workflows";
+import { errorText, isNodeError, jsonValue, validateModelAliases } from "pi-extensible-workflows";
 import { validateSchema } from "pi-extensible-workflows";
 import { acquireSessionLease, hasLiveSessionLease, projectSessionsDirectory, RunStore, type PersistedRun, type SessionLease } from "pi-extensible-workflows/persistence";
 
@@ -53,7 +53,6 @@ function isAgentState(value: unknown): value is AgentState { return typeof value
 function isSchedulerState(value: unknown): value is SchedulerState { return typeof value === "string" && SCHEDULER_STATES.has(value); }
 function isToolCallState(value: unknown): value is ToolCallState { return ["running", "completed", "failed"].some((candidate) => candidate === value); }
 function isActivityKind(value: unknown): value is ActivityKind { return ["reasoning", "tool", "text"].some((candidate) => candidate === value); }
-function textError(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function positiveDays(value: number): number { if (!Number.isSafeInteger(value) || value < 1 || !Number.isFinite(value * DAY_MS)) throw new Error("older-than-days must be a positive integer"); return value; }
 function runItem(entry: StoredRun, action: CleanupRunResult["action"], reason?: string): CleanupRunResult { return { sessionId: entry.sessionId, runId: entry.runId, action, state: entry.run.state, stateMtimeMs: entry.stateMtimeMs, path: entry.store.directory, ...(reason ? { reason } : {}) }; }
 function sameNames(left: readonly string[], right: readonly string[]): boolean { return left.length === right.length && left.every((value, index) => value === right[index]); }
@@ -274,7 +273,7 @@ async function scanSession(cwd: string, sessionId: string, home: string, expecte
       for (const binding of borrowed) dependencies.add(binding.sourceRunId);
       if (dependencies.has(runId)) throw new Error("Persisted run depends on itself");
       runs.push({ sessionId, runId, store, run: loaded.run, stateMtimeMs: afterState.mtimeMs, dependencies: [...dependencies] });
-    } catch (error) { throw new Error(`Run ${runId} is corrupt or incomplete: ${textError(error)}`, { cause: error }); }
+    } catch (error) { throw new Error(`Run ${runId} is corrupt or incomplete: ${errorText(error)}`, { cause: error }); }
   }
   const after = await sessionEntries(runsPath);
   const beforeNames = before.map(({ name }) => name).sort();
@@ -300,7 +299,7 @@ async function scanSession(cwd: string, sessionId: string, home: string, expecte
 async function recheckCandidate(entry: StoredRun, cutoffMs: number): Promise<string | undefined> {
   const before = await stat(join(entry.store.directory, "state.json")).catch(() => undefined);
   if (!before) return "State record disappeared before deletion";
-  const loaded = await entry.store.load().catch((error: unknown) => { throw new Error(`Candidate could not be reloaded: ${textError(error)}`); });
+  const loaded = await entry.store.load().catch((error: unknown) => { throw new Error(`Candidate could not be reloaded: ${errorText(error)}`); });
   validateRunRecord(loaded.run);
   if (loaded.run.id !== entry.runId || loaded.run.state !== entry.run.state || !TERMINAL_STATES.has(loaded.run.state)) return "Candidate state changed before deletion";
   const after = await stat(join(entry.store.directory, "state.json"));
@@ -364,43 +363,43 @@ export async function doctorCleanup(options: DoctorCleanupOptions = {}): Promise
   const deleted: CleanupRunResult[] = [];
   const failures: CleanupFailure[] = [];
   let sessionIds: readonly string[];
-  try { sessionIds = await storedSessionIds(cwd, home); } catch (error) { addFailure(failures, "(project)", textError(error)); return { cwd, cutoffMs, olderThanDays, yes, sessions, candidates, skipped, deleted, failures }; }
+  try { sessionIds = await storedSessionIds(cwd, home); } catch (error) { addFailure(failures, "(project)", errorText(error)); return { cwd, cutoffMs, olderThanDays, yes, sessions, candidates, skipped, deleted, failures }; }
   for (const sessionId of sessionIds) {
     let initial: SessionScan;
-    try { initial = await scanSession(cwd, sessionId, home); } catch (error) { sessions.push({ sessionId, path: join(projectSessionsDirectory(cwd, home), sessionId), status: "failed", reason: textError(error) }); addFailure(failures, sessionId, textError(error)); continue; }
+    try { initial = await scanSession(cwd, sessionId, home); } catch (error) { sessions.push({ sessionId, path: join(projectSessionsDirectory(cwd, home), sessionId), status: "failed", reason: errorText(error) }); addFailure(failures, sessionId, errorText(error)); continue; }
     const initialPlan = planSession(initial, cutoffMs);
     for (const item of initialPlan.candidates) addUnique(candidates, runItem(item, "candidate"));
     for (const item of initialPlan.skipped) addUnique(skipped, item);
     if (!yes || initial.liveLease) { sessions.push({ sessionId, path: initial.path, status: initial.liveLease ? "skipped" : "preview", ...(initial.liveLease ? { reason: "Session has a live ownership lease" } : {}) }); continue; }
     let lease: SessionLease;
     try { lease = await acquireSessionLease(cwd, sessionId, home); } catch (error) {
-      const message = textError(error);
+      const message = errorText(error);
       if (/already owned|active ownership|RUN_OWNED/i.test(message)) { sessions.push({ sessionId, path: initial.path, status: "skipped", reason: "Session has a live ownership lease" }); continue; }
       sessions.push({ sessionId, path: initial.path, status: "failed", reason: message }); addFailure(failures, sessionId, message); continue;
     }
     try {
       let current: SessionScan;
-      try { current = await scanSession(cwd, sessionId, home, lease); } catch (error) { const message = textError(error); sessions.push({ sessionId, path: initial.path, status: "failed", reason: message }); addFailure(failures, sessionId, message); continue; }
+      try { current = await scanSession(cwd, sessionId, home, lease); } catch (error) { const message = errorText(error); sessions.push({ sessionId, path: initial.path, status: "failed", reason: message }); addFailure(failures, sessionId, message); continue; }
       let freshPlan = planSession(current, cutoffMs);
       for (const item of freshPlan.candidates) addUnique(candidates, runItem(item, "candidate"));
       const freshIds = new Set(freshPlan.candidates.map(({ runId }) => runId));
       for (const item of initialPlan.candidates) if (!freshIds.has(item.runId)) addUnique(skipped, runItem(item, "skipped", "Candidate changed or is no longer independently eligible"));
       let clean = true;
       while (freshPlan.candidates.length) {
-        try { current = await scanSession(cwd, sessionId, home, lease); freshPlan = planSession(current, cutoffMs); for (const item of freshPlan.skipped) addUnique(skipped, item); } catch (error) { const message = textError(error); addFailure(failures, sessionId, message); clean = false; break; }
+        try { current = await scanSession(cwd, sessionId, home, lease); freshPlan = planSession(current, cutoffMs); for (const item of freshPlan.skipped) addUnique(skipped, item); } catch (error) { const message = errorText(error); addFailure(failures, sessionId, message); clean = false; break; }
         if (!freshPlan.candidates.length) break;
         let ordered: readonly StoredRun[];
-        try { ordered = deletionOrder(current, freshPlan.candidates); } catch (error) { const message = textError(error); addFailure(failures, sessionId, message); clean = false; break; }
+        try { ordered = deletionOrder(current, freshPlan.candidates); } catch (error) { const message = errorText(error); addFailure(failures, sessionId, message); clean = false; break; }
         const target = ordered[0];
         if (!target) break;
         let changed: string | undefined;
-        try { changed = await recheckCandidate(target, cutoffMs); } catch (error) { const message = textError(error); addFailure(failures, sessionId, message, target.runId); clean = false; break; }
+        try { changed = await recheckCandidate(target, cutoffMs); } catch (error) { const message = errorText(error); addFailure(failures, sessionId, message, target.runId); clean = false; break; }
         if (changed) { addUnique(skipped, runItem(target, "skipped", changed)); clean = false; break; }
-        try { await target.store.delete(true); deleted.push(runItem(target, "deleted")); } catch (error) { const message = textError(error); addUnique(skipped, runItem(target, "failed", message)); addFailure(failures, sessionId, message, target.runId); clean = false; break; }
+        try { await target.store.delete(true); deleted.push(runItem(target, "deleted")); } catch (error) { const message = errorText(error); addUnique(skipped, runItem(target, "failed", message)); addFailure(failures, sessionId, message, target.runId); clean = false; break; }
       }
       if (clean) sessions.push({ sessionId, path: initial.path, status: "cleaned" });
       else if (!sessions.some(({ sessionId: currentId }) => currentId === sessionId)) sessions.push({ sessionId, path: initial.path, status: "failed", reason: "Cleanup stopped after a safety recheck or deletion failure" });
-    } finally { try { await lease.release(); } catch (error) { addFailure(failures, sessionId, textError(error)); } }
+    } finally { try { await lease.release(); } catch (error) { addFailure(failures, sessionId, errorText(error)); } }
   }
   return { cwd, cutoffMs, olderThanDays, yes, sessions, candidates, skipped, deleted, failures };
 }

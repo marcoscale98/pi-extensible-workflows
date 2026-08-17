@@ -1,6 +1,6 @@
-import { AGENT_STATES, ERROR_CODES, RUN_STATES, type AgentAccounting, type AgentActivity, type AgentAttemptSummary, type AgentDefinition, type AgentRecord, type AgentResourceInspection, type AgentResourceSelectors, type BudgetApprovalRequest, type BudgetDimension, type BudgetEvent, type ContextFileScope, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunRecord, type WorkflowBudgetUsage, type WorkflowRunEvent } from "./types.js";
+import { AGENT_STATES, RUN_STATES, THINKING_LEVELS, type AgentAccounting, type AgentActivity, type AgentAttemptSummary, type AgentDefinition, type AgentRecord, type AgentResourceInspection, type AgentResourceSelectors, type BudgetApprovalRequest, type BudgetDimension, type BudgetEvent, type ContextFileScope, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunRecord, type WorkflowBudgetUsage, type WorkflowRunEvent } from "./types.js";
 import type { OwnershipRecord, ScheduledAgentOptions } from "./agent-execution.js";
-import { jsonValue, object } from "./utils.js";
+import { finiteNumber, isWorkflowErrorCode, jsonValue, object } from "./utils.js";
 
 export interface EffectiveSystemPrompt { sessionId: string; attempt: number; turn: number; sha256: string; prompt: string }
 export type PersistedRun = RunRecord;
@@ -24,18 +24,16 @@ type PersistedOptions = ScheduledAgentOptions;
 
 const INVALID_PERSISTED_VALUE = Symbol("invalid persisted value");
 
-function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 function integer(value: unknown): value is number { return finiteNumber(value) && Number.isInteger(value); }
 export function positiveInteger(value: unknown): value is number { return integer(value) && value > 0; }
-function isThinking(value: unknown): value is NonNullable<ScheduledAgentOptions["thinking"]> { return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].some((candidate) => candidate === value); }
+function isThinking(value: unknown): value is NonNullable<ScheduledAgentOptions["thinking"]> { return THINKING_LEVELS.some((level) => level === value); }
 function isContextFileScope(value: unknown): value is ContextFileScope { return ["global", "project", "cwd"].some((candidate) => candidate === value); }
 function isLaunchMode(value: unknown): value is NonNullable<LaunchSnapshot["launchMode"]> { return value === "foreground" || value === "background"; }
 function isRunState(value: unknown): value is RunRecord["state"] { return RUN_STATES.some((candidate) => candidate === value); }
 function isAgentState(value: unknown): value is PersistedAgent["state"] { return AGENT_STATES.some((candidate) => candidate === value); }
-function isOwnershipState(value: unknown): value is OwnershipRecord["state"] { return ["queued", "running", "waiting_for_child", "paused", "retrying", "completed", "failed", "cancelled"].some((candidate) => candidate === value); }
+function isOwnershipState(value: unknown): value is OwnershipRecord["state"] { return AGENT_STATES.some((candidate) => candidate === value); }
 function isBudgetDimension(value: unknown): value is BudgetDimension { return ["tokens", "costUsd", "durationMs", "agentLaunches"].some((candidate) => candidate === value); }
 function isBudgetEventType(value: unknown): value is NonNullable<RunRecord["budgetEvents"]>[number]["type"] { return ["soft_crossed", "hard_overrun", "hard_exhausted", "adjustment_requested", "adjustment_approved", "adjustment_rejected"].some((candidate) => candidate === value); }
-function isWorkflowErrorCode(value: unknown): value is NonNullable<RunRecord["error"]>["code"] { return ERROR_CODES.some((candidate) => candidate === value); }
 function optionalString(value: unknown): string | undefined | typeof INVALID_PERSISTED_VALUE { return value === undefined || typeof value === "string" ? value : INVALID_PERSISTED_VALUE; }
 function optionalNumber(value: unknown): number | undefined | typeof INVALID_PERSISTED_VALUE { return value === undefined || finiteNumber(value) ? value : INVALID_PERSISTED_VALUE; }
 function optionalBoolean(value: unknown): boolean | undefined | typeof INVALID_PERSISTED_VALUE { return value === undefined || typeof value === "boolean" ? value : INVALID_PERSISTED_VALUE; }

@@ -28,6 +28,8 @@ export const ERROR_CODES = [
   "CANCELLED", "WORKER_UNRESPONSIVE", "WORKTREE_FAILED", "RESUME_INCOMPATIBLE", "BUDGET_EXHAUSTED", "INTERNAL_ERROR",
   ] as const;
 
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 export type WorkflowErrorCode = (typeof ERROR_CODES)[number];
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type JsonSchema = { [key: string]: JsonValue };
@@ -86,7 +88,7 @@ export interface WorkflowPhaseChangedEvent extends WorkflowEventBase { previousP
 export type WorkflowCheckpointState = "awaiting" | "approved" | "rejected";
 export interface WorkflowCheckpointStateChangedEvent extends WorkflowEventBase { name: string; state: WorkflowCheckpointState }
 export interface WorkflowBudgetEvent extends WorkflowEventBase { type: BudgetEventType; budgetVersion: number; dimensions: readonly BudgetDimension[]; usage: WorkflowBudgetUsage; limits: WorkflowBudget; proposalId?: string; previous?: WorkflowBudget; proposed?: WorkflowBudget }
-export interface ModelSpec { provider: string; model: string; thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }
+export interface ModelSpec { provider: string; model: string; thinking?: ThinkingLevel }
 export interface WorkflowModelAliasResolverContext { cwd: string; projectTrusted: boolean; rootModel: ModelSpec; knownModels: ReadonlySet<string>; availableModels: ReadonlySet<string>; signal: AbortSignal }
 export interface WorkflowModelAlias { resolve: (context: Readonly<WorkflowModelAliasResolverContext>) => string | Promise<string> }
 export interface WorkflowMetadata { name: string; description?: string }
@@ -107,6 +109,13 @@ export interface ContextFile { readonly path: string; readonly content: string }
 export interface AgentActivity { kind: "reasoning" | "tool" | "text"; text: string }
 export const WORKFLOW_AGENT_STALL_THRESHOLD_MS = 10 * 60 * 1000;
 export interface AgentAccounting { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }
+export function zeroAccounting(): AgentAccounting { return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }; }
+export function addAccounting(left: AgentAccounting, right: AgentAccounting): AgentAccounting { return { input: left.input + right.input, output: left.output + right.output, cacheRead: left.cacheRead + right.cacheRead, cacheWrite: left.cacheWrite + right.cacheWrite, cost: left.cost + right.cost }; }
+export function sumAccounting(values: Iterable<AgentAccounting>): AgentAccounting {
+  let total = zeroAccounting();
+  for (const value of values) total = addAccounting(total, value);
+  return total;
+}
 export interface AgentSetupSummary { hookNames: readonly string[]; model: ModelSpec; tools: readonly string[]; cwd: string; resourceSelectors?: AgentResourceInspection }
 
 export interface AgentAttemptError { code: string; message: string }

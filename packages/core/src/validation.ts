@@ -189,22 +189,23 @@ export function parseRoleMarkdown(content: string, strict = false, rolePath?: st
       if (match?.[1] === "disabledAgentResources") fail("INVALID_METADATA", "disabledAgentResources is no longer supported; use skills, extensions, and tools selectors");
       if (match?.[1] && match[2]) meta[match[1]] = match[2].trim();
     }
-    const parseList = (value: string | undefined): string[] | undefined => value === undefined ? undefined : value.replace(/^\[|\]$/g, "").split(",").map((entry) => entry.trim().replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "")).filter(Boolean);
+    const unquote = (v: string) => v.replace(/^['"]|['"]$/g, "");
+    const parseList = (value: string | undefined): string[] | undefined => value === undefined ? undefined : value.replace(/^\[|\]$/g, "").split(",").map((entry) => unquote(entry.trim())).filter(Boolean);
     const tools = parseList(meta.tools);
     const skills = parseList(meta.skills);
     const extensions = parseList(meta.extensions);
-    const rawThinking = meta.thinking?.replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "");
+    const rawThinking = meta.thinking === undefined ? undefined : unquote(meta.thinking);
     const thinking = rawThinking ? parseThinking(rawThinking) : undefined;
     if (rawThinking && !thinking) fail("INVALID_METADATA", `Invalid role thinking level: ${rawThinking}`);
     const definition: AgentDefinition = { prompt: content.slice(end + 4).replace(/^\n/, "") };
-    if (meta.model) definition.model = meta.model.replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "");
-    if (meta.description) definition.description = meta.description.replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "");
+    if (meta.model) definition.model = unquote(meta.model);
+    if (meta.description) definition.description = unquote(meta.description);
     if (thinking !== undefined) definition.thinking = thinking;
     if (tools) definition.tools = tools;
     if (skills) definition.skills = skills;
     if (extensions) definition.extensions = extensions;
     const overrideSystemPrompt = meta.overrideSystemPrompt ?? meta.override_system_prompt ?? meta.is_system_prompt;
-    const contextFiles = meta.contextFiles ? meta.contextFiles.replace(/^\[|\]$/g, "").split(",").map((scope) => scope.trim().replace(/^[']|[']$/g, "").replace(/^["]|["]$/g, "")).filter(Boolean) : undefined;
+    const contextFiles = meta.contextFiles ? meta.contextFiles.replace(/^\[|\]$/g, "").split(",").map((scope) => unquote(scope.trim())).filter(Boolean) : undefined;
     const normalizedContextFiles = validateContextFileScopes(contextFiles, "role");
     if (overrideSystemPrompt) definition.overrideSystemPrompt = overrideSystemPrompt === "true";
     if (normalizedContextFiles) definition.contextFiles = normalizedContextFiles;

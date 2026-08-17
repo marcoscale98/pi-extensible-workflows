@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CAPTURE_IDENTITY } from "./eval-capture-extension.js";
-import { isObject } from "./index.js";
+import { errorText, isObject } from "./index.js";
 import { extractCapturedWorkflows, extractParentOracleFile, findSessionFile } from "./workflow-evals.js";
 
 export const AMBIENT_OPT_IN = "PI_WORKFLOW_EVAL_AMBIENT";
@@ -366,7 +366,7 @@ async function runAmbientCase(repository: AmbientFixtureRepository, candidate: A
       };
     }
   } catch (error) {
-    failure = error instanceof Error ? error.message : String(error);
+    failure = errorText(error);
   } finally {
     try { gitStatusAfter = gitStatus(worktree.path); } catch { gitStatusAfter = ["<unavailable>"]; }
     const worktreeRemoved = removeAmbientCaseWorktree(repository, worktree);
@@ -439,4 +439,4 @@ async function main(): Promise<void> {
   if (result.cases.some((item) => item.status !== "passed")) process.exitCode = 1;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) void main().catch((error: unknown) => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) void main().catch((error: unknown) => { process.stderr.write(`${errorText(error)}\n`); process.exitCode = 1; });

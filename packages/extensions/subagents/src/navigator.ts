@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { copyToClipboard, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Editor, truncateToWidth, type EditorTheme } from "@earendil-works/pi-tui";
-import { agentActionLabels, deepFreeze, formatAgentDetail, jsonValue, loadingRegistry, navigatorAttentionSortByState, openWorkflowArtifact, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions, workflowPromptArtifact, workflowResultArtifact, type AgentAttemptSummary, type AgentDetailPresentation, type StandaloneAgentAttemptActionContext, type WorkflowArtifact } from "pi-extensible-workflows";
+import { agentActionLabels, deepFreeze, errorText, formatAgentDetail, jsonValue, loadingRegistry, navigatorAttentionSortByState, openWorkflowArtifact, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions, workflowPromptArtifact, workflowResultArtifact, type AgentAttemptSummary, type AgentDetailPresentation, type StandaloneAgentAttemptActionContext, type WorkflowArtifact } from "pi-extensible-workflows";
 import { normalizeSubagentRunRequest, SUBAGENT_ATTEMPT_DETAILS_LIMIT, type SubagentManager, type SubagentManagerContext, type SubagentRunRequest, type SubagentStatus } from "./contracts.js";
 const MAX_DETAIL_TEXT = 4000;
 const MAX_DETAIL_TOOL_CALLS = 32;
@@ -16,7 +16,6 @@ type Inspection = { readonly entry: NavigatorEntry; readonly record: Record<stri
 
 type RegisterCommand = ExtensionAPI["registerCommand"];
 
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function objectValue(value: unknown): Record<string, unknown> | undefined { return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function isFileNotFound(error: unknown): boolean { return objectValue(error)?.code === "ENOENT"; }
 function safeRunId(id: string): boolean { return id !== "." && id !== ".." && /^[A-Za-z0-9._-]+$/.test(id); }
@@ -195,7 +194,7 @@ async function loadRequest(storageDirectory: string, id: string): Promise<{ requ
     return { request: normalizeSubagentRunRequest(value) };
   } catch (error) {
     if (isFileNotFound(error)) return {};
-    return { error: errorMessage(error) };
+    return { error: errorText(error) };
   }
 }
 
@@ -425,7 +424,7 @@ async function showDetail(manager: SubagentManager, storageDirectory: string, en
         if (await performAction(manager, storageDirectory, entry, action, context, undefined, clipboard) === "retry") return;
         inspection = await inspectEntry(manager, storageDirectory, entry, context);
       } catch (error) {
-        context.ui.notify(`Cannot ${action.toLowerCase()}: ${errorMessage(error)}`, "warning");
+        context.ui.notify(`Cannot ${action.toLowerCase()}: ${errorText(error)}`, "warning");
       }
     }
   }
@@ -462,7 +461,7 @@ async function showDetail(manager: SubagentManager, storageDirectory: string, en
     };
     const reportRefreshError = (error: unknown): void => {
       if (disposed) return;
-      try { context.ui.notify(`Cannot refresh subagent ${entry.status.id}: ${errorMessage(error)}`, "warning"); } catch { /* The session UI may already be closing. */ }
+      try { context.ui.notify(`Cannot refresh subagent ${entry.status.id}: ${errorText(error)}`, "warning"); } catch { /* The session UI may already be closing. */ }
     };
     const refreshInspection = async (): Promise<void> => {
       if (disposed || actionRunning || refreshing || inspection.entry.status.state !== "running") return;
@@ -522,7 +521,7 @@ async function showDetail(manager: SubagentManager, storageDirectory: string, en
         actionIndex = 0;
         offset = 0;
       }).catch((error: unknown) => {
-        if (!disposed) context.ui.notify(`Cannot ${action.toLowerCase()}: ${errorMessage(error)}`, "warning");
+        if (!disposed) context.ui.notify(`Cannot ${action.toLowerCase()}: ${errorText(error)}`, "warning");
       }).finally(() => {
         actionRunning = false;
         if (!disposed) requestRender();
@@ -567,7 +566,7 @@ async function showDetail(manager: SubagentManager, storageDirectory: string, en
   });
   if (!result || result === "retry") return;
   try { await steerSubagent(manager, storageDirectory, entry, context, result.message); }
-  catch (error) { context.ui.notify(`Cannot steer: ${errorMessage(error)}`, "warning"); }
+  catch (error) { context.ui.notify(`Cannot steer: ${errorText(error)}`, "warning"); }
   return "exit";
 }
 
@@ -594,7 +593,7 @@ async function runNavigator(manager: SubagentManager, storageDirectory: string, 
     try {
       if (await showDetail(manager, storageDirectory, selected, context, clipboard) === "exit") return;
     } catch (error) {
-      context.ui.notify(`Cannot inspect subagent ${selected.status.id}: ${errorMessage(error)}`, "warning");
+      context.ui.notify(`Cannot inspect subagent ${selected.status.id}: ${errorText(error)}`, "warning");
     }
   }
 }
@@ -606,7 +605,7 @@ export function registerSubagentNavigator(registerCommand: RegisterCommand, mana
       try {
         await runNavigator(manager, storageDirectory, args, context, clipboard);
       } catch (error) {
-        context.ui.notify(`Cannot inspect subagents: ${errorMessage(error)}`, "warning");
+        context.ui.notify(`Cannot inspect subagents: ${errorText(error)}`, "warning");
       }
     },
   });

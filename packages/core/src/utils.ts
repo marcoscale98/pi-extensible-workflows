@@ -1,5 +1,13 @@
-import { ERROR_CODES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WorkflowError, type JsonValue, type ModelSpec, type WorkflowErrorCode } from "./types.js";
+import { ERROR_CODES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, THINKING_LEVELS, WorkflowError, type JsonValue, type ModelSpec, type ThinkingLevel, type WorkflowErrorCode } from "./types.js";
 import { Minimatch } from "minimatch";
+export class SerialLane {
+  #tail: Promise<void> = Promise.resolve();
+  run<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.#tail.then(task, task);
+    this.#tail = next.then(() => undefined, () => undefined);
+    return next;
+  }
+}
 
 export function object(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 export { object as isObject };
@@ -20,6 +28,7 @@ export function jsonValue(value: unknown, seen = new Set<object>()): value is Js
 }
 export function jsonObject(value: unknown): value is Record<string, JsonValue> { return jsonValue(value) && object(value); }
 export function positiveInteger(value: unknown): value is number { return typeof value === "number" && Number.isInteger(value) && value > 0; }
+export function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 export function deepFreeze<T>(value: T): T {
   if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -28,8 +37,11 @@ export function deepFreeze<T>(value: T): T {
   return value;
 }
 export function isNodeError(error: unknown, code: string): error is { code: string } { return object(error) && error.code === code; }
-function isWorkflowErrorCode(value: unknown): value is WorkflowErrorCode { return ERROR_CODES.some((candidate) => candidate === value); }
+export function isWorkflowErrorCode(value: unknown): value is WorkflowErrorCode { return ERROR_CODES.some((candidate) => candidate === value); }
 export function errorText(error: unknown): string { return object(error) && typeof error.message === "string" ? error.message : error instanceof Error ? error.message : String(error); }
+export function coerceWorkflowError(code: WorkflowErrorCode, error: unknown): WorkflowError {
+  return error instanceof WorkflowError && error.code === code ? error : new WorkflowError(code, errorText(error));
+}
 export function errorCode(error: unknown): WorkflowErrorCode | undefined {
   if (error instanceof WorkflowError) return isWorkflowErrorCode(error.code) ? error.code : undefined;
   if (!object(error)) return undefined;
@@ -47,8 +59,6 @@ export function asWorkflowError(error: unknown): WorkflowError {
 }
 export function fail(code: WorkflowErrorCode, message: string): never { throw new WorkflowError(code, message); }
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-type ThinkingLevel = NonNullable<ModelSpec["thinking"]>;
 function isThinkingLevel(value: unknown): value is ThinkingLevel { return typeof value === "string" && THINKING_LEVELS.some((level) => level === value); }
 const MODEL_ALIAS_NAME = /^[A-Za-z][A-Za-z0-9_-]*$/;
 export function parseThinking(value: unknown): ModelSpec["thinking"] | undefined { return isThinkingLevel(value) ? value : undefined; }

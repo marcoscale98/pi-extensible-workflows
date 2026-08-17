@@ -669,3 +669,28 @@ void test("workflow control tools show error content for failed executions", () 
     assert.match(rendered, new RegExp(errorText));
   }
 });
+
+void test("keeps the five workflow controls behind a private local registration factory", () => {
+  const sourceUrl = [new URL("../src/host.ts", import.meta.url), new URL("../../src/host.ts", import.meta.url)].find((url) => existsSync(url));
+  assert.ok(sourceUrl);
+  const source = readFileSync(sourceUrl, "utf8");
+  const extensionStart = source.indexOf("export default function workflowExtension");
+  const factoryStart = source.indexOf("const registerControlTool");
+  assert.ok(extensionStart >= 0 && factoryStart > extensionStart);
+  assert.doesNotMatch(source, /export\s+(?:const|function)\s+registerControlTool/);
+  assert.match(source, /const registerControlTool\s*=\s*<P extends TSchema>\s*\(/);
+  assert.match(source, /run:\s*\(params: Static<P>, signal: AbortSignal, ctx: unknown\)/);
+
+  const controlMatches = [...source.matchAll(/\bregisterControlTool\s*\(\s*["']([^"']+)["']/g)];
+  const controlCalls = controlMatches.map((match) => match[1]);
+  assert.deepEqual(controlCalls, ["workflow_respond", "workflow_stop", "workflow_status", "workflow_retry", "workflow_resume"]);
+
+  const firstControlCall = controlMatches[0]?.index ?? -1;
+  assert.ok(firstControlCall > factoryStart);
+  const factory = source.slice(factoryStart, firstControlCall);
+  assert.match(factory, /const result = await run\(params, signal, ctx\)/);
+  assert.match(factory, /return \{ content: \[\{ type: "text" as const, text: result\.text \}\], details: result\.details \}/);
+  assert.match(factory, /throw mainAgentError\(error\)/);
+  assert.match(factory, /styledTextBlock\(workflowControlCall\(name, args, theme\)\)/);
+  assert.match(factory, /workflowCatalogBlock\(workflowControlResult\(name, context.args, result, options.expanded, theme, context.isError\), options.expanded\)/);
+});

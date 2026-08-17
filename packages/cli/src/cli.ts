@@ -8,7 +8,7 @@ import { ProjectTrustStore, SessionManager, SettingsManager, createAgentSessionF
 import { Value } from "typebox/value";
 import { doctor, doctorExitCode, formatDoctorReport, type DoctorOptions } from "./doctor.js";
 import { doctorCleanup, doctorCleanupExitCode, formatDoctorCleanupReport, type DoctorCleanupOptions } from "./doctor-cleanup.js";
-import workflowExtension, { formatWorkflowProgress, isNodeError, jsonValue, loadAgentDefinitions, registeredWorkflowFunctions, truncateWorkflowProgress, workflowCatalog, workflowSettingsPath, type JsonSchema, type JsonValue, type WorkflowExtensionAPI, type WorkflowProgressStyles } from "pi-extensible-workflows";
+import workflowExtension, { errorText, formatWorkflowProgress, isNodeError, jsonValue, loadAgentDefinitions, registeredWorkflowFunctions, truncateWorkflowProgress, workflowCatalog, workflowSettingsPath, type JsonSchema, type JsonValue, type WorkflowExtensionAPI, type WorkflowProgressStyles } from "pi-extensible-workflows";
 import { portableEngineVersion, portablePiVersion, writePortableWorkflowBundle } from "./bundles.js";
 import { runSessionInspector, transcriptFileLines, type InspectMode } from "./session-inspector.js";
 import { isPersistedRun, type PersistedRun } from "pi-extensible-workflows/persistence";
@@ -598,7 +598,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}, 
       const report = await doctor({ ...options, ...parsed });
       write(json ? `${JSON.stringify(report)}\n` : formatDoctorReport(report));
       return doctorExitCode(report);
-    } catch (error) { stderr(`Error: ${error instanceof Error ? error.message : String(error)}\n`); return 1; }
+    } catch (error) { stderr(`Error: ${errorText(error)}\n`); return 1; }
   }
   if (args[0] === "doctor" && args[1] === "cleanup") {
     if (args.slice(2).some((arg) => arg === "--help" || arg === "-h")) { write("Usage: piewf doctor cleanup [--older-than-days <days>] [--yes]\n"); return 0; }
@@ -608,7 +608,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}, 
       const report = await doctorCleanup(cleanupOptions);
       write(formatDoctorCleanupReport(report));
       return doctorCleanupExitCode(report);
-    } catch (error) { stderr(`Error: ${error instanceof Error ? error.message : String(error)}\n`); return 1; }
+    } catch (error) { stderr(`Error: ${errorText(error)}\n`); return 1; }
   }
   if (args[0] === "inspect") {
     try {
@@ -617,7 +617,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}, 
       else await runSessionInspector(parsed.sessionId, parsed.mode, options.cwd ?? process.cwd(), undefined, write, parsed.failedOnly);
       return 0;
     }
-    catch (error) { write(`Error: ${error instanceof Error ? error.message : String(error)}\n`); return 1; }
+    catch (error) { write(`Error: ${errorText(error)}\n`); return 1; }
   }
   if (args[0] === "transcript" && args.length === 2) {
     try {
@@ -625,14 +625,14 @@ export async function runCli(args: readonly string[], options: CliOptions = {}, 
       if (options.transcript) await options.transcript(transcript);
       else write(`${transcriptFileLines(transcript).join("\n")}\n`);
       return 0;
-    } catch (error) { write(`Error: ${error instanceof Error ? error.message : String(error)}\n`); return 1; }
+    } catch (error) { write(`Error: ${errorText(error)}\n`); return 1; }
   }
   if (args[0] === "bundle" || args[0] === "run" || args[0] === "export") {
     try {
       const workflowOptions: WorkflowIo = { write, stderr, ...(options.cwd !== undefined ? { cwd: options.cwd } : {}), ...(options.agentDir !== undefined ? { agentDir: options.agentDir } : {}), ...(options.signal ? { signal: options.signal } : {}), ...(options.trustOverride !== undefined ? { trustOverride: options.trustOverride } : {}), ...(options.isTTY !== undefined ? { isTTY: options.isTTY } : {}), ...(options.skillPaths?.length ? { skillPaths: [...options.skillPaths] } : {}) };
       if (args[0] === "bundle") return await bundleWorkflowCli(args.slice(1), workflowOptions);
       return args[0] === "run" ? await runWorkflowCli(args.slice(1), workflowOptions) : await exportWorkflowCli(args.slice(1), workflowOptions);
-    } catch (error) { stderr(`Error: ${error instanceof Error ? error.message : String(error)}\n`); return 1; }
+    } catch (error) { stderr(`Error: ${errorText(error)}\n`); return 1; }
   }
   write("Usage: piewf doctor [role] [--role <role>] [--prompt <text>] [--json] | inspect [session-id] [--json|--summary] [--failed] | transcript <session-file> | bundle <workflow-name> [--name <command>] [--output <path>] [--force] | run <workflow-name> [workflow arguments] | export <workflow-name> [--name <command>] [--output <path>] [--force] [--bundle]\n");
   return 1;

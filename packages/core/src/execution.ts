@@ -6,13 +6,12 @@ import { StringDecoder } from "node:string_decoder";
 import { RunStore, structuralPath as operationPath } from "./persistence.js";
 import type { AgentAttempt } from "./agent-execution.js";
 import type { AgentIdentity, AgentAttemptSummary, FunctionIdentity, JsonValue, ShellIdentity, ShellOptions, ShellResult, WorkflowAgentSessionReference, WorkflowBridge, WorkflowErrorCode, WorkflowExecution } from "./types.js";
-import { ERROR_CODES, WorkflowError, roleNameOf } from "./types.js";
-import { asWorkflowError, errorText, fail, isWorkflowAuthored, jsonValue, markWorkflowAuthored, object, positiveInteger } from "./utils.js";
+import { WorkflowError, roleNameOf, sumAccounting, zeroAccounting } from "./types.js";
+import { asWorkflowError, errorText, fail, isWorkflowAuthored, isWorkflowErrorCode, jsonValue, markWorkflowAuthored, object, positiveInteger } from "./utils.js";
 import { instrumentWorkflow, validateAgentOptions, validateShellCommand, validateShellOptions } from "./validation.js";
 
 export const RPC_LIMIT_BYTES = 10 * 1024 * 1024;
 type WorkerErrorShape = { code?: string; message: string; authored?: boolean; failedAt?: string };
-function isWorkflowErrorCode(value: unknown): value is WorkflowErrorCode { return ERROR_CODES.some((candidate) => candidate === value); }
 export const HEARTBEAT_TIMEOUT_MS = 5000;
 type RpcMessage =
   | { type: "heartbeat" }
@@ -481,7 +480,7 @@ export function runWorkflow(script: string, args: JsonValue = null, bridge: Work
         if (message.type === "result") { encoded(message.value); finish(); resolve(message.value); return; }
         if (message.type === "error") { finish(); reject(workflowErrorFromWorker(message.error)); return; }
         if (message.type === "rpc") void handleRpc(message.id, message.method, message.args);
-      } catch (error) { stop(error instanceof WorkflowError ? error.code : "INTERNAL_ERROR", error instanceof Error ? error.message : String(error)); }
+      } catch (error) { stop(error instanceof WorkflowError ? error.code : "INTERNAL_ERROR", errorText(error)); }
     });
     child.on("error", (error: Error) => { stop("INTERNAL_ERROR", error.message); });
     child.on("exit", (code) => { if (!settled && code !== 0) stop("INTERNAL_ERROR", `Workflow child exited with code ${String(code)}`); });
@@ -582,7 +581,7 @@ export async function persistActiveAgentAttempt(store: RunStore, id: string, act
   await store.updateState((run) => {
     const agent = run.agents.find((candidate) => candidate.id === id);
     if (!agent) throw new WorkflowError("INTERNAL_ERROR", `Missing production ownership record: ${id}`);
-    const accounting = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    const accounting = zeroAccounting();
     const detail = attemptSummary(active, accounting);
     const details = [...(agent.attemptDetails ?? []).filter((candidate) => candidate.attempt !== active.attempt), detail];
     const session = active.session;
@@ -595,7 +594,7 @@ export async function persistAgentAttempts(store: RunStore, id: string, attempts
   await store.updateState((run) => {
     const agent = run.agents.find((candidate) => candidate.id === id);
     if (!agent) throw new WorkflowError("INTERNAL_ERROR", `Missing production ownership record: ${id}`);
-    const total = attempts.reduce((sum, attempt) => ({ input: sum.input + attempt.accounting.input, output: sum.output + attempt.accounting.output, cacheRead: sum.cacheRead + attempt.accounting.cacheRead, cacheWrite: sum.cacheWrite + attempt.accounting.cacheWrite, cost: sum.cost + attempt.accounting.cost }), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+    const total = sumAccounting(attempts.map((attempt) => attempt.accounting));
     const attemptDetails = attempts.map((attempt) => attemptSummary(attempt));
     const sessions = attempts.map((attempt) => attempt.session).filter((session): session is WorkflowAgentSessionReference => session !== undefined);
     const sessionKeys = new Set(sessions.map(({ transport, sessionId }) => `${transport}:${sessionId}`));
