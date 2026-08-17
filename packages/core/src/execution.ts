@@ -102,6 +102,8 @@ const unwrap = result => {
   throw Object.assign(workflowError(result.error), { failedAt: result.failedAt });
 };
 const named = (value, kind) => { if (typeof value !== "string" || !value.trim()) throw workError("INVALID_METADATA", kind + " requires a stable explicit name"); return value; };
+// Each argument is one path segment. A failedAt coming back from a nested operation is already a
+// full path, so it is passed through untouched: feeding it here would encode its separators again.
 const path = (...names) => names.map(encodeURIComponent).join("/");
 const inheritedAgentPath = new AsyncLocalStorage();
 const agentOccurrences = new Map();
@@ -251,13 +253,16 @@ const parallel = async (operationName, tasks) => {
     if (typeof run !== "function") throw workError("INVALID_METADATA", "parallel task values must be run functions");
   }
   const results = await Promise.all(entries.map(async ([name, run]) => {
+    // Captured outside the scope's run() so the fallback failedAt below is absolute: a plain throw
+    // inside a nested scope must still name the full outer path, or sibling scopes with the same
+    // inner names become indistinguishable in diagnostics and retry provenance.
+    const parent = inheritedAgentPath.getStore() || [];
     try {
-      const parent = inheritedAgentPath.getStore() || [];
       return { name, ok: true, value: await inheritedAgentPath.run([...parent, operationName, name], run) };
     } catch (error) {
       if (errorCode(error) === "CANCELLED") throw error;
       const failedAt = error && typeof error === "object" && typeof error.failedAt === "string" ? error.failedAt : undefined;
-      return { name, ok: false, failedAt: failedAt ? path(operationName, name, failedAt) : path(operationName, name), error: workerError(error) };
+      return { name, ok: false, failedAt: failedAt || path(...parent, operationName, name), error: workerError(error) };
     }
   }));
   const failure = results.find(result => !result.ok);
@@ -276,18 +281,19 @@ const pipeline = async (operationName, items, stages) => {
   }
   const results = await Promise.all(itemEntries.map(async ([name, initial]) => {
     let value = initial;
-    let failedAt = path(operationName, name);
+    // See the parallel fallback above: parent makes the stage-level failedAt fallback absolute.
+    const parent = inheritedAgentPath.getStore() || [];
+    let failedAt = path(...parent, operationName, name);
     try {
       for (const [stageName, run] of stageEntries) {
-        failedAt = path(operationName, name, stageName);
-        const parent = inheritedAgentPath.getStore() || [];
+        failedAt = path(...parent, operationName, name, stageName);
         value = await inheritedAgentPath.run([...parent, operationName, name, stageName], () => run(value));
       }
       return { name, ok: true, value };
     } catch (error) {
       if (errorCode(error) === "CANCELLED") throw error;
       const nestedFailedAt = error && typeof error === "object" && typeof error.failedAt === "string" ? error.failedAt : undefined;
-      return { name, ok: false, failedAt: nestedFailedAt ? path(failedAt, nestedFailedAt) : failedAt, error: workerError(error) };
+      return { name, ok: false, failedAt: nestedFailedAt || failedAt, error: workerError(error) };
     }
   }));
   const failure = results.find(result => !result.ok);

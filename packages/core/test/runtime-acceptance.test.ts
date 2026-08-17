@@ -567,6 +567,11 @@ void test("production worker returns bare combinator values and waits before typ
   releaseParallel();
   await assert.rejects(parallelRun.result, (error: unknown) => error instanceof WorkflowError && error.code === "AGENT_FAILED" && error.message === "branch failed" && (error as WorkflowError & { failedAt?: string }).failedAt === "batch/failure");
 
+  // A plain (non-agent) throw inside a nested scope reports the absolute path, so sibling scopes
+  // with identical inner names stay distinguishable in diagnostics and retry provenance.
+  const nestedRun = runWorkflow(`return parallel('outer',{a:()=>parallel('inner',{x:async()=>'ok'}),b:()=>parallel('inner',{x:()=>{throw Object.assign(new Error('nested failed'),{code:'AGENT_FAILED'})}})});`);
+  await assert.rejects(nestedRun.result, (error: unknown) => error instanceof WorkflowError && error.code === "AGENT_FAILED" && error.message === "nested failed" && (error as WorkflowError & { failedAt?: string }).failedAt === "outer/b/inner/x");
+
   let releasePipeline!: () => void;
   const pipelineWait = new Promise<JsonValue>((resolve) => { releasePipeline = () => { resolve(2); }; });
   settled = false;
@@ -579,7 +584,8 @@ void test("production worker returns bare combinator values and waits before typ
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(settled, false);
   releasePipeline();
-  await assert.rejects(pipelineRun.result, (error: unknown) => error instanceof WorkflowError && error.code === "RESULT_INVALID" && error.message === "invalid first" && (error as WorkflowError & { failedAt?: string }).failedAt?.startsWith("pipe%2Ffirst%2Frun/agent%2F"));
+  // A nested failure reports the failing operation's own journal path, not a re-encoded copy of it.
+  await assert.rejects(pipelineRun.result, (error: unknown) => error instanceof WorkflowError && error.code === "RESULT_INVALID" && error.message === "invalid first" && (error as WorkflowError & { failedAt?: string }).failedAt?.startsWith("agent/pipe/first/run/callsite%3A") === true);
 
   const controller = new AbortController();
   let markStarted!: () => void;
