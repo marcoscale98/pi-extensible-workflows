@@ -1,0 +1,33 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+
+const typesPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../src/types.ts");
+
+function interfaceFields(source: string, name: string): string[] {
+  const match = source.match(new RegExp(`export interface ${name} \\{([\\s\\S]*?)\\n\\}`));
+  const body = match?.[1];
+  assert.ok(body, `${name} must use a multiline declaration`);
+  return body.split("\n").filter((line) => line.trim() !== "").map((line) => {
+    const field = /^\x20{2}([A-Za-z_$][\w$]*)\??:/.exec(line);
+    const fieldName = field?.[1];
+    assert.ok(fieldName, `${name} must have one property per indented line: ${line}`);
+    return fieldName;
+  });
+}
+
+void test("large public and persisted records keep one property per line", () => {
+  const source = readFileSync(typesPath, "utf8");
+  const expected = {
+    AgentResourcePolicy: ["globalSettingsPath", "projectSettingsPath", "projectTrusted", "global", "project", "effective", "selectedSkills", "selectedExtensions", "selectedTools", "unmatchedSkills", "unmatchedExtensions", "unmatchedTools", "selectorSources"],
+    AgentRecord: ["systemPrompt", "prompt", "id", "name", "label", "path", "state", "parentId", "structuralPath", "resultPath", "parentBreadcrumb", "worktreeOwner", "role", "requestedModel", "model", "tools", "attempts", "startedAt", "durationMs", "attemptDetails", "accounting", "toolCalls", "activity", "lastEventAt"],
+    RunRecord: ["id", "workflowName", "cwd", "sessionId", "state", "agentSessions", "parentRunId", "retry", "phase", "phaseHistory", "phaseHistoryIndex", "agents", "activeShells", "activeShellStartedAt", "activeShellsByPhase", "error", "failedAt", "budget", "budgetVersion", "usage", "budgetEvents", "events", "delivery"],
+    LaunchSnapshot: ["identityVersion", "launchMode", "script", "args", "metadata", "settings", "settingsSources", "budget", "settingsPath", "modelAliases", "phases", "models", "tools", "agentTypes", "roles", "projectRoles", "schemas"],
+  } as const;
+
+  for (const [name, fields] of Object.entries(expected)) {
+    assert.deepEqual(interfaceFields(source, name), fields, `${name} field layout or order changed`);
+  }
+});
