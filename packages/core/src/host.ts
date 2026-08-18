@@ -825,7 +825,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const requestedLabel = typeof options.label === "string" ? options.label : undefined;
       const skills = Array.isArray(options.skills) ? options.skills as string[] : undefined;
       const extensions = Array.isArray(options.extensions) ? options.extensions as string[] : undefined;
-      const contextFiles = Array.isArray(options.contextFiles) && options.contextFiles.every((scope) => scope === "global" || scope === "project" || scope === "cwd") ? options.contextFiles as Array<"global" | "project" | "cwd"> : undefined;
+      const contextFiles = Array.isArray(options.contextFiles) && options.contextFiles.every((scope) => scope === "global" || scope === "project" || scope === "cwd") ? options.contextFiles : undefined;
       const resolved = executor.resolve({ label: requestedLabel ?? role ?? "agent", workflowName: metadata.name, ...(model ? { model } : {}), ...(role ? { role } : {}), ...(contextFiles ? { contextFiles } : {}), ...(Array.isArray(options.tools) ? { tools: options.tools as string[] } : {}), ...(skills ? { skills } : {}), ...(extensions ? { extensions } : {}) });
       if (role) await captureRole?.(role, resolved.model);
       const label = displayAgentName(requestedLabel, role, resolved.model);

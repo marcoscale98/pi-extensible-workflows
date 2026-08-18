@@ -1,8 +1,27 @@
 # Changelog
 ## Unreleased
 
-- Removed per-call `thinking`. Concrete models must be `provider/model:thinking`; aliases may omit the suffix and inherit it from the target. Role-file `thinking` frontmatter is rejected. `role` is a name string. Role files provide defaults; per-call `AgentOptions` `model`, `tools`, `skills`, `extensions`, and `contextFiles` override them. Role objects, `RoleOverride`, `ROLE_OVERRIDE_KEYS`, and `validateRoleOverride` are removed. `overrideSystemPrompt` remains role-file only. Persisted legacy role objects are rejected as corrupt. Legacy role snapshots fold `thinking` into `model`.
+## [5.6.0] - 2026-08-18
+
+### Breaking changes
+
+- Removed per-call `thinking`. Concrete models must be `provider/model:thinking`; aliases may omit the suffix and inherit it from the target. Role-file `thinking` frontmatter is rejected.
+- `role` is now a name string only. Role files provide defaults; per-call `AgentOptions` `model`, `tools`, `skills`, `extensions`, and `contextFiles` override them. Role objects, `RoleOverride`, `ROLE_OVERRIDE_KEYS`, and `validateRoleOverride` are removed. `overrideSystemPrompt` remains role-file only. Persisted legacy role objects are rejected as corrupt. Legacy role snapshots fold `thinking` into `model`.
 - Removed the optional `singleAgent` workflow-catalog function from `@piewf/subagents`. Use core `agent()` and `withWorktree()` in workflow scripts.
+
+### New capabilities
+
+- Added terminal-run retention settings (`retention.olderThanDays`, `retention.maxTerminalRuns`) applied best-effort at session start to hard-terminal runs only.
+
+### Fixes
+
+- Report failed ownership writes per run instead of crashing the host.
+- Keep nested `failedAt` paths absolute and journal-consistent.
+- Resolve real-session trace paths from the package root.
+
+### Documentation
+
+- Documented agent session transitions and tightened the root README.
 
 ## [5.5.0] - 2026-08-16
 
