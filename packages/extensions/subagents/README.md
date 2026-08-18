@@ -20,7 +20,6 @@ Use `@piewf/subagents` for focused, independent tasks. Use `pi-extensible-workfl
 - Background fan-out with one durable ID per run, or foreground execution with an inline terminal result.
 - Reuses workflow roles, role overrides, model aliases, settings, and agent options: `label`, `model`, `thinking`, `tools`, `skills`, `extensions`, `worktree`, `outputSchema`, `retries` (0 through 255), and `timeoutMs`.
 - Repeatable inspection of progress, token accounting, tool calls, results, failures, and worktrees.
-- Optional `singleAgent` workflow function for inline composition without a standalone lifecycle.
 
 ## Install
 
@@ -128,30 +127,7 @@ const manager: SubagentManager = /* host implementation, or omit this option */;
 extension(pi, { manager });
 ```
 
-The default export registers the five tools and the optional `singleAgent` workflow function. `createSubagentManager()` and `createSubagentTools()` are also exported for hosts that need explicit lifecycle or dependency injection. Standalone tools do not call or require the catalog function or any other extension.
-
-## Workflow catalog integration
-
-The extension optionally registers `singleAgent` as a thin workflow function under the core process-global function registry. Standalone tools remain fully usable if the catalog is unavailable or its generic name is already owned. The function uses the same agent options and calls the core `context.agent` exactly once:
-
-```js
-return await singleAgent({
-  prompt: "Review the changed files.",
-  role: "reviewer",
-  outputSchema: { type: "object", properties: { findings: { type: "array" } } },
-});
-```
-
-`singleAgent` is inline workflow composition, not a standalone lifecycle. Its input schema intentionally does not include `mode`, because it has no background/foreground run mode. It returns the agent's JSON value directly and does not create a durable standalone ID, manager result, follow-up notification, or cross-session restoration point. This is different from `subagents_run({ mode: "foreground" })`, which creates and persists a run ID before waiting for its terminal envelope.
-
-For a named worktree, `singleAgent` uses the core scope form and does not pass the worktree reference as an agent prompt or option:
-
-```js
-return await singleAgent({
-  prompt: "Implement the fix.",
-  worktree: "fix",
-});
-```
+The default export registers the five tools. `createSubagentManager()` and `createSubagentTools()` are also exported for hosts that need explicit lifecycle or dependency injection.
 
 ## Shutdown and restoration
 
@@ -172,4 +148,4 @@ The v5.4 release removes the seven-tool surface's redundant `subagents_list`, `s
 | `subagents_stop({ id })` | unchanged |
 | `subagents_retry({ id })` | unchanged; the original launch mode is preserved |
 
-The standalone manager deliberately keeps durable run IDs, repeatable inspection, bounded steering, named worktree cleanup, and workflow role/settings reuse. The optional `singleAgent` function is separate inline composition: it returns a value directly and does not require or create a standalone background or foreground lifecycle.
+The standalone manager deliberately keeps durable run IDs, repeatable inspection, bounded steering, named worktree cleanup, and workflow role/settings reuse.

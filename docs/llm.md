@@ -140,9 +140,6 @@ The model-facing surface is exactly:
 `subagents_run` accepts the same `label`, `model`, `thinking`, `skills`, `extensions`, `tools`, `role`, `worktree`, `outputSchema`, `retries`, and `timeoutMs` options as workflow agents. A named role or role override may combine with top-level capability selectors, which are the final overlay; `model` and `thinking` remain role-only when a role is selected.
 
 Background calls return an ID immediately. Foreground calls return a terminal envelope and do not produce a background completion follow-up. Do not poll a running ID; call `subagents_inspect({ id })` only when current state or output is needed. Cross-session retry starts fresh and does not restore the old native conversation.
-
-The optional `singleAgent` registered function is workflow composition, not the standalone lifecycle: it returns a bare value and has no `mode`, standalone ID, follow-up, or restoration point. See the [Subagents guide](subagents.html) for the full contract.
-
 ## Herdr integration
 
 `@piewf/herdr` requires the core workflow extension and a Herdr-managed pane. It registers workflow attempt actions and a transport setup hook, not model-facing tools.

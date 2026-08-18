@@ -1,4 +1,8 @@
 # Changelog
+## Unreleased
+
+- Removed the optional `singleAgent` workflow-catalog function from `@piewf/subagents`. Use core `agent()` and `withWorktree()` in workflow scripts.
+
 ## [5.5.0] - 2026-08-16
 
 - Show the core package's bundled changelog once after its installed version changes, with a startup fallback for `pi update --extensions` and `pi update --all` ([#208](https://github.com/vekexasia/pi-extensible-workflows/issues/208)).

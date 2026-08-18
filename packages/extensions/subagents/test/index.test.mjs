@@ -9,7 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, loadingRegistry, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
+import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
 import { atomicJson } from "pi-extensible-workflows/persistence";
 import extension, {
   createSubagentManager,
@@ -19,7 +19,6 @@ import extension, {
   SUBAGENTS_INSPECT_PARAMETERS,
   SUBAGENTS_RETRY_PARAMETERS,
   SUBAGENTS_RUN_PARAMETERS,
-  SUBAGENTS_SINGLE_AGENT_PARAMETERS,
   SUBAGENTS_STEER_PARAMETERS,
   SUBAGENTS_STOP_PARAMETERS,
 } from "../dist/index.js";
@@ -1025,9 +1024,6 @@ test("exposes closed tool schemas and minimal prompt guidance", () => {
   assert.deepEqual(Object.keys(SUBAGENTS_INSPECT_PARAMETERS.properties), ["id"]);
   assert.equal(SUBAGENTS_INSPECT_PARAMETERS.additionalProperties, false);
   assert.equal(SUBAGENTS_INSPECT_PARAMETERS.required, undefined);
-  assert.deepEqual(Object.keys(SUBAGENTS_SINGLE_AGENT_PARAMETERS.properties), ["prompt", "label", "model", "thinking", "tools", "skills", "extensions", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
-  assert.equal(SUBAGENTS_SINGLE_AGENT_PARAMETERS.additionalProperties, false);
-
   for (const schema of [SUBAGENTS_ID_PARAMETERS, SUBAGENTS_STOP_PARAMETERS, SUBAGENTS_RETRY_PARAMETERS]) {
     assert.deepEqual(Object.keys(schema.properties), ["id"]);
     assert.deepEqual(schema.required, ["id"]);
@@ -1036,104 +1032,6 @@ test("exposes closed tool schemas and minimal prompt guidance", () => {
   assert.deepEqual(Object.keys(SUBAGENTS_STEER_PARAMETERS.properties), ["id", "message"]);
   assert.deepEqual(SUBAGENTS_STEER_PARAMETERS.required, ["id", "message"]);
   assert.equal(SUBAGENTS_STEER_PARAMETERS.additionalProperties, false);
-});
-
-async function singleAgentManagerStub() {
-  return {
-    async run() {},
-    async inspect() {},
-    async steer() {},
-    async stop() {},
-    async retry() {},
-  };
-}
-
-test("registers singleAgent in the workflow catalog and invokes one agent inside a named worktree", async () => {
-  resetWorkflowRegistry();
-  try {
-    extension({ registerTool() {} }, { manager: await singleAgentManagerStub() });
-    const catalog = loadingRegistry().catalogIndex();
-    assert.ok(catalog.functions.some(({ name }) => name === "singleAgent"));
-    const singleAgent = loadingRegistry().function("singleAgent");
-    const calls = [];
-    const context = {
-      agent(prompt, options) { calls.push(["agent", prompt, options]); return Promise.resolve({ answer: "ok" }); },
-      withWorktree(name, callback) { calls.push(["worktree", name]); return callback({ path: "/tmp/tree", branch: "branch" }); },
-    };
-    assert.deepEqual(await singleAgent.run({ prompt: "inspect", label: "review", worktree: "review-tree" }, context), { answer: "ok" });
-    assert.deepEqual(calls, [
-      ["worktree", "review-tree"],
-      ["agent", "inspect", { label: "review" }],
-    ]);
-  } finally {
-    resetWorkflowRegistry();
-  }
-});
-test("invokes singleAgent through the registry with input and output schema validation", async () => {
-  resetWorkflowRegistry();
-  try {
-    extension({ registerTool() {} }, { manager: await singleAgentManagerStub() });
-    const calls = [];
-    const results = new Map([["structured", { answer: "ok" }], ["scalar", "ok"], ["invalid-output", undefined]]);
-    const context = { run: {}, invoke() {}, agent(prompt) { calls.push(prompt); return Promise.resolve(results.get(prompt)); } };
-    const journal = { get() { return undefined; }, put() {} };
-    await assert.rejects(
-      loadingRegistry().invokeFunction("singleAgent", {}, context, "invalid-input", journal),
-      (error) => error?.code === "RESULT_INVALID",
-    );
-    await assert.rejects(
-      loadingRegistry().invokeFunction("singleAgent", { prompt: "structured", mode: "foreground" }, context, "mode-input", journal),
-      (error) => error?.code === "RESULT_INVALID",
-    );
-    assert.deepEqual(await loadingRegistry().invokeFunction("singleAgent", { prompt: "structured" }, context, "structured", journal), { answer: "ok" });
-    assert.equal(await loadingRegistry().invokeFunction("singleAgent", { prompt: "scalar" }, context, "scalar", journal), "ok");
-    await assert.rejects(
-      loadingRegistry().invokeFunction("singleAgent", { prompt: "invalid-output" }, context, "invalid-output", journal),
-      (error) => error?.code === "RESULT_INVALID",
-    );
-    assert.deepEqual(calls, ["structured", "scalar", "invalid-output"]);
-  } finally {
-    resetWorkflowRegistry();
-  }
-});
-test("keeps standalone tools available when the optional catalog name collides", async () => {
-  resetWorkflowRegistry();
-  try {
-    registerWorkflowExtension({
-      version: "1.0.0",
-      headline: "Existing single agent",
-      functions: { singleAgent: { description: "Existing function", input: { type: "object" }, output: { type: "string" }, run: () => "existing" } },
-    });
-    const tools = [];
-    registerSubagentsExtension({ registerTool(tool) { tools.push(tool); } }, { manager: await singleAgentManagerStub() });
-    assert.deepEqual(tools.map(({ name }) => name), toolNames);
-    assert.equal(await loadingRegistry().function("singleAgent").run({}, {}), "existing");
-  } finally {
-    resetWorkflowRegistry();
-  }
-});
-test("does not swallow unrelated invalid registry metadata", () => {
-  resetWorkflowRegistry();
-  const registry = loadingRegistry();
-  const register = registry.register;
-  registry.register = () => { throw new WorkflowError("INVALID_METADATA", "invalid registry metadata"); };
-  try {
-    assert.throws(() => registerSubagentsExtension({ registerTool() {} }), (error) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  } finally {
-    registry.register = register;
-    resetWorkflowRegistry();
-  }
-});
-test("keeps standalone tools available when the workflow registry is frozen", async () => {
-  resetWorkflowRegistry();
-  try {
-    loadingRegistry().freeze();
-    const tools = [];
-    registerSubagentsExtension({ registerTool(tool) { tools.push(tool); } }, { manager: await singleAgentManagerStub() });
-    assert.deepEqual(tools.map(({ name }) => name), toolNames);
-  } finally {
-    resetWorkflowRegistry();
-  }
 });
 test("publishes discoverable extension artifacts", () => {
   const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));

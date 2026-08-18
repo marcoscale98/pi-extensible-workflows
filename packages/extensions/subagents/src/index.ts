@@ -1,20 +1,17 @@
 import { join } from "node:path";
 import { defineTool, getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
-import { loadingRegistry, registerWorkflowExtension, WorkflowError, type AgentOptions, type JsonSchema, type WorkflowExtension } from "pi-extensible-workflows";
+import { WorkflowError } from "pi-extensible-workflows";
 import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentStatus, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
 import { registerSubagentNavigator } from "./navigator.js";
 import { createSubagentBackgroundWidget, renderSubagentCall, renderSubagentControlCall, renderSubagentControlResult, renderSubagentInspectCall, renderSubagentInspectResult, renderSubagentResult } from "./view.js";
 import {
-  normalizeSingleAgentRequest,
   normalizeSubagentRunRequest,
   SUBAGENTS_ID_PARAMETERS,
   SUBAGENTS_INSPECT_PARAMETERS,
   SUBAGENTS_RETRY_PARAMETERS,
   SUBAGENTS_RUN_PARAMETERS,
-  SUBAGENTS_SINGLE_AGENT_PARAMETERS,
   SUBAGENTS_STEER_PARAMETERS,
   SUBAGENTS_STOP_PARAMETERS,
 } from "./contracts.js";
@@ -67,49 +64,6 @@ function managerContext(toolCallId: string, signal: AbortSignal | undefined, onU
     extensionContext: context,
   };
 }
-function singleAgentOptions(request: Readonly<SubagentRunRequest>): AgentOptions {
-  const role = request.role;
-  return {
-    ...(request.label === undefined ? {} : { label: request.label }),
-    ...(request.model === undefined ? {} : { model: request.model }),
-    ...(request.thinking === undefined ? {} : { thinking: request.thinking as NonNullable<AgentOptions["thinking"]> }),
-    ...(request.tools === undefined ? {} : { tools: request.tools }),
-    ...(role === undefined ? {} : { role: role as NonNullable<AgentOptions["role"]> }),
-    ...(request.outputSchema === undefined ? {} : { outputSchema: request.outputSchema as JsonSchema }),
-    ...(request.retries === undefined ? {} : { retries: request.retries }),
-    ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
-  };
-}
-
-const SUBAGENTS_AGENT_OUTPUT_SCHEMA = Type.Union([Type.Null(), Type.Boolean(), Type.Number(), Type.String(), Type.Array(Type.Unknown()), Type.Record(Type.String(), Type.Unknown())]);
-const SUBAGENTS_WORKFLOW_EXTENSION = {
-  version: "1.0.0",
-  headline: "Subagents workflow integration",
-  functions: {
-    singleAgent: {
-      description: "Run one agent inline with the subagents request options.",
-      input: structuredClone(SUBAGENTS_SINGLE_AGENT_PARAMETERS),
-      output: SUBAGENTS_AGENT_OUTPUT_SCHEMA,
-      async run(input, context) {
-        const request = normalizeSingleAgentRequest(input);
-        const options = singleAgentOptions(request);
-        if (request.worktree === undefined) return context.agent(request.prompt, options);
-        return context.withWorktree(request.worktree, async (reference) => {
-          void reference;
-          return context.agent(request.prompt, options);
-        });
-      },
-    },
-  },
-} satisfies WorkflowExtension;
-
-function registerSubagentsWorkflowExtension(): void {
-  const functionDefinition = SUBAGENTS_WORKFLOW_EXTENSION.functions.singleAgent;
-  const existing = loadingRegistry().functions().singleAgent;
-  if (existing === functionDefinition || existing !== undefined && existing.description === functionDefinition.description && JSON.stringify(existing.input) === JSON.stringify(functionDefinition.input) && JSON.stringify(existing.output) === JSON.stringify(functionDefinition.output)) return;
-  registerWorkflowExtension(SUBAGENTS_WORKFLOW_EXTENSION);
-}
-
 export function createSubagentTools(manager: SubagentManager): readonly ToolDefinition[] {
   return [
     defineTool({
@@ -203,11 +157,6 @@ export function createSubagentsExtension(options: SubagentsExtensionOptions = {}
 }
 
 export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: SubagentsExtensionOptions = {}): SubagentsExtension {
-  try {
-    registerSubagentsWorkflowExtension();
-  } catch (error) {
-    if (!(error instanceof WorkflowError) || error.code !== "GLOBAL_COLLISION" && error.code !== "REGISTRY_FROZEN") throw error;
-  }
   const getActiveTools = pi.getActiveTools;
   const activeTools = getActiveTools === undefined ? undefined : () => getActiveTools.call(pi);
   const sendMessage = pi.sendMessage;

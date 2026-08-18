@@ -31,7 +31,6 @@
       <a href="#execution">Execution and lifecycle</a>
       <a href="#roles">Roles and options</a>
       <a href="#worktrees">Worktrees and storage</a>
-      <a href="#single-agent">Workflow composition</a>
     </aside>
     <article class="prose">
       <p class="eyebrow">Single-shot agent path</p>
@@ -46,7 +45,7 @@
         <h2>Installation and trust</h2>
         <p>Use Node.js 22.19 or newer. This package is trusted Pi host code with the same filesystem and process access as Pi. Install it only from a source you trust.</p>
         <pre><code class="language-shell"><span class="tok-command">pi</span> install npm:@piewf/subagents</code></pre>
-        <p>No separate <code>pi-extensible-workflows</code> installation is required for the five standalone tools. Install the core workflow extension separately only when you also want workflow orchestration and the optional <code>singleAgent</code> catalog function inside workflow scripts.</p>
+        <p>No separate <code>pi-extensible-workflows</code> installation is required for the five standalone tools. Install the core workflow extension separately when you also want workflow orchestration.</p>
       </section>
       <section id="choose">
         <h2>Choose Subagents or workflows</h2>
@@ -111,15 +110,6 @@
         <h2>Worktrees, storage, and inspection</h2>
         <p>Set <code>worktree</code> to create an isolated named Git worktree for the run. The run executes there, inspection exposes its path and branch while materialized, and cleanup runs when the agent settles, stops, or is reconciled. Failed cleanup retains its metadata for a later retry.</p>
         <p>Run records are stored below the agent directory's private <code>subagents/&lt;id&gt;/</code> directory. Normalized requests, launch mode, status, results, and failures remain inspectable after manager restart. Treat this storage as private because requests and results can contain project data.</p>
-      </section>
-      <section id="single-agent">
-        <h2>Optional workflow composition</h2>
-        <p>The package also registers an optional <code>singleAgent</code> workflow-catalog function. It calls one workflow agent with the same options and returns the bare value directly.</p>
-        <pre><code class="language-javascript"><span class="tok-keyword">return</span> <span class="tok-keyword">await</span> <span class="tok-function">singleAgent</span><span class="tok-punctuation">({</span>
-  <span class="tok-property">prompt</span><span class="tok-punctuation">:</span> <span class="tok-string">"Review the changed files."</span><span class="tok-punctuation">,</span>
-  <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span>
-<span class="tok-punctuation">});</span></code></pre>
-        <p><code>singleAgent</code> is workflow composition, not a standalone lifecycle. It has no <code>mode</code>, durable standalone ID, follow-up, or cross-session restoration point. Use <code>subagents_run</code> when lifecycle controls matter.</p>
       </section>
       <section class="callout">
         <h2>Detailed package reference</h2>

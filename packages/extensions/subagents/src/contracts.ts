@@ -49,8 +49,6 @@ export const SUBAGENTS_RUN_PARAMETERS = Type.Object({
   timeoutMs: Type.Optional(Type.Union([Type.Integer({ minimum: 1, description: "Optional execution timeout in milliseconds" }), Type.Null()])),
 }, { additionalProperties: false });
 
-export const SUBAGENTS_SINGLE_AGENT_PARAMETERS = Type.Omit(SUBAGENTS_RUN_PARAMETERS, ["mode"], { additionalProperties: false });
-
 export const SUBAGENTS_INSPECT_PARAMETERS = Type.Object({
   id: Type.Optional(Type.String({ description: "Subagent ID; omit to list ordered run summaries" })),
 }, { additionalProperties: false });
@@ -90,12 +88,6 @@ export function normalizeSubagentRunRequest(value: unknown): SubagentRunRequest 
   if (snapshot.worktree !== undefined) snapshot.worktree = snapshot.worktree.trim();
   return snapshot;
 }
-
-export function normalizeSingleAgentRequest(value: unknown): SubagentRunRequest {
-  if (!Value.Check(SUBAGENTS_SINGLE_AGENT_PARAMETERS, value)) throw new WorkflowError("INVALID_METADATA", "Invalid singleAgent parameters");
-  return normalizeSubagentRunRequest(value);
-}
-
 export type SubagentInspectRequest = Static<typeof SUBAGENTS_INSPECT_PARAMETERS>;
 export type SubagentIdRequest = Static<typeof SUBAGENTS_ID_PARAMETERS>;
 export type SubagentSteerRequest = Static<typeof SUBAGENTS_STEER_PARAMETERS>;
