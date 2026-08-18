@@ -1,6 +1,7 @@
 # Changelog
 ## Unreleased
 
+- Folded top-level `model` and `thinking` on `subagents_run` into the selected role override.
 - Removed the optional `singleAgent` workflow-catalog function from `@piewf/subagents`. Use core `agent()` and `withWorktree()` in workflow scripts.
 
 ## [5.5.0] - 2026-08-16

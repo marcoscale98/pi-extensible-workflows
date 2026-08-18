@@ -81,11 +81,20 @@ export const SUBAGENTS_TOOL_SCHEMAS = {
 export type SubagentRunRequest = Static<typeof SUBAGENTS_RUN_PARAMETERS>;
 export function normalizeSubagentRunRequest(value: unknown): SubagentRunRequest {
   if (!Value.Check(SUBAGENTS_RUN_PARAMETERS, value)) throw new WorkflowError("INVALID_METADATA", "Invalid subagents_run parameters");
-  validateAgentOptions(value);
   if (typeof value.worktree === "string" && !value.worktree.trim()) throw new WorkflowError("INVALID_METADATA", "worktree name must be a non-empty string");
   const snapshot = structuredClone(value);
   snapshot.mode ??= "background";
   if (snapshot.worktree !== undefined) snapshot.worktree = snapshot.worktree.trim();
+  if (snapshot.role !== undefined && (snapshot.model !== undefined || snapshot.thinking !== undefined)) {
+    snapshot.role = {
+      ...(typeof snapshot.role === "string" ? { name: snapshot.role } : snapshot.role),
+      ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
+      ...(snapshot.thinking === undefined ? {} : { thinking: snapshot.thinking }),
+    };
+    Reflect.deleteProperty(snapshot, "model");
+    Reflect.deleteProperty(snapshot, "thinking");
+  }
+  validateAgentOptions(snapshot);
   return snapshot;
 }
 export type SubagentInspectRequest = Static<typeof SUBAGENTS_INSPECT_PARAMETERS>;

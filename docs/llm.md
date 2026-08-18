@@ -137,7 +137,7 @@ The model-facing surface is exactly:
 | `subagents_stop` | Stop one run and clean its worktree. |
 | `subagents_retry` | Start a fresh run from a failed or stopped request, with a new ID and the original mode. |
 
-`subagents_run` accepts the same `label`, `model`, `thinking`, `skills`, `extensions`, `tools`, `role`, `worktree`, `outputSchema`, `retries`, and `timeoutMs` options as workflow agents. A named role or role override may combine with top-level capability selectors, which are the final overlay; `model` and `thinking` remain role-only when a role is selected.
+`subagents_run` accepts the same `label`, `model`, `thinking`, `skills`, `extensions`, `tools`, `role`, `worktree`, `outputSchema`, `retries`, and `timeoutMs` options as workflow agents. A named role or role override may combine with top-level capability selectors, which are the final overlay; top-level `model` and `thinking` are folded into the role override when a role is selected.
 
 Background calls return an ID immediately. Foreground calls return a terminal envelope and do not produce a background completion follow-up. Do not poll a running ID; call `subagents_inspect({ id })` only when current state or output is needed. Cross-session retry starts fresh and does not restore the old native conversation.
 ## Herdr integration

@@ -12,6 +12,7 @@ import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, registerWorkflowExten
 import extension, {
   createSubagentManager,
   createSubagentTools,
+  normalizeSubagentRunRequest,
   registerSubagentsExtension,
   SUBAGENTS_ID_PARAMETERS,
   SUBAGENTS_INSPECT_PARAMETERS,
@@ -50,6 +51,19 @@ test("registers five namespaced subagent tools and delegates to an injected mana
   const result = await tools[0].execute("call-1", { prompt: "inspect" }, undefined, undefined, testContext());
   assert.deepEqual(result, { content: [{ type: "text", text: '{"id":"agent-1","state":"queued"}' }], details: { id: "agent-1", state: "queued" } });
   assert.deepEqual(calls[0], ["run", { prompt: "inspect", mode: "background" }]);
+});
+
+test("folds top-level model and thinking into a role override", () => {
+  assert.deepEqual(normalizeSubagentRunRequest({ prompt: "x", role: "reviewer", model: "fable-5", thinking: "high" }), {
+    prompt: "x",
+    mode: "background",
+    role: { name: "reviewer", model: "fable-5", thinking: "high" },
+  });
+  assert.deepEqual(normalizeSubagentRunRequest({ prompt: "x", role: { name: "reviewer", model: "old" }, model: "new" }), {
+    prompt: "x",
+    mode: "background",
+    role: { name: "reviewer", model: "new" },
+  });
 });
 test("renders subagent calls and background or foreground progress consistently", () => {
   const manager = { async run() {}, async inspect() {}, async steer() {}, async stop() {}, async retry() {} };
@@ -1073,17 +1087,19 @@ test("runs one background subagent with context-derived setup and execution opti
   await rm(cwd, { recursive: true, force: true });
 });
 
-test("preserves role exclusivity and persists a background execution failure", async () => {
+test("folds top-level model into a role override and persists a background execution failure", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-run-failure-"));
   const controller = new AbortController();
   let launches = 0;
+  let execution;
   const manager = createSubagentManager({
     agentDir: join(cwd, "agent"),
     storageDir: join(cwd, "subagents-storage"),
     getActiveTools: () => ["read"],
     createExecutor() {
       return {
-        async execute() {
+        async execute(_task, options) {
+          execution = options;
           launches += 1;
           throw new Error("agent failed");
         },
@@ -1093,11 +1109,13 @@ test("preserves role exclusivity and persists a background execution failure", a
   const runTool = createSubagentTools(manager)[0];
   const extensionContext = await executionContext(cwd, controller.signal);
   const context = { toolCallId: "lookup", signal: undefined, extensionContext };
-  await assert.rejects(runTool.execute("call-2", { prompt: "inspect", role: "reviewer", model: "fixture/cheap" }, controller.signal, undefined, extensionContext), (error) => error?.code === "INVALID_METADATA");
-  assert.equal(launches, 0);
-  const launched = await runTool.execute("call-3", { prompt: "inspect" }, controller.signal, undefined, extensionContext);
+  const launched = await runTool.execute("call-2", { prompt: "inspect", role: "reviewer", model: "fixture/cheap" }, controller.signal, undefined, extensionContext);
   await waitFor(async () => (await manager.inspect({ id: launched.details.id }, context)).state === "failed");
   assert.equal(launches, 1);
+  const { onAttempt, onProgress, ...options } = execution;
+  assert.equal(typeof onAttempt, "function");
+  assert.equal(typeof onProgress, "function");
+  assert.deepEqual(options, { label: "reviewer", workflowName: "subagents", role: { name: "reviewer", model: "fixture/cheap" } });
   assert.deepEqual((await manager.inspect({ id: launched.details.id }, context)).error, { code: "AGENT_FAILED", message: "agent failed" });
   await rm(cwd, { recursive: true, force: true });
 });
