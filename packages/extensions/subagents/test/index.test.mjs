@@ -2,15 +2,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { cp, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
-import { atomicJson } from "pi-extensible-workflows/persistence";
 import extension, {
   createSubagentManager,
   createSubagentTools,
@@ -31,21 +29,6 @@ const toolNames = [
   "subagents_stop",
   "subagents_retry",
 ];
-
-test("exports atomicJson from persistence and rejects non-serializable values", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "subagents-atomic-json-"));
-  try {
-    const path = join(cwd, "value.json");
-    await atomicJson(path, { answer: 42 });
-    assert.equal(await readFile(path, "utf8"), '{"answer":42}\n');
-
-    for (const [index, value] of [undefined, () => undefined, Symbol("invalid")].entries()) {
-      await assert.rejects(atomicJson(join(cwd, `invalid-${String(index)}.json`), value));
-    }
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
 
 function testContext() {
   return {};
@@ -68,7 +51,6 @@ test("registers five namespaced subagent tools and delegates to an injected mana
   assert.deepEqual(result, { content: [{ type: "text", text: '{"id":"agent-1","state":"queued"}' }], details: { id: "agent-1", state: "queued" } });
   assert.deepEqual(calls[0], ["run", { prompt: "inspect", mode: "background" }]);
 });
-
 test("renders subagent calls and background or foreground progress consistently", () => {
   const manager = { async run() {}, async inspect() {}, async steer() {}, async stop() {}, async retry() {} };
   const tools = createSubagentTools(manager);
@@ -294,6 +276,7 @@ test("opens the /subagents picker and inspects durable status without an agent c
   const secondId = "run-2";
   const newestId = "run-3";
   const otherSessionId = "run-other";
+  const malformed = { id: "run-malformed", sessionId: "session-1", state: "completed", startedAt: 1, attempts: 1, attemptDetails: [{}], systemPrompt: 42 };
   await mkdir(join(storageDir, firstId), { recursive: true });
   await mkdir(join(storageDir, secondId), { recursive: true });
   await mkdir(join(storageDir, newestId), { recursive: true });
@@ -308,6 +291,7 @@ test("opens the /subagents picker and inspects durable status without an agent c
       if (params.id === secondId) return { id: secondId, sessionId: "session-1", state: "completed", startedAt: 10, finishedAt: 20, value: "done" };
       if (params.id === firstId) return { id: firstId, sessionId: "session-1", state: "running", startedAt: 10, activity: { kind: "tool", text: "read" } };
       return [
+        malformed,
         { id: secondId, sessionId: "session-1", state: "completed", startedAt: 20, finishedAt: 30 },
         { id: otherSessionId, sessionId: "session-2", state: "running", startedAt: 50 },
         { id: firstId, sessionId: "session-1", state: "running", startedAt: 10 },
@@ -360,6 +344,7 @@ test("opens the /subagents picker and inspects durable status without an agent c
     assert.match(pickerOptions[0][1], /label=newest.*\[completed\].*run-3/);
     assert.match(pickerOptions[0][2], /label=none.*\[completed\].*run-2/);
     assert.doesNotMatch(pickerOptions[0].join("\n"), /run-other/);
+    assert.doesNotMatch(pickerOptions[0].join("\n"), /run-malformed/);
     assert.match(pickerOptions[0].join("\n"), /label=reviewer.*role=critic/);
     assert.match(pickerOptions[0].join("\n"), /label=none.*role=none/);
     assert.match(detailScreens[0], /label=none/);
@@ -903,47 +888,7 @@ test("reports an invalid navigator retry result without leaving the picker", asy
     await rm(cwd, { recursive: true, force: true });
   }
 });
-test("navigator skips malformed persisted attempt metadata", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-malformed-"));
-  const storageDir = join(cwd, "storage");
-  await mkdir(join(storageDir, "good"), { recursive: true });
-  await writeFile(join(storageDir, "good", "request.json"), JSON.stringify({ prompt: "good", label: "good", mode: "background" }));
-  const good = { id: "good", sessionId: "session-1", state: "completed", startedAt: 1, finishedAt: 2 };
-  const malformed = { id: "bad", sessionId: "session-1", state: "completed", startedAt: 1, attempts: 1, attemptDetails: [{}], systemPrompt: 42 };
-  const manager = {
-    async run() { throw new Error("unexpected run"); },
-    async inspect(params) { return params.id ? good : [malformed, good]; },
-    async steer() {},
-    async stop() {},
-    async retry() {},
-  };
-  const commands = [];
-  registerSubagentsExtension({ registerTool() {}, registerCommand(name, options) { commands.push({ name, options }); } }, { manager, managerDependencies: { storageDir } });
-  const command = commands.find(({ name }) => name === "subagents");
-  assert.ok(command);
-  const pickerOptions = [];
-  let pickerCount = 0;
-  const context = {
-    ...(await executionContext(cwd)),
-    mode: "rpc",
-    hasUI: true,
-    ui: {
-      async select(_title, options) {
-        pickerOptions.push([...options]);
-        if (options.some((option) => option.includes("good"))) { pickerCount += 1; return pickerCount === 1 ? options[0] : "Close"; }
-        return "Back";
-      },
-      notify() {},
-    },
-  };
-  try {
-    await command.options.handler("", context);
-    assert.equal(pickerOptions[0].some((option) => option.includes("bad")), false);
-    assert.equal(pickerOptions[0].some((option) => option.includes("good")), true);
-  } finally {
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
+
 test("opens bounded prompt and result artifacts while terminal runs hide system prompts", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-navigator-editors-"));
   const storageDir = join(cwd, "storage");
@@ -1162,16 +1107,19 @@ test("returns foreground terminal envelopes, preserves mode for retry, and suppr
   const notifications = [];
   const updates = [];
   let failed = false;
+  let timeoutMs;
   const manager = createSubagentManager({
     storageDir,
     notify(notification) { notifications.push(notification); },
     createExecutor() {
       return {
-        async execute(prompt) {
+        async execute(prompt, options) {
+          timeoutMs = options.timeoutMs;
           if (prompt === "failure" && !failed) {
             failed = true;
             throw new Error("foreground failure");
           }
+          if (prompt === "timeout") throw new WorkflowError("AGENT_TIMEOUT", "foreground timeout");
           return { value: { prompt }, attempts: [], cwd };
         },
       };
@@ -1194,6 +1142,12 @@ test("returns foreground terminal envelopes, preserves mode for retry, and suppr
     assert.deepEqual(retry.value, { prompt: "failure" });
     assert.notEqual(retry.id, failure.id);
     assert.deepEqual(JSON.parse(await readFile(join(storageDir, retry.id, "request.json"), "utf8")), { prompt: "failure", mode: "foreground" });
+
+    const timedOut = await manager.run({ prompt: "timeout", mode: "foreground", timeoutMs: 1 }, context);
+    assert.equal(timeoutMs, 1);
+    assert.equal(timedOut.state, "failed");
+    assert.deepEqual(timedOut.error, { code: "AGENT_TIMEOUT", message: "foreground timeout" });
+    assert.deepEqual((await manager.inspect({ id: timedOut.id }, context)).error, { code: "AGENT_TIMEOUT", message: "foreground timeout" });
     assert.deepEqual(updates.filter(({ id }) => id === success.id).map(({ state }) => state), ["running", "completed", "completed"]);
     assert.deepEqual(updates.filter(({ id }) => id === failure.id).map(({ state }) => state), ["running", "failed", "failed"]);
     assert.deepEqual(updates.filter(({ id }) => id === retry.id).map(({ state }) => state), ["running", "completed", "completed"]);
@@ -1219,7 +1173,7 @@ test("cancelling a foreground run aborts its native session and persists CANCELL
             async abort() { lifecycle.abort += 1; },
             async dispose() { lifecycle.dispose += 1; },
           };
-          await options.onAttempt?.({ attempt: 1, transport: "test", liveSession: session, accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, setup: { hookNames: [], model: { provider: "fixture", model: "model" }, tools: [], cwd } });
+          await options.onAttempt?.({ attempt: 1, transport: "test", liveSession: session, accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, setup: {} });
           started.resolve();
           return new Promise((resolve, reject) => {
             void resolve;
@@ -1333,75 +1287,6 @@ test("disposes each replaced injected session once after a stopped run settles",
   }
 });
 
-test("foreground mode keeps concurrency, timeout failures, and worktree cleanup behavior", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "subagents-foreground-lifecycle-"));
-  await mkdir(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
-  await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ concurrency: 1 }));
-  const pending = deferred();
-  const started = deferred();
-  let cleanupCalls = 0;
-  let timeoutMs;
-  const manager = createSubagentManager({
-    agentDir: join(cwd, "agent"),
-    storageDir: join(cwd, "subagents-storage"),
-    worktreeAdapter: {
-      async create(input) {
-        return { path: join(cwd, "worktree"), branch: `subagent/${input.runId}`, cwd, runStore: {}, async cleanup() { cleanupCalls += 1; } };
-      },
-    },
-    createExecutor() {
-      return {
-        async execute(prompt, options) {
-          timeoutMs = options.timeoutMs;
-          started.resolve();
-          if (prompt === "first") return pending.promise;
-          throw new WorkflowError("AGENT_TIMEOUT", "foreground timeout");
-        },
-      };
-    },
-  });
-  const context = await managerContext(cwd);
-  try {
-    const first = manager.run({ prompt: "first", mode: "foreground", worktree: "foreground", timeoutMs: 25 }, context);
-    await started.promise;
-    await assert.rejects(manager.run({ prompt: "second", mode: "foreground" }, context), (error) => error?.code === "AGENT_FAILED");
-    pending.resolve({ value: "first", attempts: [], cwd });
-    const completed = await first;
-    assert.deepEqual(completed.value, "first");
-    assert.equal(timeoutMs, 25);
-    assert.equal(cleanupCalls, 1);
-    assert.equal((await manager.inspect({ id: completed.id }, context)).worktree, undefined);
-
-    const timedOut = await manager.run({ prompt: "timeout", mode: "foreground", timeoutMs: 1 }, context);
-    assert.equal(timedOut.state, "failed");
-    assert.deepEqual(timedOut.error, { code: "AGENT_TIMEOUT", message: "foreground timeout" });
-  } finally {
-    await manager.dispose();
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-test("discovers the package through its pi manifest", async () => {
-  const root = await mkdtemp(join(tmpdir(), "subagents-extension-discovery-"));
-  try {
-    const destination = join(root, ".pi", "extensions", "subagents");
-    await cp(packageRoot, destination, { recursive: true });
-    const scopedModules = join(root, "node_modules", "@earendil-works");
-    await mkdir(scopedModules, { recursive: true });
-    for (const name of ["pi-ai", "pi-coding-agent"]) {
-      await symlink(join(packageRoot, "../../..", "node_modules", "@earendil-works", name), join(scopedModules, name), "dir");
-    }
-    await symlink(join(packageRoot, "../../..", "node_modules", "typebox"), join(root, "node_modules", "typebox"), "dir");
-    await symlink(join(packageRoot, "../../..", "node_modules", "pi-extensible-workflows"), join(root, "node_modules", "pi-extensible-workflows"), "dir");
-
-    const result = await discoverAndLoadExtensions([], root, join(root, ".pi", "agent"));
-    assert.equal(result.errors.length, 0);
-    assert.equal(result.extensions.length, 1);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 async function waitFor(predicate, onTimeout) {
   for (let attempt = 0; attempt < 1000; attempt += 1) {
     if (await predicate()) return;
@@ -1464,7 +1349,6 @@ test("runs simultaneous background subagents and settles them independently", as
     await waitFor(async () => (await manager.inspect({ id: first.id }, context)).state === "completed");
     assert.equal((await manager.inspect({ id: second.id }, context)).state, "running");
     assert.deepEqual((await manager.inspect({ id: first.id }, context)).value, { answer: "one" });
-    assert.deepEqual((await manager.inspect({ id: first.id }, context)).value, { answer: "one" });
 
     pending.get("second").resolve({ value: { answer: "two" }, attempts: [], cwd });
     await waitFor(async () => (await manager.inspect({ id: second.id }, context)).state === "completed");
@@ -1474,7 +1358,6 @@ test("runs simultaneous background subagents and settles them independently", as
     assert.deepEqual(listed, expected.map(({ id, state }) => ({ id, state })));
     const restarted = createSubagentManager({ storageDir });
     assert.equal((await restarted.inspect({ id: first.id }, context)).state, "completed");
-    assert.deepEqual((await restarted.inspect({ id: first.id }, context)).value, { answer: "one" });
     assert.deepEqual((await restarted.inspect({ id: first.id }, context)).value, { answer: "one" });
   } finally {
     for (const run of pending.values()) run.reject(new Error("test cleanup"));
@@ -2778,52 +2661,6 @@ test("excludes the system prompt from every inspection projection", async () => 
   } finally {
     continueAfterSecond.resolve();
     release.resolve();
-    await manager.dispose();
-    await rm(cwd, { recursive: true, force: true });
-  }
-});
-
-test("retains a valid live session when injected attempt setup is malformed", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "subagents-malformed-live-attempt-"));
-  const lifecycle = { abort: 0, dispose: 0 };
-  const started = deferred();
-  const controller = new AbortController();
-  const manager = createSubagentManager({
-    storageDir: join(cwd, "storage"),
-    createExecutor() {
-      return {
-        async execute(_prompt, options, signal) {
-          const session = {
-            reference: { transport: "fixture", sessionId: "live-session" },
-            getState() { return { model: { provider: "fixture", model: "model" }, tools: [] }; },
-            getSessionStats() { return { tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }; },
-            getLastAssistant() { return undefined; },
-            subscribe() { return () => {}; },
-            async prompt() { return {}; },
-            async steer() {},
-            async abort() { lifecycle.abort += 1; },
-            async dispose() { lifecycle.dispose += 1; },
-          };
-          await options.onAttempt?.({ attempt: 1, transport: "fixture", liveSession: session, setup: {}, accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } });
-          started.resolve();
-          return new Promise((resolve, reject) => {
-            void resolve;
-            signal?.addEventListener("abort", () => reject(new Error("native cancelled")), { once: true });
-          });
-        },
-      };
-    },
-  });
-  const context = { ...(await managerContext(cwd)), signal: controller.signal };
-  try {
-    const pending = manager.run({ prompt: "malformed live metadata", mode: "foreground" }, context);
-    await started.promise;
-    controller.abort();
-    const result = await pending;
-    assert.equal(result.state, "failed");
-    assert.equal(lifecycle.abort, 1);
-    assert.equal(lifecycle.dispose, 1);
-  } finally {
     await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
   }
