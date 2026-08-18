@@ -113,9 +113,9 @@ Dynamic model aliases are resolved once per launch or resume, then captured for 
 
 ### Resource selectors
 
-The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. Every discovered candidate starts enabled; a matching positive pattern enables it, `!pattern` disables it, and the last matching rule wins. `!*` clears the current selection before narrower positive patterns are applied. An empty selector array contributes no matches as a selector layer; prepend `!*` to a positive list when it must restrict the candidate set or use `!*` alone to select none. In a role override, an explicit `[]` replaces the inherited role selector list with that empty layer. Selectors never create unavailable resources or bypass trust filtering. Child capability calls may re-enable discovered skills and extensions through their final overlay, while child tools remain within the parent boundary. Doctor reports `AGENT_RESOURCE_TOOL_SELECTOR_ALLOWLIST` when a positive-only tool selector looks like an ineffective allow-list.
+The direct `skills`, `extensions`, and `tools` fields use ordered Minimatch selectors. Rules are applied global settings, trusted project settings, role frontmatter, then agent-call options. Every discovered candidate starts enabled; a matching positive pattern enables it, `!pattern` disables it, and the last matching rule wins. `!*` clears the current selection before narrower positive patterns are applied. An empty selector array contributes no matches as a selector layer. Use `!*` before positive patterns when a call must restrict the candidate set, or use `!*` alone to select none. Selectors never create unavailable resources or bypass trust filtering. Child capability calls may re-enable discovered skills and extensions through their final overlay, while child tools remain within the parent boundary. Doctor reports `AGENT_RESOURCE_TOOL_SELECTOR_ALLOWLIST` when a positive-only tool selector looks like an ineffective allow-list.
 
-Extension selector normalization is context-specific. In settings, `~` and `~/...` expand from the home directory, `file://` URLs become filesystem paths, and relative paths resolve from the directory containing that settings file. In role frontmatter, the same forms are supported and relative paths resolve from the role file's directory. Existing non-magic paths and the static prefixes of magic paths in settings and role files are canonicalized with `realpath` when possible; `*`, `**`, and `**/...` remain cwd-independent patterns. At call level and in role-object overrides, those three forms also remain cwd-independent. Other relative selectors resolve from the agent launch cwd: non-magic selectors are canonicalized, while magic patterns are path-resolved without `realpath`. Call-level and role-override `~` and `file://` values are not expanded by the runtime.
+Extension selector normalization is context-specific. In settings, `~` and `~/...` expand from the home directory, `file://` URLs become filesystem paths, and relative paths resolve from the directory containing that settings file. In role frontmatter, the same forms are supported and relative paths resolve from the role file's directory. Existing non-magic paths and the static prefixes of magic paths in settings and role files are canonicalized with `realpath` when possible; `*`, `**`, and `**/...` remain cwd-independent patterns. At call level, those three forms also remain cwd-independent. Other relative selectors resolve from the agent launch cwd: non-magic selectors are canonicalized, while magic patterns are path-resolved without `realpath`. Call-level `~` and `file://` values are not expanded by the runtime.
 
 ## `piewf doctor --json`
 
@@ -137,7 +137,7 @@ The model-facing surface is exactly:
 | `subagents_stop` | Stop one run and clean its worktree. |
 | `subagents_retry` | Start a fresh run from a failed or stopped request, with a new ID and the original mode. |
 
-`subagents_run` accepts the same `label`, `model`, `thinking`, `skills`, `extensions`, `tools`, `role`, `worktree`, `outputSchema`, `retries`, and `timeoutMs` options as workflow agents. A named role or role override may combine with top-level capability selectors, which are the final overlay; top-level `model` and `thinking` are folded into the role override when a role is selected.
+`subagents_run` accepts the same `label`, `model`, `skills`, `extensions`, `tools`, `contextFiles`, `role`, `worktree`, `outputSchema`, `retries`, and `timeoutMs` options as workflow agents. `role` is a name string. Concrete models are `provider/model:thinking`.
 
 Background calls return an ID immediately. Foreground calls return a terminal envelope and do not produce a background completion follow-up. Do not poll a running ID; call `subagents_inspect({ id })` only when current state or output is needed. Cross-session retry starts fresh and does not restore the old native conversation.
 ## Herdr integration
@@ -272,8 +272,7 @@ A role is a Markdown file named `<role>.md` with optional YAML frontmatter and a
 ```md
 ---
 description: Reviews code for correctness
-model: reviewer-model
-thinking: high
+model: reviewer-model:high
 tools: ["!*", read, grep]
 skills: ["!*", "review-*"]
 extensions: ["**/*", "!**/unsafe.mjs"]
@@ -284,22 +283,20 @@ Focus on correctness, regressions, and concrete next checks.
 ```
 Supported core frontmatter fields include direct `tools`, `skills`, and `extensions` selector arrays. Each uses ordered Minimatch rules; positive rules enable, negated rules disable, and the last match wins.
 
-`description`, `model`, `thinking`, `overrideSystemPrompt`, and `contextFiles` retain their existing meanings. The selector fields are composed after global and trusted project settings and before per-call selectors.
+`description`, `model`, `overrideSystemPrompt`, and `contextFiles` retain their existing meanings. Put thinking on `model` as `provider/model:thinking` or `alias:thinking`. The selector fields are composed after global and trusted project settings and before per-call selectors.
 
 The role body is prompt guidance. Role files are trusted configuration and can change model, tools, context, resources, and system-prompt behavior.
-
-Role selection can be a string or an object:
+Role selection is a name string:
 
 ```js
-{ role: "reviewer" }
-{ role: { name: "reviewer", model: "cheap-model", thinking: null, tools: ["!*"] } }
+{ role: "reviewer", model: "cheap-model:low", tools: ["!*", "read", "grep"], contextFiles: ["cwd"] }
 ```
 
-For a role object, omit a field to inherit it, use `null` to unset it, or provide an explicit replacement. Resource selectors in the top-level agent call are final overlays, including when a named role is selected; model and thinking remain role-only.
+Role files provide defaults. `model`, `tools`, `skills`, `extensions`, and `contextFiles` belong on `AgentOptions` and override the role file for that call. Concrete models are `provider/model:thinking`. `overrideSystemPrompt` stays on the role file. Use `tools: ["*"]` to re-enable all tools after a role restriction.
 
 ### Static and dynamic role references
 
-A role reference is static when the runtime can see a literal role name or a literal role object with a string `name`. It is dynamic when the role depends on runtime data, such as `args`, a computed property, a spread, or another non-literal expression. Dynamic role references are supported, but preflight cannot validate only one role, so launch validation checks every loaded role policy. At execution, the selected role must still exist.
+A role reference is static when the runtime can see a literal role name string. It is dynamic when the role depends on runtime data, such as `args`, a computed property, a spread, or another non-literal expression. Dynamic role references are supported, but preflight cannot validate only one role, so launch validation checks every loaded role policy. At execution, the selected role must still exist.
 
 Dynamic roles do not create inline role definitions. The selected role name must resolve to a discovered role file, and its prompt body always comes from that file. The same precedence applies: packaged extension roles are defaults, global roles override them, and trusted project roles override both.
 

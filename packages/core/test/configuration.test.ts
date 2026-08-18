@@ -25,7 +25,7 @@ void test("loads markdown agent roles only from canonical global and project dir
     mkdirSync(join(home, ".pi", "piworkflows", "roles"), { recursive: true });
     mkdirSync(join(cwd, ".pi", "pi-extensible-workflows", "roles"), { recursive: true });
     mkdirSync(join(cwd, ".pi", "piworkflows", "roles"), { recursive: true });
-    writeFileSync(join(defaultAgentDir, "pi-extensible-workflows", "roles", "global.md"), "---\ndescription: Global review\nmodel: openai/gpt\nthinking: high\ntools: [read, grep]\n---\nGlobal role");
+    writeFileSync(join(defaultAgentDir, "pi-extensible-workflows", "roles", "global.md"), "---\ndescription: Global review\nmodel: openai/gpt:high\ntools: [read, grep]\n---\nGlobal role");
     writeFileSync(join(defaultAgentDir, "pi-extensible-workflows", "roles", "collision.md"), "Canonical collision");
     writeFileSync(join(defaultAgentDir, "pi-extensible-workflows", "roles", "multiline.md"), "---\ntools:\n  - read\n  - grep\n---\nMultiline role");
     writeFileSync(join(home, ".pi", "pi-extensible-workflows", "roles", "old-global.md"), "Ignored old global role");
@@ -34,7 +34,7 @@ void test("loads markdown agent roles only from canonical global and project dir
     writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "Review role");
     writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "shadowed.md"), "Project shadowed role");
     const roles = loadAgentDefinitions(cwd);
-    assert.deepEqual(roles.global, { prompt: "Global role", description: "Global review", model: "openai/gpt", thinking: "high", tools: ["read", "grep"] });
+    assert.deepEqual(roles.global, { prompt: "Global role", description: "Global review", model: "openai/gpt:high", tools: ["read", "grep"] });
     assert.equal(roles.reviewer?.prompt, "Review role");
     assert.deepEqual(roles.collision, { prompt: "Canonical collision" });
     assert.deepEqual(roles.shadowed, { prompt: "Project shadowed role" });
@@ -84,16 +84,16 @@ void test("strict role frontmatter rejects malformed metadata", () => {
 });
 
 void test("strips single and double quotes from loose role metadata even when unpaired", () => {
-  assert.deepEqual(parseRoleMarkdown("---\nmodel: 'openai/gpt\"\nthinking: 'high\"\ntools: ['read\", \"grep']\nskills: ['role-skill\", \"other-skill']\nextensions: ['role.ts\", \"other.ts']\ndescription: 'Review role\"\ncontextFiles: ['global\", \"project']\n---\nbody", false), {
+  assert.deepEqual(parseRoleMarkdown("---\nmodel: 'openai/gpt:high\"\ntools: ['read\", \"grep']\nskills: ['role-skill\", \"other-skill']\nextensions: ['role.ts\", \"other.ts']\ndescription: 'Review role\"\ncontextFiles: ['global\", \"project']\n---\nbody", false), {
     prompt: "body",
-    model: "openai/gpt",
-    thinking: "high",
+    model: "openai/gpt:high",
     tools: ["read", "grep"],
     skills: ["role-skill", "other-skill"],
     extensions: ["role.ts", "other.ts"],
     description: "Review role",
     contextFiles: ["global", "project"],
   });
+  assert.throws(() => parseRoleMarkdown("---\nmodel: openai/gpt\nthinking: high\n---\nbody", false), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
 });
 
 void test("accepts role system prompt override metadata", () => {
@@ -145,13 +145,13 @@ void test("rejects invalid role policy before persisting a run", async () => {
   assert.deepEqual(await listRunIds(cwd, "session", home), []);
 });
 
-void test("production role policy rejects overrides before persistence and preserves effective policy", async () => {
+void test("production role policy uses role defaults with call-level overrides", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-role-execution-"));
   const cwd = join(home, "project");
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows", "roles"), { recursive: true });
-  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: openai/gpt\nthinking: high\ntools: [\"!*\", read]\n---\nReview role");
+  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: openai/gpt:high\ntools: [\"!*\", read]\n---\nReview role");
   for (const role of Object.keys(loadAgentDefinitions(cwd, undefined, false))) {
-    if (role !== "reviewer") writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", `${role}.md`), "---\nmodel: openai/gpt\ntools: [\"!*\", read]\n---\nTest role");
+    if (role !== "reviewer") writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", `${role}.md`), "---\nmodel: openai/gpt:high\ntools: [\"!*\", read]\n---\nTest role");
   }
   const inputs: SessionInput[] = [];
   const createSession = async (input: SessionInput): Promise<TestPiSession> => {
@@ -163,19 +163,14 @@ void test("production role policy rejects overrides before persistence and prese
   const workflow = tools.find(({ name }) => name === "workflow");
   assert.ok(workflow);
   const context = { cwd, hasUI: false, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" } };
-  for (const [field, value] of [["model", "openai/gpt"], ["thinking", "low"]] as const) {
-    await assert.rejects(workflow.execute("id", { name: `static-${field}`, script: `return agent("inspect", { role: "reviewer", ${field}: ${JSON.stringify(value)} });`, foreground: true }, new AbortController().signal, undefined, context), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  }
-  assert.deepEqual(await listRunIds(cwd, "session", home), []);
-  for (const [field, value] of [["model", "openai/gpt"], ["thinking", "low"]] as const) {
-    await assert.rejects(workflow.execute("id", { name: `dynamic-${field}`, script: `const options = { role: args.role }; options.${field} = args.value; return agent("inspect", options);`, args: { role: "reviewer", value }, foreground: true }, new AbortController().signal, undefined, context), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  }
-  const dynamicRuns = await listRunIds(cwd, "session", home);
-  assert.equal(dynamicRuns.length, 2);
-  for (const runId of dynamicRuns) assert.deepEqual((await new RunStore(cwd, "session", runId, home).load()).run.agents, []);
+  const staticResult = await workflow.execute("id", { name: "static-overrides", script: "return agent(\"inspect\", { role: \"reviewer\", model: \"openai/gpt:low\" });", foreground: true }, new AbortController().signal, undefined, context) as { content: Array<{ text?: string }> };
+  assert.equal(JSON.parse(staticResult.content[0]?.text ?? "null"), "done");
+  assert.ok(inputs.some(({ model }) => model.provider === "openai" && model.model === "gpt" && model.thinking === "low"));
+  const dynamicResult = await workflow.execute("id", { name: "dynamic-overrides", script: "const options = { role: args.role }; options.model = args.value; return agent(\"inspect\", options);", args: { role: "reviewer", value: "openai/gpt:low" }, foreground: true }, new AbortController().signal, undefined, context) as { content: Array<{ text?: string }> };
+  assert.equal(JSON.parse(dynamicResult.content[0]?.text ?? "null"), "done");
   const result = await workflow.execute("id", { name: "role-only", script: "return agent(\"inspect\", { role: \"reviewer\", retries: 1, timeoutMs: 100 });", foreground: true }, new AbortController().signal, undefined, context) as { content: Array<{ text?: string }> };
-  assert.equal((JSON.parse(result.content[0]?.text ?? "null") as string), "done");
-  assert.deepEqual(inputs[0] && { model: inputs[0].model, thinking: inputs[0].model.thinking, tools: inputs[0].tools, systemPromptAppend: inputs[0].systemPromptAppend }, { model: { provider: "openai", model: "gpt", thinking: "high" }, thinking: "high", tools: ["read"], systemPromptAppend: "Review role" });
+  assert.equal(JSON.parse(result.content[0]?.text ?? "null"), "done");
+  assert.deepEqual(inputs.at(-1) && { model: inputs.at(-1)?.model, thinking: inputs.at(-1)?.model.thinking, tools: inputs.at(-1)?.tools, systemPromptAppend: inputs.at(-1)?.systemPromptAppend }, { model: { provider: "openai", model: "gpt", thinking: "high" }, thinking: "high", tools: ["read"], systemPromptAppend: "Review role" });
 });
 
 void test("default settings follow the effective agent directory", () => {
@@ -340,9 +335,9 @@ void test("validates and resolves portable model aliases", () => {
   const checked = preflight('agent("x", { model: "cheap-model:xhigh" })', { models: new Set(["anthropic/opus"]), knownModels: new Set(["anthropic/opus"]), tools: new Set(), agentTypes: new Set(), modelAliases: aliases, settingsPath: path });
   assert.deepEqual(checked.referenced.models, ["anthropic/opus"]);
   assert.throws(() => preflight('agent("x", { model: "reviewer-model" })', { models: new Set(["openai/gpt"]), knownModels: new Set(["openai/gpt"]), tools: new Set(), agentTypes: new Set(), modelAliases: { "reviewer-model": "anthropic/opus" }, settingsPath: path }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_MODEL" && error.message.includes("reviewer-model") && error.message.includes("anthropic/opus") && error.message.includes(path));
-  const executor = new WorkflowAgentExecutor({ cwd: dir, model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: new Set(), knownModels: new Set(["openai/gpt", "anthropic/opus"]), modelAliases: aliases, agentDefinitions: { reviewer: { model: "cheap-model:xhigh", thinking: "low" } }, settingsPath: path });
-  const direct = executor.resolve({ label: "direct", workflowName: "test", model: "cheap-model:minimal", thinking: "low" });
-  assert.equal(direct.model.thinking, "low");
+  const executor = new WorkflowAgentExecutor({ cwd: dir, model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: new Set(), knownModels: new Set(["openai/gpt", "anthropic/opus"]), modelAliases: aliases, agentDefinitions: { reviewer: { model: "cheap-model:xhigh" } }, settingsPath: path });
+  const direct = executor.resolve({ label: "direct", workflowName: "test", model: "cheap-model:minimal" });
+  assert.equal(direct.model.thinking, "minimal");
   assert.equal(direct.requestedModel, "cheap-model:minimal");
   assert.equal(executor.resolve({ label: "role", workflowName: "test", role: "reviewer" }).model.thinking, "xhigh");
   assert.throws(() => executor.resolve({ label: "missing", workflowName: "test", model: "missing-model" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_MODEL");

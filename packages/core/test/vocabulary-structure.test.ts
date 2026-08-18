@@ -17,7 +17,7 @@ function importsFrom(sourceText: string, symbol: string, module: string): boolea
 void test("Pi runtime derives thinking validation from the canonical types vocabulary", () => {
   const types = source("types.ts");
   const adapter = source("pi-runtime-adapter.ts");
-  const consumers = [adapter, source("decoders.ts"), source("agent-execution.ts")];
+  const consumers = [adapter, source("decoders.ts")];
 
   assert.match(types, /export const THINKING_LEVELS = \[[^\]]+\] as const;/);
   assert.match(types, /export type ThinkingLevel = \(typeof THINKING_LEVELS\)\[number\];/);

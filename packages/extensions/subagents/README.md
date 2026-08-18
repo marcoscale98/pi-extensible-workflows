@@ -18,7 +18,7 @@ Use `@piewf/subagents` for focused, independent tasks. Use `pi-extensible-workfl
 
 - Five focused tools: run, inspect, steer, stop, and retry.
 - Background fan-out with one durable ID per run, or foreground execution with an inline terminal result.
-- Reuses workflow roles, role overrides, model aliases, settings, and agent options: `label`, `model`, `thinking`, `tools`, `skills`, `extensions`, `worktree`, `outputSchema`, `retries` (0 through 255), and `timeoutMs`.
+- Reuses workflow roles, model aliases, settings, and agent options: `label`, `model`, `tools`, `skills`, `extensions`, `contextFiles`, `worktree`, `outputSchema`, `retries` (0 through 255), and `timeoutMs`.
 - Repeatable inspection of progress, token accounting, tool calls, results, failures, and worktrees.
 
 ## Install
@@ -58,13 +58,13 @@ Every tool schema is a closed object. Unknown properties are rejected. The model
 
 | Tool | Input schema |
 | --- | --- |
-| `subagents_run` | `{ prompt: string, mode?: "background" \| "foreground", label?: string, model?: string, thinking?: string, tools?: string[], skills?: string[], extensions?: string[], role?: string \| roleOverride, worktree?: string, outputSchema?: object, retries?: integer 0..255, timeoutMs?: positive integer \| null }` |
+| `subagents_run` | `{ prompt: string, mode?: "background" \| "foreground", label?: string, model?: string, tools?: string[], skills?: string[], extensions?: string[], contextFiles?: string[], role?: string, worktree?: string, outputSchema?: object, retries?: integer 0..255, timeoutMs?: positive integer \| null }` |
 | `subagents_inspect` | `{ id?: string }` |
 | `subagents_steer` | `{ id: string, message: string }` |
 | `subagents_stop` | `{ id: string }` |
 | `subagents_retry` | `{ id: string }` |
 
-`prompt` is the only required `subagents_run` property. `mode` defaults to "background". Resource candidates start enabled, so plain positive top-level selector lists are additive and top-level `[]` adds no matches. Use `["!*", "read", "grep"]` to restrict a selector to those resources, or `["!*"]` to select none. In a role override, an explicit `[]` replaces and therefore removes that role's selector layer. A `role` string selects an existing workflow role. A role override object has `name` and optional `model`, `thinking`, `tools`, `skills`, `extensions`, `description`, `overrideSystemPrompt`, and `contextFiles` fields. Capability selectors use ordered minimatch rules and are applied after global, trusted-project, and role selectors. A role request may set final call-level capability selectors; top-level `model` and `thinking` are folded into the role override.
+`prompt` is the only required `subagents_run` property. `mode` defaults to "background". Resource candidates start enabled, so plain positive top-level selector lists are additive and top-level `[]` adds no matches. Use `["!*", "read", "grep"]` to restrict a selector to those resources, or `["!*"]` to select none. A `role` string selects an existing workflow role. Model, tools, skills, extensions, and contextFiles are top-level `AgentOptions` overrides applied after the role file. Concrete models are `provider/model:thinking`. Capability selectors use ordered minimatch rules and are applied after global, trusted-project, and role selectors. Use `tools: ["*"]` to re-enable all tools after a role restriction.
 
 `subagents_inspect({})` returns all accessible run summaries ordered by start time. `subagents_inspect({ id })` returns the detailed lifecycle record, including state, start and finish timestamps, and the live snapshot under `progress`: `state`, cumulative `accounting`, `toolCalls`, `activity`, and `lastEventAt`. The snapshot state never includes the effective system prompt, and inspection has no `usage` field; token totals are derived from accounting. Materialized worktree path and branch are included when available. For completed runs it also includes `value`; for failed runs it includes `error`. A running run has no terminal value yet. Unknown IDs fail with `RUN_NOT_FOUND`.
 

@@ -1,6 +1,5 @@
 ---
-model: openai-codex/gpt-5.6-luna
-thinking: medium
+model: openai-codex/gpt-5.6-luna:medium
 tools: [read, grep, find, bash]
 description: Scouting agent. Use when we need to gather info to solve a task
 ---

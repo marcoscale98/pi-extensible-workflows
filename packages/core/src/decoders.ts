@@ -1,4 +1,4 @@
-import { AGENT_STATES, RUN_STATES, THINKING_LEVELS, type AgentAccounting, type AgentActivity, type AgentAttemptSummary, type AgentDefinition, type AgentRecord, type AgentResourceInspection, type AgentResourceSelectors, type BudgetApprovalRequest, type BudgetDimension, type BudgetEvent, type ContextFileScope, type JsonValue, type LaunchSnapshot, type ModelSpec, type RoleOverride, type RunRecord, type WorkflowBudgetUsage, type WorkflowRetentionSettings, type WorkflowRunEvent } from "./types.js";
+import { AGENT_STATES, RUN_STATES, THINKING_LEVELS, type AgentAccounting, type AgentActivity, type AgentAttemptSummary, type AgentDefinition, type AgentRecord, type AgentResourceInspection, type AgentResourceSelectors, type BudgetApprovalRequest, type BudgetDimension, type BudgetEvent, type ContextFileScope, type JsonValue, type LaunchSnapshot, type ModelSpec, type RunRecord, type WorkflowBudgetUsage, type WorkflowRetentionSettings, type WorkflowRunEvent } from "./types.js";
 import type { OwnershipRecord, ScheduledAgentOptions } from "./agent-execution.js";
 import { finiteNumber, isWorkflowErrorCode, jsonValue, object } from "./utils.js";
 
@@ -17,7 +17,6 @@ type PersistedAgent = RunRecord["agents"][number];
 type PersistedPhaseRecord = NonNullable<RunRecord["phaseHistory"]>[number];
 type PersistedShellActivity = NonNullable<RunRecord["activeShellsByPhase"]>[number];
 type PersistedDelivery = NonNullable<RunRecord["delivery"]>;
-type PersistedRoleOverride = Exclude<NonNullable<ScheduledAgentOptions["role"]>, string>;
 type PersistedIdentity = NonNullable<ScheduledAgentOptions["agentIdentity"]>;
 type PersistedOptions = ScheduledAgentOptions;
 
@@ -26,7 +25,7 @@ const INVALID_PERSISTED_VALUE = Symbol("invalid persisted value");
 function integer(value: unknown): value is number { return finiteNumber(value) && Number.isInteger(value); }
 function safePositiveInteger(value: unknown): value is number { return integer(value) && Number.isSafeInteger(value) && value > 0; }
 export function positiveInteger(value: unknown): value is number { return integer(value) && value > 0; }
-function isThinking(value: unknown): value is NonNullable<ScheduledAgentOptions["thinking"]> { return THINKING_LEVELS.some((level) => level === value); }
+function isThinking(value: unknown): value is NonNullable<ModelSpec["thinking"]> { return THINKING_LEVELS.some((level) => level === value); }
 function isContextFileScope(value: unknown): value is ContextFileScope { return ["global", "project", "cwd"].some((candidate) => candidate === value); }
 function isLaunchMode(value: unknown): value is NonNullable<LaunchSnapshot["launchMode"]> { return value === "foreground" || value === "background"; }
 function isRunState(value: unknown): value is RunRecord["state"] { return RUN_STATES.some((candidate) => candidate === value); }
@@ -81,7 +80,7 @@ function decodeModelSpec(value: unknown): ModelSpec | undefined {
   if (!object(value) || typeof value.provider !== "string" || typeof value.model !== "string") return undefined;
   const thinking = value.thinking;
   if (thinking !== undefined && !isThinking(thinking)) return undefined;
-  return { provider: value.provider, model: value.model, ...(thinking === undefined ? {} : { thinking }) };
+  return { provider: value.provider, model: value.model, ...(isThinking(thinking) ? { thinking } : {}) };
 }
 function decodeAgentResourceSelectors(value: unknown): AgentResourceSelectors | undefined {
   if (!object(value)) return undefined;
@@ -100,35 +99,6 @@ function decodeContextFileScopes(value: unknown): ContextFileScope[] | undefined
   }
   return scopes;
 }
-function decodeRoleOverride(value: unknown): RoleOverride | undefined {
-  if (!object(value) || typeof value.name !== "string") return undefined;
-  const model = value.model;
-  const thinking = value.thinking;
-  const tools = value.tools;
-  const skills = value.skills;
-  const extensions = value.extensions;
-  const description = value.description;
-  const overrideSystemPrompt = value.overrideSystemPrompt;
-  const contextFiles = value.contextFiles;
-  if (model !== undefined && model !== null && typeof model !== "string") return undefined;
-  if (thinking !== undefined && thinking !== null && !isThinking(thinking)) return undefined;
-  if (description !== undefined && description !== null && typeof description !== "string") return undefined;
-  if (overrideSystemPrompt !== undefined && overrideSystemPrompt !== null && typeof overrideSystemPrompt !== "boolean") return undefined;
-  const decodedTools = tools === undefined ? undefined : tools === null ? null : decodeStringArray(tools);
-  const decodedSkills = skills === undefined ? undefined : skills === null ? null : decodeStringArray(skills);
-  const decodedExtensions = extensions === undefined ? undefined : extensions === null ? null : decodeStringArray(extensions);
-  const decodedContextFiles = contextFiles === undefined ? undefined : contextFiles === null ? null : decodeContextFileScopes(contextFiles);
-  const result: RoleOverride = { name: value.name };
-  if (model !== undefined) result.model = model;
-  if (thinking !== undefined) result.thinking = thinking;
-  if (tools !== undefined) { if (decodedTools === undefined) return undefined; result.tools = decodedTools; }
-  if (skills !== undefined) { if (decodedSkills === undefined) return undefined; result.skills = decodedSkills; }
-  if (extensions !== undefined) { if (decodedExtensions === undefined) return undefined; result.extensions = decodedExtensions; }
-  if (description !== undefined) result.description = description;
-  if (overrideSystemPrompt !== undefined) result.overrideSystemPrompt = overrideSystemPrompt;
-  if (contextFiles !== undefined) { if (decodedContextFiles === undefined) return undefined; result.contextFiles = decodedContextFiles; }
-  return result;
-}
 function decodeAgentDefinition(value: unknown): AgentDefinition | undefined {
   if (!object(value)) return undefined;
   const prompt = optionalString(value.prompt);
@@ -142,8 +112,9 @@ function decodeAgentDefinition(value: unknown): AgentDefinition | undefined {
   const contextFiles = value.contextFiles === undefined ? undefined : decodeContextFileScopes(value.contextFiles);
   if (prompt === INVALID_PERSISTED_VALUE || description === INVALID_PERSISTED_VALUE || model === INVALID_PERSISTED_VALUE || overrideSystemPrompt === INVALID_PERSISTED_VALUE) return undefined;
   if (thinking !== undefined && !isThinking(thinking) || value.tools !== undefined && !tools || value.skills !== undefined && !skills || value.extensions !== undefined && !extensions || value.contextFiles !== undefined && !contextFiles) return undefined;
+  const foldedModel = typeof model === "string" && thinking !== undefined && !model.includes(":") ? `${model}:${thinking}` : model;
   return {
-    ...(prompt === undefined ? {} : { prompt }), ...(description === undefined ? {} : { description }), ...(model === undefined ? {} : { model }), ...(thinking === undefined ? {} : { thinking }),
+    ...(prompt === undefined ? {} : { prompt }), ...(description === undefined ? {} : { description }), ...(foldedModel === undefined ? {} : { model: foldedModel }),
     ...(tools === undefined ? {} : { tools }), ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(overrideSystemPrompt === undefined ? {} : { overrideSystemPrompt }), ...(contextFiles === undefined ? {} : { contextFiles }),
   };
 }
@@ -233,19 +204,14 @@ function decodeScheduledAgentOptions(value: unknown): PersistedOptions | undefin
   const parentBreadcrumb = optionalString(value.parentBreadcrumb);
   const worktreeOwner = optionalString(value.worktreeOwner);
   const model = optionalString(value.model);
-  const thinking = value.thinking;
-  const role = value.role;
+  const role = typeof value.role === "string" ? value.role : undefined;
+  const contextFiles = value.contextFiles === undefined ? undefined : decodeContextFileScopes(value.contextFiles);
   const schema = value.schema === undefined ? undefined : decodeJsonObject(value.schema);
   const retries = optionalNumber(value.retries);
   const timeoutMs = value.timeoutMs;
   const agentOptions = value.agentOptions === undefined ? undefined : decodeJsonObject(value.agentOptions);
   const agentIdentity = value.agentIdentity === undefined ? undefined : decodeIdentity(value.agentIdentity);
-  let decodedRole: string | PersistedRoleOverride | undefined;
-  if (role !== undefined) {
-    if (typeof role === "string") decodedRole = role;
-    else decodedRole = decodeRoleOverride(role);
-  }
-  if (requestedLabel === INVALID_PERSISTED_VALUE || parentBreadcrumb === INVALID_PERSISTED_VALUE || worktreeOwner === INVALID_PERSISTED_VALUE || model === INVALID_PERSISTED_VALUE || value.skills !== undefined && !skills || value.extensions !== undefined && !extensions || (thinking !== undefined && !isThinking(thinking)) || (role !== undefined && decodedRole === undefined) || (value.schema !== undefined && !schema) || retries === INVALID_PERSISTED_VALUE || (retries !== undefined && !integer(retries)) || (timeoutMs !== undefined && timeoutMs !== null && !finiteNumber(timeoutMs)) || (value.agentOptions !== undefined && !agentOptions) || (value.agentIdentity !== undefined && !agentIdentity)) return undefined;
+  if (requestedLabel === INVALID_PERSISTED_VALUE || parentBreadcrumb === INVALID_PERSISTED_VALUE || worktreeOwner === INVALID_PERSISTED_VALUE || model === INVALID_PERSISTED_VALUE || value.skills !== undefined && !skills || value.extensions !== undefined && !extensions || (value.role !== undefined && typeof value.role !== "string") || (value.contextFiles !== undefined && !contextFiles) || (value.schema !== undefined && !schema) || retries === INVALID_PERSISTED_VALUE || (retries !== undefined && !integer(retries)) || (timeoutMs !== undefined && timeoutMs !== null && !finiteNumber(timeoutMs)) || (value.agentOptions !== undefined && !agentOptions) || (value.agentIdentity !== undefined && !agentIdentity)) return undefined;
   return {
     label: value.label,
     ...(requestedLabel === undefined ? {} : { requestedLabel }),
@@ -255,8 +221,8 @@ function decodeScheduledAgentOptions(value: unknown): PersistedOptions | undefin
     ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }),
     ...(worktreeOwner === undefined ? {} : { worktreeOwner }),
     ...(model === undefined ? {} : { model }),
-    ...(thinking === undefined ? {} : { thinking }),
-    ...(decodedRole === undefined ? {} : { role: decodedRole }),
+    ...(role === undefined ? {} : { role }),
+    ...(contextFiles === undefined ? {} : { contextFiles }),
     ...(schema === undefined ? {} : { schema }),
     ...(retries === undefined ? {} : { retries }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),

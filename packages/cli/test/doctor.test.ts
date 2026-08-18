@@ -111,7 +111,7 @@ void test("doctor discovers Pi through local auth, models, and trust fixtures", 
   writeFileSync(join(paths.agentDir, "auth.json"), JSON.stringify({ fixture: { type: "api_key", key: "local-fixture" } }));
   writeFileSync(join(paths.agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: "http://127.0.0.1:1/v1", api: "openai-completions", apiKey: "fixture", models: [{ id: "fixture-model", name: "Fixture model", input: ["text"], contextWindow: 1_024, maxTokens: 128 }] } } }));
   writeFileSync(join(paths.agentDir, "trust.json"), JSON.stringify({ [realpathSync(paths.cwd)]: true }));
-  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "local.md"), "---\nmodel: fixture/fixture-model\n---\nLocal role");
+  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "local.md"), "---\nmodel: fixture/fixture-model:medium\n---\nLocal role");
   const before = readdirSync(paths.root, { recursive: true }).map(String).sort();
   const report = await withHomeAndCwd(paths.root, paths.cwd, () => doctor(paths));
   const after = readdirSync(paths.root, { recursive: true }).map(String).sort();
@@ -151,7 +151,7 @@ void test("doctor reports role errors, warnings, overrides, and extension failur
   writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "tool-typo.md"), "---\ntools: [read, cat]\n---\nCheck tools");
   writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "thinking.md"), "---\nthinking: hihg\n---\nThink");
   writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "malformed-model.md"), "---\nmodel: gpt-5\n---\nModel");
-  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "unavailable-model.md"), "---\nmodel: other/model\n---\nModel");
+  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "unavailable-model.md"), "---\nmodel: other/model:high\n---\nModel");
   writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "empty.md"), "---\ntools: [read]\n---\n");
   writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "placeholder.md"), "Use {{tools}} here");
   writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "empty-frontmatter.md"), "---\n---\nBody");
@@ -260,9 +260,9 @@ void test("role-targeted doctor inspects effective resources and prepares hooks 
   const shutdownMarker = join(paths.root, "doctor-shutdown.marker");
   writeFileSync(join(paths.agentDir, "extensions", "doctor-hook.ts"), `import { appendFileSync } from "node:fs"; export default (pi) => { pi.on('before_agent_start', (event) => ({ systemPrompt: event.systemPrompt + '\\nHOOK:' + event.prompt })); pi.on('session_shutdown', async () => { await new Promise((resolve) => setTimeout(resolve, 25)); appendFileSync(${JSON.stringify(shutdownMarker)}, 'shutdown'); }); };
 `);
-  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nthinking: high\ntools: [read, grep]\nskills: [\"*\", \"!review-skill\"]\nextensions: [\"**/*\", \"!missing-extension\"]\n---\nReview role");
+  writeFileSync(join(paths.cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: fixture/fixture-model:high\ntools: [read, grep]\nskills: [\"*\", \"!review-skill\"]\nextensions: [\"**/*\", \"!missing-extension\"]\n---\nReview role");
   const registry = new WorkflowRegistry();
-  registry.register({ version: "1.0.0", headline: "Doctor setup", agentSetupHooks: { adjust: { setup(agent, context) { assert.equal(context.mode, "inspection"); assert.equal(agent.prepared.model.model, "fixture-model"); assert.equal(agent.prepared.model.thinking, "high"); agent.options.model = "fixture/override-model"; agent.options.thinking = "low"; agent.options.tools = ["grep"]; } } } });
+  registry.register({ version: "1.0.0", headline: "Doctor setup", agentSetupHooks: { adjust: { setup(agent, context) { assert.equal(context.mode, "inspection"); assert.equal(agent.prepared.model.model, "fixture-model"); assert.equal(agent.prepared.model.thinking, "high"); agent.options.model = "fixture/override-model:low"; agent.options.tools = ["grep"]; } } } });
   const report = await withHomeAndCwd(paths.root, paths.cwd, () => doctor({ ...paths, role: "reviewer", registry, discoverPi: async () => pi({ activeTools: ["read", "grep"], knownModels: ["fixture/fixture-model", "fixture/override-model"], availableModels: ["fixture/fixture-model", "fixture/override-model"], model: { provider: "fixture", model: "fixture-model", thinking: "medium" } }) }));
   const inspection = report.roleInspection;
   assert.ok(inspection);
@@ -559,7 +559,7 @@ void test("portable bundle export writes a self-contained payload and external-r
   assert.match(readFileSync(join(destination, "payload", "workflow.mjs"), "utf8"), /registerWorkflowExtension/);
   assert.match(readFileSync(join(destination, "payload", "runner.mjs"), "utf8"), /@piewf\/cli@/);
   assert.match(output, /Run .* setup/);
-  writeFileSync(join(paths.agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: openai/gpt\n---\nReview the result");
+  writeFileSync(join(paths.agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: openai/gpt:medium\n---\nReview the result");
   registerCliExtension();
   const selectedDestination = join(paths.root, "selected-bundle");
   assert.equal(await runCli(["bundle", "cliEcho", "--output", selectedDestination, "--role", "reviewer", "--command", "git", "--environment", "REVIEW_TOKEN"], { cwd: paths.cwd, agentDir: paths.agentDir, stderr: () => {} }), 0);

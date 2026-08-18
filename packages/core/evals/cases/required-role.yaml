@@ -8,7 +8,6 @@ expectations:
   agentPolicies:
     - callIndex: 0
       role: reviewer
-      forbidOptions: [model, thinking, tools]
 semanticCriteria:
   - id: intent
     description: "A reviewer-role agent assesses the change and its result is returned."

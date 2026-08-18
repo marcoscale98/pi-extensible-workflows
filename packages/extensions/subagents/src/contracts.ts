@@ -17,17 +17,6 @@ export const SUBAGENT_ATTEMPT_DETAILS_LIMIT = 1;
 export const SUBAGENT_MAX_RETRIES = 255;
 export const SUBAGENT_SYSTEM_PROMPT_LIMIT = 64 * 1024;
 
-const SUBAGENTS_ROLE_OVERRIDE = Type.Object({
-  name: Type.String({ description: "Workflow role name" }),
-  model: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  thinking: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  tools: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-  skills: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-  extensions: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-  description: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-  overrideSystemPrompt: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-  contextFiles: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-}, { additionalProperties: false });
 const SUBAGENTS_MODE = Type.Union([
   Type.Literal("background"),
   Type.Literal("foreground"),
@@ -37,12 +26,12 @@ export const SUBAGENTS_RUN_PARAMETERS = Type.Object({
   prompt: Type.String({ description: "Task for the subagent" }),
   mode: Type.Optional(SUBAGENTS_MODE),
   label: Type.Optional(Type.String({ description: "Optional display label for the subagent" })),
-  model: Type.Optional(Type.String({ description: "Optional model selection" })),
-  thinking: Type.Optional(Type.String({ description: "Optional thinking level" })),
+  model: Type.Optional(Type.String({ description: "Optional model as provider/model:thinking or alias[:thinking]" })),
   tools: Type.Optional(Type.Array(Type.String(), { description: "Optional ordered tool selectors; candidates start enabled and !* restricts the set" })),
   skills: Type.Optional(Type.Array(Type.String(), { description: "Optional ordered skill selectors; candidates start enabled and !* restricts the set" })),
   extensions: Type.Optional(Type.Array(Type.String(), { description: "Optional ordered extension selectors; candidates start enabled and !* restricts the set" })),
-  role: Type.Optional(Type.Union([Type.String({ description: "Workflow role name" }), SUBAGENTS_ROLE_OVERRIDE])),
+  contextFiles: Type.Optional(Type.Array(Type.String(), { description: "Optional context-file scopes: global, project, cwd" })),
+  role: Type.Optional(Type.String({ description: "Workflow role name" })),
   worktree: Type.Optional(Type.String({ description: "Optional named worktree" })),
   outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Optional JSON schema for the result" })),
   retries: Type.Optional(Type.Integer({ minimum: 0, maximum: SUBAGENT_MAX_RETRIES, description: "Optional retry count; at most 255 retries" })),
@@ -85,15 +74,6 @@ export function normalizeSubagentRunRequest(value: unknown): SubagentRunRequest 
   const snapshot = structuredClone(value);
   snapshot.mode ??= "background";
   if (snapshot.worktree !== undefined) snapshot.worktree = snapshot.worktree.trim();
-  if (snapshot.role !== undefined && (snapshot.model !== undefined || snapshot.thinking !== undefined)) {
-    snapshot.role = {
-      ...(typeof snapshot.role === "string" ? { name: snapshot.role } : snapshot.role),
-      ...(snapshot.model === undefined ? {} : { model: snapshot.model }),
-      ...(snapshot.thinking === undefined ? {} : { thinking: snapshot.thinking }),
-    };
-    Reflect.deleteProperty(snapshot, "model");
-    Reflect.deleteProperty(snapshot, "thinking");
-  }
   validateAgentOptions(snapshot);
   return snapshot;
 }

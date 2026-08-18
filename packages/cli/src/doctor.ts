@@ -260,7 +260,7 @@ function validateModel(value: string, known: ReadonlySet<string>, available: Rea
     if (!known.has(name) || !available.has(name)) diagnostics.push(diagnostic("warning", "MODEL_UNAVAILABLE", `Model is valid-shaped but unavailable: ${name}`, source));
   } catch (error) {
     const message = errorText(error);
-    diagnostics.push(diagnostic("error", "MODEL_INVALID", message, source, message.includes("thinking") ? THINKING_HINT : "Use provider/model or provider/model:thinking."));
+    diagnostics.push(diagnostic("error", "MODEL_INVALID", message, source, message.includes("thinking") ? THINKING_HINT : "Use provider/model:thinking."));
   }
 }
 

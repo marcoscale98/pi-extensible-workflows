@@ -8,7 +8,6 @@ expectations:
   agentPolicies:
     - callIndex: 0
       role: reviewer
-      forbidOptions: [model, thinking, tools]
     - callIndex: 1
       model: "$EVAL_MODEL"
       tools:

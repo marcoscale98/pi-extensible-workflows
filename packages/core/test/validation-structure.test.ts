@@ -15,7 +15,7 @@ void test("parseRoleMarkdown owns one local unquote helper for legacy metadata",
   const parser = source.slice(start, end);
 
   assert.equal((parser.match(/^\s*const unquote\s*=\s*\(v: string\)\s*=>\s*v\.replace\(\/\^\['"\]\|\['"\]\$\/g, ""\);\s*$/gm) ?? []).length, 1, "parseRoleMarkdown() must define one local unquote helper");
-  assert.equal((parser.match(/\bunquote\b/g) ?? []).length, 6, "unquote must be used by all five legacy quote-stripping paths");
+  assert.equal((parser.match(/\bunquote\b/g) ?? []).length, 5, "unquote must be used by all remaining legacy quote-stripping paths");
   assert.equal((parser.match(/replace\(\/\^\['"\]\|\['"\]\$\/g/g) ?? []).length, 1, "quote stripping must use the shared unquote regex");
   assert.doesNotMatch(source, /^\s*export\s+(?:const|function)\s+unquote\b/m, "unquote must remain local to parseRoleMarkdown()");
   assert.equal((parser.match(/replace\(\/\^\[']\|\[']\$\/g/g) ?? []).length, 0, "legacy single-quote stripping must be centralized");

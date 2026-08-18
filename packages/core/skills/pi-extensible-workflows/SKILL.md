@@ -22,7 +22,7 @@ return await agent(
 );
 ```
 
-Await `parallel(...)` or `pipeline(...)` results before interpolation. Runs are backgrounded by default; set the tool-call `foreground: true` when the caller must wait for the final value. Use `/workflow` to open the picker and select a run for contextual actions such as moving an attached foreground workflow to the background.
+Await `parallel(...)` or `pipeline(...)` results before interpolation. Use `/workflow` to open the picker and select a run for contextual actions such as moving an attached foreground workflow to the background.
 
 ## Runtime and safety rules
 
@@ -71,16 +71,16 @@ Registered functions, `outputSchema`, budgets, checkpoints, worktrees, retry/res
 
 ```typescript
 export interface AgentOptions {
-  label?: string;
-  model?: string;
-  role?: string;
-  skills?: string[];
-  extensions?: string[];
-  tools?: string[];
-  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-  outputSchema?: JsonSchema;
-  retries?: number;
-  timeoutMs?: number | null;
+  label?: string; // display name
+  model?: string; // provider/model:thinking, or alias[:thinking]
+  role?: string; // role file name
+  contextFiles?: Array<"global" | "project" | "cwd">; // which Pi context files to load
+  skills?: string[]; // minimatch overlay after the role list
+  extensions?: string[]; // minimatch overlay after the role list
+  tools?: string[]; // minimatch overlay after the role list
+  outputSchema?: JsonSchema; // structured result for a later phase
+  retries?: number; // extra same-run retries for this agent
+  timeoutMs?: number | null; // attempt timeout; null = none
   [key: string]: JsonValue;
 }
 ```
@@ -131,10 +131,11 @@ Registered extension functions receive `withWorktree` in context and can compose
 
 ## Rules
 
-- Use `log(messageString)` for brief operator status.
-- A role can be a name string or an object with a required `name` and frontmatter overrides. Omitted fields inherit from the role file, `null` unsets them, and explicit values replace them. Top-level `skills`, `extensions`, and `tools` are final capability selector overlays; `model` and `thinking` remain role-only when a role is selected. Candidates start enabled. A top-level `[]` contributes no matches, while `[]` in a role override replaces the inherited role selector list with an empty layer. Use `["!*", "read", "grep"]` when a selector must restrict a subagent to those tools.
+- Workflow run does not inherit any of the main agent context. Keep that in mind when creating agent's prompts. 
+- When specifying a model. use `pi --list-models "search term"` to find the proper provider and model name.
+- Use `log(messageString)` for brief operator status and `phase(phaseName)` to signal the start of another phase.
+- Role-file defaults apply first. Restrict selectors with `["!*", "read", "grep"]`. `tools: ["*"]` turns everything back on.
 - Use `parallel()` for independent tasks with different flows and `pipeline()` when every keyed item follows the same ordered stages; do not duplicate identical chains in `parallel()`. Signatures are `parallel(operationName, tasksRecord)` and `pipeline(operationName, itemsRecord, stagesRecord)`; keys are stable task, item, and stage names.
-- Preserve item metadata in workflow code between pipeline stages instead of making agents echo it through `outputSchema`.
 - Use a JavaScript loop for repeated work; each direct `agent(...)` call gets deterministic call-site and occurrence identity.
 - Runs default to background; set tool-call `foreground: true` when asked to wait.
 - Add `budget` only for aggregate limits. Do not invent limits, omit if user do not ask explicitly. Valid dimensions are exactly `tokens`, `costUsd`, `durationMs`, and `agentLaunches`; each is `{ soft?: number, hard?: number }` with `soft < hard`.

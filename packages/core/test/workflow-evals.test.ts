@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { callUnchecked, executeToolCall, testExtensionContext, testExtensionApi } from "./support.js";
 import { Compile } from "typebox/compile";
-import { inspectWorkflowScript, validateWorkflowLaunch, WorkflowError } from "../src/index.js";
+import { inspectWorkflowScript, WorkflowError } from "../src/index.js";
 import evalCaptureExtension from "../src/eval-capture-extension.js";
 import { assertEvalScriptSafe, captureEvalCase, captureValidationReports, evalExpectationErrors, extractCapturedWorkflows, extractParentOracle, extractParentToolCalls, findSessionFile, formatEvalSummary, INITIAL_WORKFLOW_EVAL_CASES, loadWorkflowEvalCases, matchesJsonResult, matchesJsonSchema, matchesOutputSchema, parseSemanticJudge, recoverySelectionErrors, replayExpectationErrors, replayWorkflowScript, resolveWorkflowSkillPath, selectStaticCandidate, staticExpectationResults, runIsolatedProcess, runWorkflowEvals, validateWorkflowEvalCases, type ParentOracle } from "../src/workflow-evals.js";
 
@@ -385,7 +385,6 @@ void test("replays outputSchema values and checks their shape", async () => {
   assert.deepEqual(selectStaticCandidate(multipleValidCalls, multipleValidCalls.map((_, callIndex) => ({ callIndex, valid: true })), { minimumAgentCalls: 1 }, 2).callIndices, [0, 1]);
   assert.deepEqual(selectStaticCandidate(staticCalls, [{ callIndex: 0, valid: true }], { requiredRoles: ["reviewer"] }).callIndices, [0]);
   assert.deepEqual(parseSemanticJudge('{"criteria":[{"id":"intent","pass":true,"evidence":"agent returns review"}]}', [{ id: "intent", description: "review" }]), [{ id: "intent", pass: true, evidence: "agent returns review" }]);
-  assert.throws(() => validateWorkflowLaunch({ name: "bad", script: 'agent("x", { role: "reviewer", model: "p/m" })' }, { cwd: process.cwd(), projectTrusted: true, availableModels: new Set(["p/m"]), rootTools: new Set() }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
 });
 
 void test("isolates eval cases in separate OS processes and cleans up timed-out groups", async () => {

@@ -34,19 +34,21 @@
     <article class="prose">
       <p class="eyebrow">Role author path</p>
       <h1>Define and customize agent roles</h1>
-      <p class="lead">Roles package a reusable agent policy: model, thinking level, tools, skills, extensions, prompt instructions, and context-file scope. Use a role file for stable defaults, then use a role object or top-level call selectors when one call needs a deliberate capability overlay.</p>
+      <p class="lead">Roles package a reusable agent policy: model, thinking level, tools, skills, extensions, prompt instructions, and context-file scope. Use a role file for stable defaults, then use per-call <code>AgentOptions</code> to override model, thinking, capabilities, and context files.</p>
       <section id="overview">
         <h2>Overview</h2>
-        <p>A workflow agent can use a role name or a role object. A string applies the role file unchanged. An object must contain <code>name</code> and can override role frontmatter for that call. The role name and role body always come from the named file.</p>
+        <p>A workflow agent selects a role by name. The role body always comes from the named file. Per-call <code>AgentOptions</code> override the role-file defaults.</p>
         <pre><code class="language-javascript"><span class="tok-keyword">const</span> plan <span class="tok-punctuation">=</span> <span class="tok-keyword">await</span> <span class="tok-function">agent</span><span class="tok-punctuation">(</span><span class="tok-string">"Plan the implementation"</span><span class="tok-punctuation">,</span> <span class="tok-punctuation">{</span>
   <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-string">"planner"</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span>
 
 <span class="tok-keyword">const</span> fastReview <span class="tok-punctuation">=</span> <span class="tok-keyword">await</span> <span class="tok-function">agent</span><span class="tok-punctuation">(</span><span class="tok-string">"Review this change"</span><span class="tok-punctuation">,</span> <span class="tok-punctuation">{</span>
-  <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span> <span class="tok-property">name</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span> <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model"</span><span class="tok-punctuation">,</span> <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">]</span> <span class="tok-punctuation">}</span>
+  <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span>
+  <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model"</span><span class="tok-punctuation">,</span>
+  <span class="tok-property">contextFiles</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"cwd"</span><span class="tok-punctuation">]</span><span class="tok-punctuation">,</span>
+  <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> <span class="tok-string">"read"</span><span class="tok-punctuation">,</span> <span class="tok-string">"grep"</span><span class="tok-punctuation">]</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span></code></pre>
-        <p>Top-level <code>model</code> and <code>thinking</code> cannot be combined with either role form. Top-level <code>tools</code>, <code>skills</code>, and <code>extensions</code> are per-call selectors and can refine the role's selectors.</p>
-        <p><a href="subagents.html"><code>@piewf/subagents</code></a> discovers these same role files and applies the same role-name, override, model, thinking, tool, context, and resource-policy validation to standalone agent runs.</p>
+        <p>Per-call <code>model</code>, <code>thinking</code>, <code>tools</code>, <code>skills</code>, <code>extensions</code>, and <code>contextFiles</code> override role-file defaults. <a href="subagents.html"><code>@piewf/subagents</code></a> discovers these same role files and applies the same validation to standalone agent runs.</p>
       </section>
       <section id="files">
         <h2>Role files</h2>
@@ -54,8 +56,7 @@
         <p>Trusted project roles live under <code>&lt;cwd&gt;/.pi/pi-extensible-workflows/roles/&lt;name&gt;.md</code>. A trusted extension can provide packaged defaults with <code>roleDirectories</code>, using an absolute path or a <code>file:</code> URL. Global and trusted project roles override extension roles with the same name; duplicate names across extension directories are rejected.</p>
         <pre><code class="language-markdown"><span class="tok-punctuation">---</span>
 <span class="tok-property">description</span><span class="tok-punctuation">:</span> Reviews code for correctness
-<span class="tok-property">model</span><span class="tok-punctuation">:</span> anthropic/claude-fable-5
-<span class="tok-property">thinking</span><span class="tok-punctuation">:</span> high
+<span class="tok-property">model</span><span class="tok-punctuation">:</span> anthropic/claude-fable-5:high
 <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> read<span class="tok-punctuation">,</span> grep<span class="tok-punctuation">]</span>
 <span class="tok-property">skills</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> <span class="tok-string">"review-*"</span><span class="tok-punctuation">]</span>
 <span class="tok-property">extensions</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!**/unsafe.mjs"</span><span class="tok-punctuation">]</span>
@@ -69,32 +70,24 @@ Focus on correctness and regressions.</code></pre>
           <thead><tr><th>Field</th><th>Purpose</th></tr></thead>
           <tbody>
             <tr><td><code>description</code></td><td>Role description shown in role discovery and Pi guidance.</td></tr>
-            <tr><td><code>model</code></td><td>Configured alias or concrete <code>provider/model[:thinking]</code>.</td></tr>
-            <tr><td><code>thinking</code></td><td>Default thinking level for the role.</td></tr>
+            <tr><td><code>model</code></td><td>Configured alias or concrete <code>provider/model:thinking</code>.</td></tr>
             <tr><td><code>tools</code>, <code>skills</code>, <code>extensions</code></td><td>Ordered Minimatch selectors. Positive patterns enable discovered candidates, <code>!pattern</code> disables them, later layers override earlier layers, and <code>!*</code> clears the current selection before narrower additions.</td></tr>
             <tr><td><code>overrideSystemPrompt</code></td><td>When true, use the role body instead of appending it to the native system prompt.</td></tr>
             <tr><td><code>contextFiles</code></td><td>Choose which Pi context-file scopes reach the role.</td></tr>
           </tbody>
         </table></div>
-        <p>Relative extension selectors in role frontmatter resolve from the role file's directory; call-level and role-object override selectors resolve from the agent launch cwd. See the <a href="developers.html#settings">settings reference</a> for <code>~</code>, <code>file://</code>, glob, and canonicalization rules.</p>
+        <p>Relative extension selectors in role frontmatter resolve from the role file's directory; call-level selectors resolve from the agent launch cwd. See the <a href="developers.html#settings">settings reference</a> for <code>~</code>, <code>file://</code>, glob, and canonicalization rules.</p>
       </section>
       <section id="calls">
         <h2>Customize calls</h2>
-        <p>Role-object keys use three-way merge semantics:</p>
-        <ul>
-          <li>Omit a key to inherit the role-file value.</li>
-          <li>Use <code>null</code> to unset an inherited value.</li>
-          <li>Use an explicit value to replace it, including <code>[]</code> and <code>false</code>. For capability selectors, <code>[]</code> replaces the inherited role selector list with an empty layer; prepend <code>!*</code> to restrict the candidate set or use it alone to select none.</li>
-        </ul>
+        <p><code>role</code> is a name string. Per-call <code>model</code>, <code>tools</code>, <code>skills</code>, <code>extensions</code>, and <code>contextFiles</code> override the role file. Concrete models are <code>provider/model:thinking</code>. <code>overrideSystemPrompt</code> stays on the role file.</p>
         <pre><code class="language-javascript"><span class="tok-keyword">await</span> <span class="tok-function">agent</span><span class="tok-punctuation">(</span><span class="tok-string">"Inspect the API"</span><span class="tok-punctuation">,</span> <span class="tok-punctuation">{</span>
-  <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">{</span>
-    <span class="tok-property">name</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span>
-    <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model"</span><span class="tok-punctuation">,</span>
-    <span class="tok-property">thinking</span><span class="tok-punctuation">:</span> <span class="tok-keyword">null</span><span class="tok-punctuation">,</span>
-    <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">]</span>
-  <span class="tok-punctuation">}</span>
+  <span class="tok-property">role</span><span class="tok-punctuation">:</span> <span class="tok-string">"reviewer"</span><span class="tok-punctuation">,</span>
+  <span class="tok-property">contextFiles</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"cwd"</span><span class="tok-punctuation">]</span><span class="tok-punctuation">,</span>
+  <span class="tok-property">model</span><span class="tok-punctuation">:</span> <span class="tok-string">"cheap-model:low"</span><span class="tok-punctuation">,</span>
+  <span class="tok-property">tools</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"!*"</span><span class="tok-punctuation">,</span> <span class="tok-string">"read"</span><span class="tok-punctuation">,</span> <span class="tok-string">"grep"</span><span class="tok-punctuation">]</span>
 <span class="tok-punctuation">}</span><span class="tok-punctuation">);</span></code></pre>
-        <p>Per-call overrides can set <code>tools</code>, <code>skills</code>, and <code>extensions</code> selectors, as well as <code>model</code>, <code>thinking</code>, <code>description</code>, <code>overrideSystemPrompt</code>, and <code>contextFiles</code>. Capability selectors are final overlays even when a named role is selected.</p>
+        <p>Use <code>tools: ["*"]</code> to re-enable all tools after a role restriction.</p>
       </section>
       <section id="context">
         <h2>Context and resources</h2>

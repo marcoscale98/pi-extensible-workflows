@@ -8,7 +8,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { DefaultResourceLoader, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createLocalPiSession, FairAgentScheduler, flushExtensionProviders, localAgentTransport, prepareAgentSetupForInspection, WorkflowAgentExecutor, type AgentExecutionRoot, type AgentProgress, type SessionInput } from "../src/agent-execution.js";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
-import { WorkflowError, roleNameOf, type AgentExecutionResult, type AgentToolCallProgress } from "../src/index.js";
+import { WorkflowError, type AgentExecutionResult, type AgentToolCallProgress } from "../src/index.js";
 import type { AgentResourcePolicy } from "../src/types.js";
 import type { RunStore } from "../src/persistence.js";
 import { testTransport, type TestPiSessionEvent } from "./test-transport.js";
@@ -331,40 +331,27 @@ void test("resolves explicit capabilities without widening least privilege", () 
   const executor = new WorkflowAgentExecutor(root, testTransport(async () => { throw new Error("unused"); }));
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "reviewer" }), { model: { provider: "anthropic", model: "opus", thinking: "high" }, tools: ["read"], systemPromptAppend: "Review carefully" });
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "scout" }).tools, ["read", "grep"]);
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", model: "google/gemini" }), { model: { provider: "google", model: "gemini", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPromptAppend: "" });
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", model: "google/gemini", tools: ["!*"] }).tools, []);
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "reviewer", model: "google/gemini:low", tools: ["!*", "read", "grep"] }), { model: { provider: "google", model: "gemini", thinking: "low" }, tools: ["read", "grep"], systemPromptAppend: "Review carefully" });
+  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "reviewer", model: "google/gemini" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", model: "google/gemini:medium" }), { model: { provider: "google", model: "gemini", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPromptAppend: "" });
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", model: "google/gemini:medium", tools: ["!*"] }).tools, []);
   assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", tools: ["!*", "read", "grep"] }).tools, ["read", "grep"]);
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", tools: ["read", "write"] }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
-  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", model: "missing/model" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_MODEL");
+  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", model: "missing/model" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "missing" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_AGENT_TYPE");
-  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "reviewer", model: "google/gemini" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: "reviewer", thinking: "low" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "reviewer", tools: ["!*"] }).tools, []);
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "reviewer", tools: ["*"] }).tools, ["read", "grep", "find", "bash"]);
   const broken = new WorkflowAgentExecutor({ ...root, agentDefinitions: { broken: { tools: ["write"] } } }, testTransport(async () => { throw new Error("must not launch"); }));
   assert.throws(() => broken.resolve({ label: "a", workflowName: "w", role: "broken" }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
 });
-void test("applies named role object overrides to the resolved role policy", () => {
-  const executor = new WorkflowAgentExecutor(root, testTransport(async () => { throw new Error("unused"); }));
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer" } }), { model: { provider: "anthropic", model: "opus", thinking: "high" }, tools: ["read"], systemPromptAppend: "Review carefully" });
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", model: "google/gemini", thinking: "low", tools: ["!*", "read", "grep"] } }), { model: { provider: "google", model: "gemini", thinking: "low" }, tools: ["read", "grep"], systemPromptAppend: "Review carefully" });
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", tools: ["!*"] } }).tools, []);
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", tools: null } }).tools, ["read", "grep", "find", "bash"]);
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scout", tools: null } }).tools, ["read", "grep", "find", "bash"]);
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scout", model: null, thinking: null } }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep"], systemPromptAppend: "Inspect broadly" });
-  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: { name: "missing" } }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_AGENT_TYPE");
-  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer" }, model: "google/gemini" }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", tools: ["write"] } }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_TOOL");
-  assert.throws(() => executor.resolve({ label: "a", workflowName: "w", role: { name: "reviewer", model: "missing/model" } }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_MODEL");
-});
-void test("role object overrides carry description, context files, resource selectors, and system prompt policy", async () => {
+void test("applies call-level context files over the role file", async () => {
   const basePolicy: AgentResourcePolicy = { globalSettingsPath: "/g", projectSettingsPath: "/p", projectTrusted: true, global: { skills: [], extensions: [] }, project: { skills: [], extensions: [] }, effective: { skills: ["global"], extensions: ["/global.ts"] }, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: { skills: ["global"], extensions: ["/global.ts"] }, project: {} } };
   const roleRoot: AgentExecutionRoot = { ...root, agentDefinitions: { ...root.agentDefinitions, scoped: { prompt: "Scoped role", contextFiles: ["global", "project"], overrideSystemPrompt: true, skills: ["role-skill"], extensions: ["/role.ts"] } }, agentResourcePolicy: () => structuredClone(basePolicy) };
   const executor = new WorkflowAgentExecutor(roleRoot, testTransport(async () => { throw new Error("unused"); }));
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scoped", description: "per-call", contextFiles: ["cwd"], overrideSystemPrompt: false } }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPromptAppend: "Scoped role", contextFiles: ["cwd"] });
-  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: { name: "scoped", contextFiles: null, overrideSystemPrompt: null } }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPromptAppend: "Scoped role" });
-  const prepared = await prepareAgentSetupForInspection(roleRoot, "probe", { label: "a", workflowName: "w", role: { name: "scoped", skills: ["extra"], extensions: [] } }, localAgentTransport);
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "scoped", contextFiles: ["cwd"] }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPrompt: "Scoped role", systemPromptAppend: "", contextFiles: ["cwd"] });
+  assert.deepEqual(executor.resolve({ label: "a", workflowName: "w", role: "scoped" }), { model: { provider: "openai", model: "gpt", thinking: "medium" }, tools: ["read", "grep", "find", "bash"], systemPrompt: "Scoped role", systemPromptAppend: "", contextFiles: ["global", "project"] });
+  const prepared = await prepareAgentSetupForInspection(roleRoot, "probe", { label: "a", workflowName: "w", role: "scoped", skills: ["extra"], extensions: [] }, localAgentTransport);
   assert.ok(prepared.setup.sessionInput.resourcePolicy);
-  assert.deepEqual(prepared.setup.sessionInput.resourcePolicy.effective, { skills: ["global", "extra"], extensions: ["/global.ts"] });
+  assert.deepEqual(prepared.setup.sessionInput.resourcePolicy.effective, { skills: ["global", "role-skill", "extra"], extensions: ["/global.ts", "/role.ts"] });
 });
 void test("passes role prompt as system append, not task text", async () => {
   let input: unknown;
@@ -1895,7 +1882,7 @@ void test("scoped tools honor the root capability boundary and cancel orphan des
   await outsider.result;
 });
 
-void test("nested role model policy conflicts fail before scheduler spawn", async () => {
+void test("nested role model options are accepted as call-level overrides", async () => {
   const scheduler = new FairAgentScheduler(async ({ signal }) => {
     await new Promise<void>((resolve) => { signal.addEventListener("abort", () => { resolve(); }, { once: true }); });
     throw new WorkflowError("CANCELLED", "cancelled");
@@ -1904,10 +1891,10 @@ void test("nested role model policy conflicts fail before scheduler spawn", asyn
   const parent = scheduler.spawn("run", "parent", { label: "parent", cwd: "/repo", tools: ["agent", "read"] });
   const agentTool = scheduler.toolsFor(parent.id)[0];
   assert.ok(agentTool);
-  for (const extra of [{ model: "openai/gpt" }, { thinking: "low" }]) {
-    await assert.rejects(executeToolUnchecked(agentTool, "call", { prompt: "child", label: "child", role: "reviewer", ...extra }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  }
-  assert.equal(scheduler.snapshot().length, 1);
+  await executeTool(agentTool, "call", { prompt: "child", label: "child", role: "reviewer", model: "openai/gpt:low" });
+  const child = scheduler.snapshot().find(({ options }) => options.label === "child");
+  assert.ok(child);
+  assert.equal(child.options.model, "openai/gpt:low");
   scheduler.cancel(parent.id);
   await parent.result;
 });
@@ -1943,19 +1930,22 @@ void test("nested agent roles resolve tools before scheduler spawn", async () =>
   scheduler.cancel(parent.id);
   await parent.result;
 });
-void test("nested child agents accept role override objects and resolve their tools", async () => {
+void test("nested child agents reject role objects and accept contextFiles", async () => {
   const scheduler = new FairAgentScheduler(async ({ signal }) => {
     await new Promise<void>((resolve) => { signal.addEventListener("abort", () => { resolve(); }, { once: true }); });
     throw new WorkflowError("CANCELLED", "cancelled");
   }, 1);
   scheduler.addRun("run", 1);
   const parent = scheduler.spawn("run", "parent", { label: "parent", cwd: "/repo", tools: ["agent", "read", "bash"] });
-  const agentTool = scheduler.toolsFor(parent.id, (role, tools) => roleNameOf(role) === "reviewer" ? tools ?? ["read"] : tools ?? ["bash"])[0];
+  const agentTool = scheduler.toolsFor(parent.id, (role, tools) => role === "reviewer" ? tools ?? ["read"] : tools ?? ["bash"])[0];
   assert.ok(agentTool);
-  await executeTool(agentTool, "call", { prompt: "child", label: "child", role: { name: "reviewer", model: "openai/gpt", tools: null } });
+  await executeTool(agentTool, "call", { prompt: "child", label: "child", role: "reviewer", model: "openai/gpt:high", contextFiles: ["cwd"] });
   const child = scheduler.snapshot().find(({ options }) => options.label === "child");
-  assert.deepEqual(child?.options.role, { name: "reviewer", model: "openai/gpt", tools: null });
-  await assert.rejects(executeToolUnchecked(agentTool, "call", { prompt: "bad", label: "bad", role: { name: "reviewer", tools: 1 } }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
+  assert.ok(child);
+  assert.equal(child.options.role, "reviewer");
+  assert.equal(child.options.model, "openai/gpt:high");
+  assert.deepEqual(child.options.contextFiles, ["cwd"]);
+  await assert.rejects(executeToolUnchecked(agentTool, "call", { prompt: "bad", label: "bad", role: { name: "reviewer" } }), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
   scheduler.cancel(parent.id);
   await parent.result;
 });

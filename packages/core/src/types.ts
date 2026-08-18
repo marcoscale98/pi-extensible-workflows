@@ -1,4 +1,3 @@
-import { object } from "./utils.js";
 import type { CreateAgentSessionOptions, InlineExtension, SessionManager, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 export const RUN_STATES = ["queued", "running", "pausing", "paused", "awaiting_input", "completed", "failed", "stopped", "interrupted", "budget_exhausted"] as const;
@@ -34,32 +33,18 @@ export type WorkflowErrorCode = (typeof ERROR_CODES)[number];
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type JsonSchema = { [key: string]: JsonValue };
 type WorkflowSchema = JsonSchema | TSchema;
-export type RoleOverride = {
-  name: string;
-  model?: string | null;
-  thinking?: NonNullable<ModelSpec["thinking"]> | null;
-  tools?: string[] | null;
-  skills?: string[] | null;
-  extensions?: string[] | null;
-  description?: string | null;
-  overrideSystemPrompt?: boolean | null;
-  contextFiles?: ContextFileScope[] | null;
-};
 export function roleNameOf(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (!object(value)) return undefined;
-  const hasStringProperty = <Key extends string>(candidate: Record<string, unknown>, key: Key): candidate is Record<Key, string> => typeof candidate[key] === "string";
-  return hasStringProperty(value, "name") ? value.name : undefined;
+  return typeof value === "string" ? value : undefined;
 }
 // Extra keys are reserved for extensions and forwarded as JSON to agentOptions; core options remain typed.
 export interface AgentOptions<Schema extends TSchema = never> {
   label?: string;
   model?: string;
-  thinking?: NonNullable<ModelSpec["thinking"]>;
   tools?: string[];
   skills?: string[];
   extensions?: string[];
-  role?: string | RoleOverride;
+  contextFiles?: ContextFileScope[];
+  role?: string;
   outputSchema?: JsonSchema | Schema;
   retries?: number;
   timeoutMs?: number | null;

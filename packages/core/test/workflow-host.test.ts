@@ -39,7 +39,7 @@ void test("orders resolved navigator runs by resolution time descending", () => 
 const typeCheckAgentContext = (context: WorkflowOrchestrationContext): void => {
   void context.agent("prompt");
   void context.agent("prompt", { advisor: true, nested: { enabled: true } });
-  void context.agent("prompt", { model: "openai/gpt", tools: ["read"] });
+  void context.agent("prompt", { model: "openai/gpt:medium", tools: ["read"] });
   const outputSchema = Type.Object({ answer: Type.String(), count: Type.Integer() });
   const typedResult: Promise<Static<typeof outputSchema>> = context.agent("prompt", { outputSchema, advisor: true, nested: { enabled: true } });
   void typedResult;
@@ -188,7 +188,7 @@ void test("attributes dynamic alias cycles to the registering extension", async 
   await assert.rejects(execute("id", { name: "cycle", script: "return true;", foreground: true }, new AbortController().signal, undefined, context), (error: unknown) => error instanceof WorkflowError && error.code === "CONFIG_ERROR" && error.message.includes("Cycle policy"));
   loadingRegistry().freeze();
 });
-const valid = `phase("check"); agent("review", { role: "reviewer" }); agent("custom", { model: "openai/gpt", tools: ["read"] });`;
+const valid = `phase("check"); agent("review", { role: "reviewer" }); agent("custom", { model: "openai/gpt:medium", tools: ["read"] });`;
 void test("workflow call preview summarizes inline scripts safely", () => {
   const preview = formatWorkflowPreview({ script: valid, name: "review", description: "Review code" });
   assert.match(preview, /^workflow review\nReview code/m);

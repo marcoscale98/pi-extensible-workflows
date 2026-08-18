@@ -1,6 +1,5 @@
 ---
-model: openai-codex/gpt-5.6-luna
-thinking: xhigh
+model: openai-codex/gpt-5.6-luna:xhigh
 tools: [read, grep, find, bash]
 description: Developer focused agent
 ---

@@ -360,7 +360,7 @@ void test("host restart restores declared ownership over stale live session poli
   const store = new RunStore(home, "session", "run", home);
   const snapshot = createLaunchSnapshot({ script: "return true;", args: null, metadata: { name: "host-restart-policy" }, settings: DEFAULT_SETTINGS, models: ["openai/gpt"], tools: ["agent", "read"], agentTypes: [], roles: {}, schemas: [] });
   await store.create({ id: "run", workflowName: "host-restart-policy", cwd: home, sessionId: "session", state: "interrupted", agents: [{ id: "run:1", name: "work", path: "run:1", state: "running", model: { provider: "stale", model: "stale", thinking: "high" }, tools: ["agent", "read", "injected"], attempts: 1 }], agentSessions: [] }, snapshot);
-  await store.saveOwnership([{ id: "run:1", label: "work", state: "running", options: { label: "work", cwd: home, model: "openai/gpt", tools: ["agent", "read"] } }]);
+  await store.saveOwnership([{ id: "run:1", label: "work", state: "running", options: { label: "work", cwd: home, model: "openai/gpt:medium", tools: ["agent", "read"] } }]);
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
   let start: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
   let shutdown: (() => Promise<void>) | undefined;

@@ -1,7 +1,7 @@
 # Changelog
 ## Unreleased
 
-- Folded top-level `model` and `thinking` on `subagents_run` into the selected role override.
+- Removed per-call `thinking`. Concrete models must be `provider/model:thinking`; aliases may omit the suffix and inherit it from the target. Role-file `thinking` frontmatter is rejected. `role` is a name string. Role files provide defaults; per-call `AgentOptions` `model`, `tools`, `skills`, `extensions`, and `contextFiles` override them. Role objects, `RoleOverride`, `ROLE_OVERRIDE_KEYS`, and `validateRoleOverride` are removed. `overrideSystemPrompt` remains role-file only. Persisted legacy role objects are rejected as corrupt. Legacy role snapshots fold `thinking` into `model`.
 - Removed the optional `singleAgent` workflow-catalog function from `@piewf/subagents`. Use core `agent()` and `withWorktree()` in workflow scripts.
 
 ## [5.5.0] - 2026-08-16

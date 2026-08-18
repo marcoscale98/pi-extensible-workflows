@@ -125,7 +125,7 @@ void test("production launches dynamic aliases through role files with precedenc
   mkdirSync(join(agentDir, "pi-extensible-workflows", "roles"), { recursive: true });
   mkdirSync(cwd, { recursive: true });
   writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ modelAliases: { "policy-model": "openai/gpt:low" } }));
-  writeFileSync(join(agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: policy-chain\nthinking: xhigh\n---\nReview the change.");
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: policy-chain\n---\nReview the change.");
   const inputs: SessionInput[] = [];
   let shadowedCalls = 0;
   let shutdown: (() => Promise<void>) | undefined;
@@ -140,7 +140,7 @@ void test("production launches dynamic aliases through role files with precedenc
     const execute = tools.find(({ name }) => name === "workflow")?.execute;
     assert.ok(execute);
     const context = { cwd, model: { provider: "openai", id: "gpt" }, modelRegistry: { getAll: () => [{ provider: "openai", id: "gpt" }, { provider: "anthropic", id: "opus" }], getAvailable: () => [{ provider: "openai", id: "gpt" }, { provider: "anthropic", id: "opus" }] }, sessionManager: { getSessionId: () => "session" } };
-    await execute("id", { name: "dynamic-production", script: "return { role: await agent(\"role\", { role: \"reviewer\" }), direct: await agent(\"direct\", { model: \"direct-model:low\", thinking: \"medium\" }) };", foreground: true }, new AbortController().signal, undefined, context);
+    await execute("id", { name: "dynamic-production", script: "return { role: await agent(\"role\", { role: \"reviewer\" }), direct: await agent(\"direct\", { model: \"direct-model:medium\" }) };", foreground: true }, new AbortController().signal, undefined, context);
     assert.equal(shadowedCalls, 0);
     assert.deepEqual(inputs.map(({ model }) => model), [{ provider: "openai", model: "gpt", thinking: "low" }, { provider: "anthropic", model: "opus", thinking: "medium" }]);
     loadingRegistry().freeze();
@@ -396,7 +396,7 @@ void test("extension roles flow through host guidance, preflight, launch snapsho
   const roleDirectory = join(home, "roles");
   const roleExtension = join(home, "role-extension.ts");
   mkdirSync(roleDirectory, { recursive: true });
-  writeFileSync(join(roleDirectory, "extension-reviewer.md"), `---\ndescription: Packaged review role\nmodel: anthropic/opus\nthinking: high\ntools: [read, grep]\nskills: [role-skill]\nextensions: ["${roleExtension}"]\n---\nExtension prompt`);
+  writeFileSync(join(roleDirectory, "extension-reviewer.md"), `---\ndescription: Packaged review role\nmodel: anthropic/opus:high\ntools: [read, grep]\nskills: [role-skill]\nextensions: ["${roleExtension}"]\n---\nExtension prompt`);
   const inputs: SessionInput[] = [];
   const prompts: string[] = [];
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text: string }>; details?: unknown }> }> = [];
@@ -431,7 +431,7 @@ void test("extension roles flow through host guidance, preflight, launch snapsho
   assert.deepEqual(loaded.snapshot.models, ["openai/gpt", "anthropic/opus"]);
   assert.deepEqual(loaded.snapshot.tools, ["read", "grep"]);
   assert.deepEqual(loaded.snapshot.projectRoles, []);
-  assert.deepEqual(loaded.snapshot.roles, { "extension-reviewer": { prompt: "Extension prompt", description: "Packaged review role", model: "anthropic/opus", thinking: "high", tools: ["read", "grep"], skills: ["role-skill"], extensions: [roleExtension] } });
+  assert.deepEqual(loaded.snapshot.roles, { "extension-reviewer": { prompt: "Extension prompt", description: "Packaged review role", model: "anthropic/opus:high", tools: ["read", "grep"], skills: ["role-skill"], extensions: [roleExtension] } });
   await shutdown?.();
 });
 void test("labels standard role directory scan failures as standard roles", () => {

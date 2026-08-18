@@ -53,17 +53,15 @@ test("registers five namespaced subagent tools and delegates to an injected mana
   assert.deepEqual(calls[0], ["run", { prompt: "inspect", mode: "background" }]);
 });
 
-test("folds top-level model and thinking into a role override", () => {
-  assert.deepEqual(normalizeSubagentRunRequest({ prompt: "x", role: "reviewer", model: "fable-5", thinking: "high" }), {
+test("keeps top-level model as a call option with a role", () => {
+  assert.deepEqual(normalizeSubagentRunRequest({ prompt: "x", role: "reviewer", model: "fable-5:high" }), {
     prompt: "x",
     mode: "background",
-    role: { name: "reviewer", model: "fable-5", thinking: "high" },
+    role: "reviewer",
+    model: "fable-5:high",
   });
-  assert.deepEqual(normalizeSubagentRunRequest({ prompt: "x", role: { name: "reviewer", model: "old" }, model: "new" }), {
-    prompt: "x",
-    mode: "background",
-    role: { name: "reviewer", model: "new" },
-  });
+  assert.throws(() => normalizeSubagentRunRequest({ prompt: "x", role: "reviewer", thinking: "high" }));
+  assert.throws(() => normalizeSubagentRunRequest({ prompt: "x", role: { name: "reviewer" }, model: "new" }));
 });
 test("renders subagent calls and background or foreground progress consistently", () => {
   const manager = { async run() {}, async inspect() {}, async steer() {}, async stop() {}, async retry() {} };
@@ -975,7 +973,7 @@ test("opens bounded prompt and result artifacts while terminal runs hide system 
   }
 });
 test("exposes closed tool schemas and minimal prompt guidance", () => {
-  assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "mode", "label", "model", "thinking", "tools", "skills", "extensions", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
+  assert.deepEqual(Object.keys(SUBAGENTS_RUN_PARAMETERS.properties), ["prompt", "mode", "label", "model", "tools", "skills", "extensions", "contextFiles", "role", "worktree", "outputSchema", "retries", "timeoutMs"]);
   assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.required, ["prompt"]);
   assert.equal(SUBAGENTS_RUN_PARAMETERS.additionalProperties, false);
   assert.deepEqual(SUBAGENTS_RUN_PARAMETERS.properties.mode.anyOf.map(({ const: value }) => value), ["background", "foreground"]);
@@ -1030,7 +1028,7 @@ test("runs one background subagent with context-derived setup and execution opti
   await writeFile(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ modelAliases: { cheap: "fixture/cheap" }, skills: ["global-skill"], extensions: ["global-extension"] }));
   await mkdir(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
   await writeFile(join(cwd, ".pi", "pi-extensible-workflows", "settings.json"), JSON.stringify({ skills: ["project-skill"], extensions: ["project-extension"] }));
-  await writeFile(join(agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: fixture/role-model\nthinking: high\ntools: [read]\ndescription: Review work\n---\nReview carefully.");
+  await writeFile(join(agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: fixture/role-model:high\ntools: [read]\ndescription: Review work\n---\nReview carefully.");
   const sessionTransport = { id: "test", async createSession() { throw new Error("session should be supplied to the injected executor"); } };
   const controller = new AbortController();
   let root;
@@ -1055,7 +1053,7 @@ test("runs one background subagent with context-derived setup and execution opti
   const runTool = createSubagentTools(manager)[0];
   const outputSchema = { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] };
   const context = await executionContext(cwd, controller.signal);
-  const launch = await runTool.execute("call-1", { prompt: "inspect", label: "review", model: "cheap", thinking: "high", tools: ["read"], outputSchema, retries: 2, timeoutMs: 500 }, controller.signal, undefined, context);
+  const launch = await runTool.execute("call-1", { prompt: "inspect", label: "review", model: "cheap:high", tools: ["read"], outputSchema, retries: 2, timeoutMs: 500 }, controller.signal, undefined, context);
   assert.equal(launch.details.state, "running");
   await waitFor(() => execution !== undefined);
   assert.equal(transport, sessionTransport);
@@ -1066,12 +1064,12 @@ test("runs one background subagent with context-derived setup and execution opti
   assert.deepEqual(root.agentResourcePolicy().global, { skills: ["global-skill"], extensions: [join(agentDir, "pi-extensible-workflows", "global-extension")] });
   assert.deepEqual(root.agentResourcePolicy().project, { skills: ["project-skill"], extensions: [join(cwd, ".pi", "pi-extensible-workflows", "project-extension")] });
   assert.deepEqual(root.agentResourcePolicy().effective, { skills: ["global-skill", "project-skill"], extensions: [join(agentDir, "pi-extensible-workflows", "global-extension"), join(cwd, ".pi", "pi-extensible-workflows", "project-extension")] });
-  assert.equal(root.agentDefinitions.reviewer.model, "fixture/role-model");
+  assert.equal(root.agentDefinitions.reviewer.model, "fixture/role-model:high");
   assert.equal(execution.task, "inspect");
   const { onAttempt, onProgress, ...options } = execution.options;
   assert.equal(typeof onAttempt, "function");
   assert.equal(typeof onProgress, "function");
-  assert.deepEqual(options, { label: "review", workflowName: "subagents", model: "cheap", thinking: "high", tools: ["read"], schema: outputSchema, retries: 2, timeoutMs: 500 });
+  assert.deepEqual(options, { label: "review", workflowName: "subagents", model: "cheap:high", tools: ["read"], schema: outputSchema, retries: 2, timeoutMs: 500 });
   assert.notEqual(execution.signal, controller.signal);
   assert.equal(root.runContext.runId, launch.details.id);
   await waitFor(async () => (await manager.inspect({ id: launch.details.id }, { toolCallId: "lookup", signal: undefined, extensionContext: context })).state === "completed");
@@ -1087,7 +1085,7 @@ test("runs one background subagent with context-derived setup and execution opti
   await rm(cwd, { recursive: true, force: true });
 });
 
-test("folds top-level model into a role override and persists a background execution failure", async () => {
+test("keeps top-level model with a role and persists a background execution failure", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-run-failure-"));
   const controller = new AbortController();
   let launches = 0;
@@ -1108,15 +1106,14 @@ test("folds top-level model into a role override and persists a background execu
   });
   const runTool = createSubagentTools(manager)[0];
   const extensionContext = await executionContext(cwd, controller.signal);
-  const context = { toolCallId: "lookup", signal: undefined, extensionContext };
-  const launched = await runTool.execute("call-2", { prompt: "inspect", role: "reviewer", model: "fixture/cheap" }, controller.signal, undefined, extensionContext);
-  await waitFor(async () => (await manager.inspect({ id: launched.details.id }, context)).state === "failed");
+  const launched = await runTool.execute("call-2", { prompt: "inspect", role: "reviewer", model: "fixture/cheap:high" }, controller.signal, undefined, extensionContext);
+  await waitFor(async () => (await manager.inspect({ id: launched.details.id }, { toolCallId: "lookup", signal: undefined, extensionContext })).state === "failed");
   assert.equal(launches, 1);
   const { onAttempt, onProgress, ...options } = execution;
   assert.equal(typeof onAttempt, "function");
   assert.equal(typeof onProgress, "function");
-  assert.deepEqual(options, { label: "reviewer", workflowName: "subagents", role: { name: "reviewer", model: "fixture/cheap" } });
-  assert.deepEqual((await manager.inspect({ id: launched.details.id }, context)).error, { code: "AGENT_FAILED", message: "agent failed" });
+  assert.deepEqual(options, { label: "reviewer", workflowName: "subagents", role: "reviewer", model: "fixture/cheap:high" });
+  assert.deepEqual((await manager.inspect({ id: launched.details.id }, { toolCallId: "lookup", signal: undefined, extensionContext })).error, { code: "AGENT_FAILED", message: "agent failed" });
   await rm(cwd, { recursive: true, force: true });
 });
 test("returns foreground terminal envelopes, preserves mode for retry, and suppresses follow-ups", async () => {

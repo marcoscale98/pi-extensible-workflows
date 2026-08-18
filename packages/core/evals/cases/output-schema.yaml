@@ -8,7 +8,6 @@ expectations:
   agentPolicies:
     - callIndex: 0
       role: scout
-      forbidOptions: [model, thinking, tools]
   requireOutputSchema:
     type: object
     requiredKeys: [count, summary]

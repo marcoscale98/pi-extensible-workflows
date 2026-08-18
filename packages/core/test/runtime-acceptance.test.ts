@@ -161,7 +161,7 @@ void test("cold resume persists effective role, fallback, nested, retry, and exp
   const cwd = join(home, "project");
   const store = new RunStore(cwd, "session-a", "run-a", home);
   const script = "const role = await agent(\"top role\", { role: \"reviewer\" }); const named = await agent(\"named\", { label: \"API inspection\" }); const parent = await agent(\"nested policies\"); return { role, named, parent };";
-  const role = { prompt: "Review role", model: "role-provider/role-model", thinking: "high" as const, tools: ["!*", "read"], skills: ["role-only"], extensions: [join(home, "role-only.ts")] };
+  const role = { prompt: "Review role", model: "role-provider/role-model:high", tools: ["!*", "read"], skills: ["role-only"], extensions: [join(home, "role-only.ts")] };
   const snapshot = createLaunchSnapshot({ script, args: null, metadata: { name: "policy-reporting" }, settings: { concurrency: 2 }, models: ["root-provider/root-model", "role-provider/role-model", "case-provider/model-only", "case-provider/model-and-thinking"], tools: ["agent", "read"], agentTypes: ["reviewer"], roles: { reviewer: role }, schemas: [] });
   await store.create({ id: "run-a", workflowName: "policy-reporting", cwd, sessionId: "session-a", state: "interrupted", agents: [], agentSessions: [] }, snapshot);
   await store.saveOwnership([]);
@@ -190,10 +190,10 @@ void test("cold resume persists effective role, fallback, nested, retry, and exp
         if (input.sessionLabel.endsWith(":root-model:attempt-1")) {
           await collectChild({ prompt: "nested role", label: "nested-role", role: "reviewer", retries: 1 });
           for (const options of [
-            { prompt: "model only", label: "model-only", model: "case-provider/model-only" },
-            { prompt: "thinking only", label: "thinking-only", thinking: "low" },
+            { prompt: "model only", label: "model-only", model: "case-provider/model-only:medium" },
+            { prompt: "thinking only", label: "thinking-only", model: "root-provider/root-model:low" },
             { prompt: "tools only", label: "tools-only", tools: ["!*", "read"] },
-            { prompt: "combined", label: "combined", model: "case-provider/model-and-thinking", thinking: "high", tools: ["!*", "read"] },
+            { prompt: "combined", label: "combined", model: "case-provider/model-and-thinking:high", tools: ["!*", "read"] },
           ]) await collectChild(options);
         }
       },

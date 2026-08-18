@@ -69,6 +69,9 @@ export function parseModelReference(value: string): ModelSpec {
   if (thinking !== undefined && !isThinkingLevel(thinking)) fail("UNKNOWN_MODEL", `Invalid thinking level: ${thinking}`);
   return { provider: match[1], model: match[2], ...(thinking !== undefined ? { thinking } : {}) };
 }
+export function assertModelThinking(value: string, path = "model"): void {
+  if (value.includes("/") && parseModelReference(value).thinking === undefined) fail("INVALID_METADATA", `${path} must be provider/model:thinking`);
+}
 const MODEL_ALIAS_ERROR_NAME = Symbol("modelAliasErrorName");
 type ModelAliasError = WorkflowError & { [MODEL_ALIAS_ERROR_NAME]?: string };
 function aliasError(message: string, settingsPath: string, name?: string): never {
