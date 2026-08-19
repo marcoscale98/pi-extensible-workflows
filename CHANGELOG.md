@@ -1,6 +1,13 @@
 # Changelog
 ## Unreleased
 
+## [5.6.1] - 2026-08-19
+
+### Fixes
+
+- Wait for background workflow log entries and completion follow-ups instead of a 100ms spin.
+
+
 ## [5.6.0] - 2026-08-18
 
 ### Breaking changes
