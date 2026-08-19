@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { testExtensionApi } from "./support.js";
+import { testExtensionApi, waitForIssue105 } from "./support.js";
 import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, RunStore, runWorkflow, validateCheckpoint, WorkflowError } from "../src/index.js";
 import { listRunIds } from "../src/persistence.js";
 
@@ -523,7 +523,7 @@ void test("background workflow logs append capped TUI-only transcript entries", 
   const execute = tools.find(({ name }) => name === "workflow")?.execute;
   assert.ok(execute);
   await execute("id", { name: "logger", script: `await log("working"); await log("😀".repeat(2000)); return true;`, foreground: false }, new AbortController().signal, undefined, { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } });
-  for (let attempt = 0; attempt < 100 && entries.length < 2; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  await waitForIssue105(() => entries.length >= 2);
   assert.equal(entries.length, 2);
   assert.deepEqual(entries[0], { type: "workflow-log", data: { workflowName: "logger", message: "working" } });
   const truncated = entries[1];

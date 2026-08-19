@@ -690,7 +690,8 @@ void test("moves an attached foreground workflow to background without restartin
   assert.deepEqual((await store.load()).run.delivery, { mode: "background", state: "pending" });
   release();
   await waitForIssue105(async () => (await store.load()).run.delivery?.state === "delivered");
-  assert.deepEqual(messages.filter((message) => message.startsWith("Workflow background-command completed:")), [messages.find((message) => message.startsWith("Workflow background-command completed:"))]);
+  await waitForIssue105(() => messages.some((message) => message.startsWith("Workflow background-command completed:")));
+  assert.equal(messages.filter((message) => message.startsWith("Workflow background-command completed:")).length, 1);
 });
 void test("detaching a checkpointed foreground workflow switches future prompts to follow-up delivery", { timeout: 10_000 }, async (t) => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-background-checkpoint-"));
