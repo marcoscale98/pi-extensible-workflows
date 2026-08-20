@@ -11,11 +11,32 @@ export interface ToolTimingEntry {
   readonly isError: boolean;
 }
 
-type ToolStart = Pick<ToolTimingEntry, "toolName" | "startedAt">;
+export const TOOL_TIMING_EXTENSION: ExtensionFactory = (pi: ExtensionAPI) => {
+  const starts = new Map<string, { toolName: string; startedAt: number }>();
+  pi.on("tool_execution_start", (event: ToolExecutionStartEvent) => {
+    starts.set(event.toolCallId, { toolName: event.toolName, startedAt: Date.now() });
+  });
+  pi.on("tool_execution_end", (event: ToolExecutionEndEvent) => {
+    const started = starts.get(event.toolCallId);
+    if (started === undefined) return;
+    starts.delete(event.toolCallId);
+    const completedAt = Date.now();
+    pi.appendEntry<ToolTimingEntry>("pi-workflows:tool-timing", {
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      startedAt: started.startedAt,
+      completedAt,
+      durationMs: Math.max(0, completedAt - started.startedAt),
+      isError: event.isError,
+    });
+  });
+  pi.on("session_shutdown", () => { starts.clear(); });
+};
 
 export function createToolTimingExtension(clock: () => number = Date.now): ExtensionFactory {
+  if (clock === Date.now) return TOOL_TIMING_EXTENSION;
   return (pi: ExtensionAPI) => {
-    const starts = new Map<string, ToolStart>();
+    const starts = new Map<string, { toolName: string; startedAt: number }>();
     pi.on("tool_execution_start", (event: ToolExecutionStartEvent) => {
       starts.set(event.toolCallId, { toolName: event.toolName, startedAt: clock() });
     });
@@ -33,5 +54,6 @@ export function createToolTimingExtension(clock: () => number = Date.now): Exten
         isError: event.isError,
       });
     });
+    pi.on("session_shutdown", () => { starts.clear(); });
   };
 }
