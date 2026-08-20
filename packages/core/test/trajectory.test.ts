@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { applySystemPrompts, applyToolDescriptions, trajectoryUrl } from "../src/trajectory.js";
 import type { PersistedRun } from "../src/persistence.js";
@@ -19,4 +20,13 @@ void test("applyToolDescriptions fills missing Pi tool descriptions", () => {
 
 void test("trajectoryUrl does not include an auth token", () => {
   assert.equal(trajectoryUrl(7432), "http://127.0.0.1:7432/");
+});
+
+void test("Trajectory agent grid groups persisted agent scopes", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /function agentGridGroups\(agents\)/);
+  assert.match(source, /JSON\.stringify\(\[agent\.structuralPath \?\? \[\], agent\.parentBreadcrumb \?\? null\]\)/);
+  assert.match(source, /agentGridGroups\(phaseAgents\)/);
+  assert.match(source, /class="agent-grid-scope"/);
+  assert.doesNotMatch(source, /const path = \[\.\.\.\(agent\.parentBreadcrumb/);
 });
