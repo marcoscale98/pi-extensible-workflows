@@ -31,7 +31,7 @@ Runs are backgrounded by default; set `foreground: true` to wait for the final v
 
 ## Included capabilities
 
-The single core installation provides workflows, the `reviewLoop` starter for developer-and-reviewer implementation cycles, and durable standalone subagent tools (`subagents_run`, `subagents_inspect`, `subagents_steer`, `subagents_stop`, and `subagents_retry`).
+The single core installation provides workflows, the `reviewLoop` starter for developer-and-reviewer implementation cycles, and durable standalone subagent tools (`subagents_run`, `subagents_inspect`, `subagents_steer`, `subagents_stop`, and `subagents_retry`). Roles and aliases are overridable; `reviewLoop` is not. See the [starter defaults](https://vekexasia.github.io/pi-extensible-workflows/extensions.html#starter).
 
 ### Companion packages
 

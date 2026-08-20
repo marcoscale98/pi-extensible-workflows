@@ -22,7 +22,7 @@ return await agent(
 );
 ```
 
-For implement-and-review tasks, the bundled starter exposes `reviewLoop({ task, maxIterations? })`. It alternates the packaged `developer` and `reviewer` roles until the reviewer passes the implementation or the iteration limit is reached.
+For implement-and-review tasks, the bundled starter exposes `reviewLoop({ task, maxIterations? })`. It alternates the packaged `developer` and `reviewer` roles until the reviewer passes the implementation or the iteration limit is reached. Global or project role files with those names override the packaged roles. Static `modelAliases` for `developer-model` and `reviewer-model` shadow the starter resolvers. A second `reviewLoop` function is `GLOBAL_COLLISION`; disable `starter/index.ts` in the Pi package filter, then register your own.
 
 ```js
 return await reviewLoop({ task: args.task });

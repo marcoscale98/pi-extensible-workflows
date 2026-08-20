@@ -16,7 +16,7 @@ Install the core workflow extension for deterministic orchestration:
 pi install npm:pi-extensible-workflows
 ```
 
-The core installation includes workflow orchestration, the `reviewLoop` starter, and standalone subagent tools. Add companion packages only for the capability you need:
+The core installation includes workflow orchestration, the `reviewLoop` starter, and standalone subagent tools. The starter ships `reviewLoop`, packaged `developer`/`reviewer` roles, and dynamic `developer-model`/`reviewer-model` aliases. Global or project roles with the same name override packaged roles. Static settings `modelAliases` shadow the dynamic resolvers. `reviewLoop` cannot be overridden: a duplicate name is `GLOBAL_COLLISION`. Disable the factory with a Pi package filter `"-starter/index.ts"` (local repo checkout: `"-packages/core/starter/index.ts"`), then register a replacement. See `docs/extensions.html#starter`. Add companion packages only for the capability you need:
 
 ```sh
 pi install npm:@piewf/herdr
@@ -79,13 +79,17 @@ Supported settings shape:
   },
   "skills": ["*", "!experimental-*"],
   "extensions": ["**/*", "!**/unsafe.mjs"],
-  "extensionSettings": { "herdr": { "enableFullyInspectableMode": true } },
+  "extensionSettings": { "herdr": { "enableFullyInspectableMode": true }, "trajectory": { "port": 7432, "themes": true } },
   "tools": ["*", "!write"],
   "retention": { "olderThanDays": 30, "maxTerminalRuns": 200 }
 }
 ```
-The supported resource fields are direct `skills`, `extensions`, and `tools` arrays. `skills` matches discovered skill names, `extensions` matches discovered normalized extension paths, and `tools` matches only the current root or parent tool boundary. Selectors never create unavailable resources. The legacy `disabledAgentResources` field is rejected; it is not an alias for these fields. `extensionSettings.herdr` is the only valid location for Herdr configuration; the obsolete `extensions.herdr` object is rejected.
+The supported resource fields are direct `skills`, `extensions`, and `tools` arrays. `skills` matches discovered skill names, `extensions` matches discovered normalized extension paths, and `tools` matches only the current root or parent tool boundary. Selectors never create unavailable resources. The legacy `disabledAgentResources` field is rejected; it is not an alias for these fields. Extension configuration belongs under `extensionSettings.herdr` or `extensionSettings.trajectory`; the obsolete `extensions.herdr` object is rejected.
 The strict top-level settings keys are exactly `concurrency`, `backgroundWidget`, `modelAliases`, `skills`, `extensions`, `extensionSettings`, `tools`, and `retention`. `backgroundWidget` is accepted only in the global file, and project settings may use the other keys. `retention` accepts positive integer `olderThanDays` and `maxTerminalRuns` limits. It is applied best-effort at session start to hard-terminal runs only (`completed`, `failed`, `stopped`); dependency and worktree safety rules can retain additional runs.
+
+### Trajectory
+
+`extensionSettings.trajectory.port` is the local Trajectory HTTP server port and must be a positive integer when configured. If Trajectory settings are absent, the server defaults to `7432`. `extensionSettings.trajectory.themes` enables the Harness, TTY, and Paper theme switcher; it defaults to `false` (TTY is always the default). `/workflow trajectory` starts or attaches to the local Trajectory server and opens its browser UI.
 
 ### Concurrency
 
