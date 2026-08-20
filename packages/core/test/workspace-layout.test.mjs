@@ -17,10 +17,11 @@ test("the repository keeps the public package in the core workspace", () => {
 
   assert.equal(root.private, true);
   assert.deepEqual(root.workspaces, ["packages/cli", "packages/core", "packages/extensions/*"]);
-  assert.deepEqual(root.pi.extensions, ["./packages/core/src/index.ts"]);
+  assert.deepEqual(root.pi.extensions, ["./packages/core/src/index.ts", "./packages/core/starter/index.ts", "./packages/core/subagents/index.ts"]);
   assert.equal(core.name, "pi-extensible-workflows");
   assert.equal(core.version, root.version);
   assert.notEqual(core.private, true);
+  assert.deepEqual(core.pi.extensions, ["./src/index.ts", "./starter/index.ts", "./subagents/index.ts"]);
   assert.deepEqual(core.exports, {
     ".": "./dist/src/index.js",
     "./persistence": "./dist/src/persistence.js",
@@ -32,6 +33,10 @@ test("the repository keeps the public package in the core workspace", () => {
     "./runtime": "./dist/src/runtime/index.js"
   });
   assert.equal(core.bin, undefined);
+  assert.ok(core.files.includes("starter"));
+  assert.ok(core.files.includes("subagents/index.ts"));
+  assert.ok(core.files.includes("subagents/src"));
+  assert.ok(core.files.includes("subagents/README.md"));
   assert.ok(core.files.includes("CHANGELOG.md"));
   assert.match(core.scripts.prepack, /stage-core-changelog\.mjs stage/);
   assert.match(core.scripts.postpack, /stage-core-changelog\.mjs clean/);

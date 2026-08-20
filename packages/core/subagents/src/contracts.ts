@@ -1,7 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { AgentActivity, AgentAccounting, AgentAttemptSummary, AgentExecutionOptions, AgentExecutionResult, AgentExecutionRoot, AgentProgress, AgentToolCallProgress, AgentTransport, LiveSessionHandoff, PreparedAgentSession, WorkflowAgentSession, WorkflowAgentSessionReference } from "pi-extensible-workflows";
-import { validateAgentOptions, WorkflowError } from "pi-extensible-workflows";
+import type { AgentActivity, AgentAccounting, AgentAttemptSummary, AgentExecutionOptions, AgentExecutionResult, AgentExecutionRoot, AgentProgress, AgentToolCallProgress, AgentTransport, LiveSessionHandoff, PreparedAgentSession, WorkflowAgentSession, WorkflowAgentSessionReference } from "../../src/index.js";
+import { validateAgentOptions, WorkflowError } from "../../src/index.js";
 import type { Static } from "typebox";
 import { Value } from "typebox/value";
 import type { SubagentWorktreeAdapter } from "./worktree.js";

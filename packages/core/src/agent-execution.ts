@@ -136,6 +136,10 @@ const workflowPackageRoot = basename(dirname(extensionDirectory)) === "dist" ? r
 const WORKFLOW_HOST_ENTRIES = new Set([
   canonicalSourcePath(resolve(workflowPackageRoot, "src/index.ts")),
   canonicalSourcePath(resolve(workflowPackageRoot, "dist/src/index.js")),
+  canonicalSourcePath(resolve(workflowPackageRoot, "starter/index.ts")),
+  canonicalSourcePath(resolve(workflowPackageRoot, "dist/starter/index.js")),
+  canonicalSourcePath(resolve(workflowPackageRoot, "subagents/index.ts")),
+  canonicalSourcePath(resolve(workflowPackageRoot, "dist/subagents/index.js")),
 ]);
 function canonicalExtensionSelector(selector: string, base = process.cwd()): string {
   const negated = selector.startsWith("!");

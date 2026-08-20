@@ -38,17 +38,17 @@
     <article class="prose">
       <p class="eyebrow">Extension paths</p>
       <h1>Use and build trusted workflow extensions</h1>
-      <p class="lead">Install the shipped Subagents and Herdr integrations, or author reusable workflow functions, dynamic model aliases, setup hooks, attempt actions, and packaged roles.</p>
+      <p class="lead">Install the core workflow package with its review starter and Subagents tools, add the Herdr integration when needed, or author reusable workflow functions, dynamic model aliases, setup hooks, attempt actions, and packaged roles.</p>
       <section id="shipped">
-        <h2>Shipped companion extensions</h2>
+        <h2>Shipped extensions</h2>
         <div class="table-wrap"><table>
           <thead><tr><th>Package</th><th>Use</th><th>Install</th></tr></thead>
           <tbody>
-            <tr><td><a href="subagents.html"><code>@piewf/subagents</code></a></td><td>Standalone single-shot agents with five durable lifecycle tools and the same roles and options as workflows.</td><td><code>pi install npm:@piewf/subagents</code></td></tr>
+            <tr><td><a href="developers.html"><code>pi-extensible-workflows</code></a></td><td>Deterministic workflows, the <code>reviewLoop</code> implementation-and-review starter, and durable standalone subagent tools.</td><td><code>pi install npm:pi-extensible-workflows</code></td></tr>
             <tr><td><a href="herdr.html"><code>@piewf/herdr</code></a></td><td>Live handoff, completed-session inspection, and fully inspectable workflow agents in Herdr.</td><td><code>pi install npm:@piewf/herdr</code></td></tr>
           </tbody>
         </table></div>
-        <p>Subagents works as a standalone Pi extension. Herdr complements the core workflow extension and activates only in a Herdr-managed pane. Each package has a dedicated guide linked above and a detailed package README in <code>packages/extensions/</code>.</p>
+        <p>The core package includes the starter and Subagents tools. Herdr complements the core workflow extension and activates only in a Herdr-managed pane. Each shipped capability has a dedicated guide linked above.</p>
       </section>
       <section id="start-here">
         <h2>Start here</h2>

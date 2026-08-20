@@ -7,6 +7,7 @@ The repository [README](https://github.com/vekexasia/pi-extensible-workflows#rea
 ## Install
 
 Requires Node.js 22.19 or newer. This is trusted Pi host code with the same filesystem and process access as Pi.
+The core installation includes workflow orchestration, the `reviewLoop` starter for implementation-and-review cycles, and durable standalone subagent tools. See the [Subagents guide](https://vekexasia.github.io/pi-extensible-workflows/subagents.html) for the bundled tools.
 
 ```sh
 pi install npm:pi-extensible-workflows

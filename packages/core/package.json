@@ -30,6 +30,10 @@
   "files": [
     "dist/src",
     "src",
+    "starter",
+    "subagents/index.ts",
+    "subagents/src",
+    "subagents/README.md",
     "skills",
     "evals",
     "examples",
@@ -37,10 +41,11 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "build": "rm -rf dist && tsc -p tsconfig.json && cp -R starter/roles dist/starter/roles",
     "lint": "eslint .",
-    "test": "npm run test:layout && npm run build && npm run test:widget && npm run test:run && npm run test:herdr",
+    "test": "npm run test:layout && npm run build && npm run test:widget && npm run test:run && npm run test:herdr && npm run test:subagents",
     "test:layout": "node --test --test-timeout=10000 --test-force-exit test/workspace-layout.test.mjs",
+    "test:subagents": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; PI_CODING_AGENT_DIR=\"$tmp\" node --test --test-timeout=30000 --test-force-exit subagents/test/index.test.mjs",
     "test:widget": "node --test --test-timeout=30000 --test-force-exit test/background-widget.test.mjs",
     "test:run": "files=${TEST_FILES:-$(find dist/test -name '*.test.js' ! -name 'navigator.test.js')}; printf '%s\\n' $files | xargs -n1 -P20 sh -c 'tmp=$(mktemp -d); agent=$(mktemp -d); trap '\"'\"'rm -rf \"$tmp\" \"$agent\"'\"'\"' EXIT; TMPDIR=\"$tmp\" PI_CODING_AGENT_DIR=\"$agent\" env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID node --expose-gc --test --test-concurrency=1 --test-timeout=120000 --test-force-exit --test-reporter=dot \"$1\"' sh",
     "test:herdr": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; TMPDIR=\"$tmp\" env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID node --expose-gc --test --test-concurrency=1 --test-timeout=120000 --test-force-exit --test-reporter=dot dist/test/navigator.test.js",
@@ -52,7 +57,9 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./src/index.ts",
+      "./starter/index.ts",
+      "./subagents/index.ts"
     ]
   },
   "peerDependencies": {

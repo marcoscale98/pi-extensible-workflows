@@ -1,6 +1,6 @@
 import type { AgentToolResult, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
-import { formatCost, formatStalledDuration, WORKFLOW_AGENT_STALL_THRESHOLD_MS } from "pi-extensible-workflows";
+import { formatCost, formatStalledDuration, WORKFLOW_AGENT_STALL_THRESHOLD_MS } from "../../src/index.js";
 import type { SubagentRunRequest, SubagentStatus } from "./contracts.js";
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;

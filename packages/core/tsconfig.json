@@ -13,5 +13,5 @@
     "noEmitOnError": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "starter/**/*.ts", "subagents/**/*.ts", "test/**/*.ts"]
 }

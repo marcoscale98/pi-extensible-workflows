@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { copyToClipboard, getAgentDir, SettingsManager, type ExtensionAPI, type ExtensionCommandContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Editor, truncateToWidth, type EditorTheme } from "@earendil-works/pi-tui";
-import { agentActionLabels, deepFreeze, errorText, formatAgentDetail, jsonValue, loadingRegistry, navigatorAttentionSortByState, openWorkflowArtifact, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions, workflowPromptArtifact, workflowResultArtifact, type AgentAttemptSummary, type AgentDetailPresentation, type StandaloneAgentAttemptActionContext, type WorkflowArtifact } from "pi-extensible-workflows";
+import { agentActionLabels, deepFreeze, errorText, formatAgentDetail, jsonValue, loadingRegistry, navigatorAttentionSortByState, openWorkflowArtifact, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions, workflowPromptArtifact, workflowResultArtifact, type AgentAttemptSummary, type AgentDetailPresentation, type StandaloneAgentAttemptActionContext, type WorkflowArtifact } from "../../src/index.js";
 import { normalizeSubagentRunRequest, SUBAGENT_ATTEMPT_DETAILS_LIMIT, type SubagentManager, type SubagentManagerContext, type SubagentRunRequest, type SubagentStatus } from "./contracts.js";
 const MAX_DETAIL_TEXT = 4000;
 const MAX_DETAIL_TOOL_CALLS = 32;

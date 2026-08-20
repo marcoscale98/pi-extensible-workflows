@@ -22,6 +22,12 @@ return await agent(
 );
 ```
 
+For implement-and-review tasks, the bundled starter exposes `reviewLoop({ task, maxIterations? })`. It alternates the packaged `developer` and `reviewer` roles until the reviewer passes the implementation or the iteration limit is reached.
+
+```js
+return await reviewLoop({ task: args.task });
+```
+
 Await `parallel(...)` or `pipeline(...)` results before interpolation. Use `/workflow` to open the picker and select a run for contextual actions such as moving an attached foreground workflow to the background.
 
 ## Runtime and safety rules

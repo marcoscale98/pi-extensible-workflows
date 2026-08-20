@@ -35,22 +35,22 @@
     <article class="prose">
       <p class="eyebrow">Single-shot agent path</p>
       <h1>Run focused agents with durable controls</h1>
-      <p class="lead"><code>@piewf/subagents</code> launches one independent Pi agent session per task. Start work in the background or wait in the foreground, then inspect, steer, stop, or retry the run by durable ID.</p>
+      <p class="lead">The core <code>pi-extensible-workflows</code> package includes durable standalone subagent tools. Start work in the background or wait in the foreground, then inspect, steer, stop, or retry the run by durable ID.</p>
       <section id="overview">
         <h2>Overview</h2>
         <p>Subagents are for single-shot orchestration, not necessarily one model turn. One <code>subagents_run</code> call creates one agent session from one task; that agent can reason across turns, use tools, and accept steering while it runs.</p>
-        <p>The package works as a standalone Pi extension. It reuses the same role files, model aliases, settings, resource policy, worktree implementation, and agent-option validation as core workflows, without requiring you to write a workflow script.</p>
+        <p>The built-in tools reuse the same role files, model aliases, settings, resource policy, worktree implementation, and agent-option validation as core workflows, without requiring you to write a workflow script.</p>
       </section>
       <section id="installation">
         <h2>Installation and trust</h2>
-        <p>Use Node.js 22.19 or newer. This package is trusted Pi host code with the same filesystem and process access as Pi. Install it only from a source you trust.</p>
-        <pre><code class="language-shell"><span class="tok-command">pi</span> install npm:@piewf/subagents</code></pre>
-        <p>No separate <code>pi-extensible-workflows</code> installation is required for the five standalone tools. Install the core workflow extension separately when you also want workflow orchestration.</p>
+        <p>Use Node.js 22.19 or newer. The core package is trusted Pi host code with the same filesystem and process access as Pi. Install it only from a source you trust.</p>
+        <pre><code class="language-shell"><span class="tok-command">pi</span> install npm:pi-extensible-workflows</code></pre>
+        <p>This single installation provides workflow orchestration, the <code>reviewLoop</code> starter, and the five standalone subagent tools.</p>
       </section>
       <section id="choose">
         <h2>Choose Subagents or workflows</h2>
         <div class="table-wrap"><table>
-          <thead><tr><th><code>@piewf/subagents</code></th><th><code>pi-extensible-workflows</code></th></tr></thead>
+          <thead><tr><th>Built-in subagent tools</th><th><code>pi-extensible-workflows</code> workflows</th></tr></thead>
           <tbody>
             <tr><td>One independently launched agent per run.</td><td>A deterministic script orchestrating one or more agents.</td></tr>
             <tr><td>One task with a durable ID and lifecycle controls.</td><td>Stages, dependencies, approvals, budgets, replay, and resume.</td></tr>
@@ -112,7 +112,7 @@
       </section>
       <section class="callout">
         <h2>Detailed package reference</h2>
-        <p>See the <a href="https://github.com/vekexasia/pi-extensible-workflows/blob/main/packages/extensions/subagents/README.md">Subagents package README</a> for exact schemas, persistence details, programmatic host integration, and version migration notes.</p>
+        <p>See the <a href="https://github.com/vekexasia/pi-extensible-workflows/blob/main/packages/core/subagents/README.md">core subagents README</a> for exact schemas, persistence details, programmatic host integration, and version migration notes.</p>
       </section>
       <p class="back-link"><a href="index.html">&lt; Back to documentation home</a></p>
     </article>

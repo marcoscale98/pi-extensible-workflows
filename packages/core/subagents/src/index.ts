@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { defineTool, getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
-import { WorkflowError } from "pi-extensible-workflows";
+import { WorkflowError } from "../../src/index.js";
 import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentStatus, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
 import { registerSubagentNavigator } from "./navigator.js";

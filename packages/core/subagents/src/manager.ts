@@ -35,8 +35,8 @@ import {
   type WorkflowAgentSessionState,
   type WorkflowRunContext,
   SerialLane,
-} from "pi-extensible-workflows";
-import { atomicJson, json as readJson, processAlive } from "pi-extensible-workflows/persistence";
+} from "../../src/index.js";
+import { atomicJson, json as readJson, processAlive } from "../../src/persistence.js";
 import {
   SUBAGENT_ATTEMPT_DETAILS_LIMIT,
   SUBAGENT_MAX_RETRIES,
@@ -122,8 +122,8 @@ type LiveRun = {
   readonly finalizedAttemptAccounting: Map<number, AgentAccounting>;
   attemptDetails: readonly AgentAttemptSummary[] | undefined;
   attempts: number | undefined;
-  prepared: Readonly<import("pi-extensible-workflows").PreparedAgentSession> | undefined;
-  handoff: import("pi-extensible-workflows").LiveSessionHandoff | undefined;
+  prepared: Readonly<import("../../src/index.js").PreparedAgentSession> | undefined;
+  handoff: import("../../src/index.js").LiveSessionHandoff | undefined;
   worktree: SubagentWorktreeHandle | undefined;
   worktreeContext: SubagentWorktreeContext | undefined;
   worktreeCleanup: Promise<void> | undefined;

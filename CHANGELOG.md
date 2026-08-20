@@ -1,6 +1,14 @@
 # Changelog
 ## Unreleased
 
+### New capabilities
+
+- Added the bundled `reviewLoop` starter, packaged developer and reviewer roles, and durable standalone subagent tools to the core package.
+
+### Packaging
+
+- Moved standalone subagents into core and stopped publishing `@piewf/subagents` as a separate package.
+
 ## [5.6.1] - 2026-08-19
 
 ### Fixes

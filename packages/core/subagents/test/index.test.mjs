@@ -1,12 +1,10 @@
-/* global URL, setTimeout, setImmediate */
+/* global setTimeout, setImmediate */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
 import extension, {
@@ -20,9 +18,8 @@ import extension, {
   SUBAGENTS_RUN_PARAMETERS,
   SUBAGENTS_STEER_PARAMETERS,
   SUBAGENTS_STOP_PARAMETERS,
-} from "../dist/index.js";
+} from "../../dist/subagents/index.js";
 
-const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const toolNames = [
   "subagents_run",
   "subagents_inspect",
@@ -989,16 +986,6 @@ test("exposes closed tool schemas and minimal prompt guidance", () => {
   assert.deepEqual(Object.keys(SUBAGENTS_STEER_PARAMETERS.properties), ["id", "message"]);
   assert.deepEqual(SUBAGENTS_STEER_PARAMETERS.required, ["id", "message"]);
   assert.equal(SUBAGENTS_STEER_PARAMETERS.additionalProperties, false);
-});
-test("publishes discoverable extension artifacts", () => {
-  const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
-  assert.deepEqual(manifest.pi.extensions, ["./dist/index.js"]);
-  const packed = JSON.parse(execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: packageRoot, encoding: "utf8" }));
-  const paths = new Set(packed[0].files.map(({ path }) => path));
-  assert.equal(paths.has("dist/index.js"), true);
-  assert.equal(paths.has("README.md"), true);
-  assert.equal(paths.has("package.json"), true);
-  assert.equal([...paths].some((path) => path.startsWith("src/")), false);
 });
 async function executionContext(cwd, signal) {
   const models = [

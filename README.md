@@ -29,9 +29,12 @@ return agent(prompt("Summarize these reports:\n\n{reports}", { reports }));
 
 Runs are backgrounded by default; set `foreground: true` to wait for the final value. Use `pipeline()` for staged work, `withWorktree()` for isolation, and `checkpoint()` for approval.
 
-## Companion packages
+## Included capabilities
 
-- [`@piewf/subagents`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/extensions/subagents) (`pi install npm:@piewf/subagents`): durable single-shot agents.
+The single core installation provides workflows, the `reviewLoop` starter for developer-and-reviewer implementation cycles, and durable standalone subagent tools (`subagents_run`, `subagents_inspect`, `subagents_steer`, `subagents_stop`, and `subagents_retry`).
+
+### Companion packages
+
 - [`@piewf/herdr`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/extensions/herdr) (`pi install npm:@piewf/herdr`): workflow-agent sessions in Herdr panes.
 - [`@piewf/cli`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/cli) (`pi install npm:@piewf/cli`): the `piewf` command for workflow operations.
 

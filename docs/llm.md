@@ -16,18 +16,16 @@ Install the core workflow extension for deterministic orchestration:
 pi install npm:pi-extensible-workflows
 ```
 
-Install companion packages only for the capability you need:
+The core installation includes workflow orchestration, the `reviewLoop` starter, and standalone subagent tools. Add companion packages only for the capability you need:
 
 ```sh
-pi install npm:@piewf/subagents
 pi install npm:@piewf/herdr
 pi install npm:@piewf/cli
 ```
 
 | Package | Select it when |
 | --- | --- |
-| `pi-extensible-workflows` | The task needs a deterministic script, multiple agents or stages, approvals, budgets, worktrees, replay, or resume. |
-| `@piewf/subagents` | The task needs one independent agent run with a durable ID and lifecycle controls, without a workflow script. It works standalone. |
+| `pi-extensible-workflows` | The task needs workflows, the `reviewLoop` implementation-and-review starter, or one independent subagent run with a durable ID and lifecycle controls. |
 | `@piewf/herdr` | Core workflow agents need live handoff, completed-session inspection, or fully inspectable execution in Herdr. Core must also be loaded. |
 | `@piewf/cli` | A terminal needs doctor, inspection, headless registered-function execution, export, or bundle commands. |
 
@@ -125,7 +123,7 @@ Treat `code` and named fields as the machine contract, tolerate omitted optional
 
 ## Standalone Subagents
 
-Use `@piewf/subagents` for one independently launched agent session per task. Single-shot means one agent run rather than a workflow graph; the agent may use tools, take multiple turns, and accept steering.
+The core package's built-in subagent tools launch one independent agent session per task. Single-shot means one agent run rather than a workflow graph; the agent may use tools, take multiple turns, and accept steering.
 
 The model-facing surface is exactly:
 

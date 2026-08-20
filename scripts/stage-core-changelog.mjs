@@ -10,11 +10,12 @@ const action = process.argv[2];
 
 function stage() {
   if (existsSync(destination)) throw new Error(`Refusing to overwrite ${destination}`);
-  mkdirSync(dirname(marker), { recursive: true });
-  writeFileSync(marker, "");
   try {
+    mkdirSync(dirname(marker), { recursive: true });
+    writeFileSync(marker, "");
     copyFileSync(source, destination);
   } catch (error) {
+    rmSync(destination, { force: true });
     rmSync(marker, { force: true });
     throw error;
   }

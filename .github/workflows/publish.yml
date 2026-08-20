@@ -26,10 +26,9 @@ jobs:
           version=$(node -p "require('./packages/core/package.json').version")
           cli_version=$(node -p "require('./packages/cli/package.json').version")
           herdr_version=$(node -p "require('./packages/extensions/herdr/package.json').version")
-          subagents_version=$(node -p "require('./packages/extensions/subagents/package.json').version")
           root_version=$(node -p "require('./package.json').version")
-          if [ "$version" != "$root_version" ] || [ "$version" != "$cli_version" ] || [ "$version" != "$herdr_version" ] || [ "$version" != "$subagents_version" ]; then
-            echo "Package versions differ: root=$root_version core=$version cli=$cli_version herdr=$herdr_version subagents=$subagents_version" >&2
+          if [ "$version" != "$root_version" ] || [ "$version" != "$cli_version" ] || [ "$version" != "$herdr_version" ]; then
+            echo "Package versions differ: root=$root_version core=$version cli=$cli_version herdr=$herdr_version" >&2
             exit 1
           fi
           if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
@@ -45,7 +44,6 @@ jobs:
           npm pack --dry-run --json --workspace=packages/core
           npm pack --dry-run --json --workspace=packages/cli
           npm pack --dry-run --json --workspace=packages/extensions/herdr
-          npm pack --dry-run --json --workspace=packages/extensions/subagents
       - name: Publish missing packages
         run: |
           publish() {
@@ -62,4 +60,3 @@ jobs:
           publish packages/core
           publish packages/cli
           publish packages/extensions/herdr
-          publish packages/extensions/subagents

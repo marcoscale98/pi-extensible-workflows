@@ -1,14 +1,14 @@
-# `@piewf/subagents`
+# Built-in subagent extension
 
 Single-shot agents for Pi: each run launches one independent agent session from one task, without writing a workflow script. Single-shot describes the orchestration shape, not one model turn; the agent can use tools and accept steering while it runs.
 
 [Full Subagents documentation](https://vekexasia.github.io/pi-extensible-workflows/subagents.html) | [Main package](https://github.com/vekexasia/pi-extensible-workflows#readme) | [Roles](https://vekexasia.github.io/pi-extensible-workflows/roles.html) | [Settings](https://vekexasia.github.io/pi-extensible-workflows/developers.html#settings)
 
-Use `@piewf/subagents` for focused, independent tasks. Use `pi-extensible-workflows` when work needs dependency batches, parallel or pipeline stages, checkpoints, approvals, or resumable orchestration.
+Use the built-in subagent tools for focused, independent tasks. Use `pi-extensible-workflows` when work needs dependency batches, parallel or pipeline stages, checkpoints, approvals, or resumable orchestration.
 
 ## Subagents vs workflows
 
-| `@piewf/subagents` | `pi-extensible-workflows` |
+| Built-in subagent tools | `pi-extensible-workflows` |
 | --- | --- |
 | One independently launched agent per run | A deterministic script orchestrating one or more agents |
 | One task with a durable ID and lifecycle controls | Multi-stage coordination, dependencies, approvals, replay, and resume |
@@ -21,13 +21,7 @@ Use `@piewf/subagents` for focused, independent tasks. Use `pi-extensible-workfl
 - Reuses workflow roles, model aliases, settings, and agent options: `label`, `model`, `tools`, `skills`, `extensions`, `contextFiles`, `worktree`, `outputSchema`, `retries` (0 through 255), and `timeoutMs`.
 - Repeatable inspection of progress, token accounting, tool calls, results, failures, and worktrees.
 
-## Install
-
-```sh
-pi install npm:@piewf/subagents
-```
-
-Use Node.js 22.19 or newer. No separate `pi-extensible-workflows` installation is required for the standalone subagent tools. The package is trusted Pi host code with the same filesystem and process access as Pi.
+Built-in subagent tools are available when the core extension is installed. Use the core package's Pi extension manifest to enable them.
 
 ## Quick start
 
@@ -118,10 +112,10 @@ The current Pi model, thinking level, active tools, project trust, session ID, r
 
 ## Programmatic host integration
 
-Pi discovers the package through its `pi.extensions` manifest. The compiled entry point is `dist/index.js`. The following host-integration sketch is pseudocode; Pi supplies `pi` and a host may supply the optional manager:
+Pi discovers this extension through the core package's `pi.extensions` manifest. The manifest entry point is `subagents/index.ts` in the core package; Pi loads this TypeScript entry directly. The following host-integration sketch is pseudocode; Pi supplies `pi` and a host may supply the optional manager:
 
 ```ts
-import extension, { type SubagentManager } from "@piewf/subagents";
+import extension, { type SubagentManager } from "./index.js";
 
 const manager: SubagentManager = /* host implementation, or omit this option */;
 extension(pi, { manager });

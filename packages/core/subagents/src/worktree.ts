@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { LAUNCH_SNAPSHOT_IDENTITY_VERSION, RunStore, type LaunchSnapshot, type PersistedRun, type WorktreeReference } from "pi-extensible-workflows";
+import { LAUNCH_SNAPSHOT_IDENTITY_VERSION, RunStore, type LaunchSnapshot, type PersistedRun, type WorktreeReference } from "../../src/index.js";
 
 export interface SubagentWorktreeContext {
   readonly cwd: string;
