@@ -1,6 +1,8 @@
 # Changelog
 ## Unreleased
 
+## [5.7.0] - 2026-08-20
+
 ### New capabilities
 
 - Added the bundled `reviewLoop` starter, packaged developer and reviewer roles, and durable standalone subagent tools to the core package.
