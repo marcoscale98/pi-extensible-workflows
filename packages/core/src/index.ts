@@ -1,4 +1,6 @@
 export * from "./types.js";
+export { createToolTimingExtension, TOOL_TIMING_ENTRY_TYPE } from "./tool-timing.js";
+export type { ToolTimingEntry } from "./tool-timing.js";
 export * from "./utils.js";
 export * from "./budget.js";
 export * from "./validation.js";

@@ -49,6 +49,7 @@ import { SerialLane, assertModelThinking, deepFreeze, errorText, jsonObject, jso
 import { type AgentState, type ThinkingLevel } from "./types.js";
 import { WorkflowError } from "./types.js";
 import { createLiveSessionHandoff } from "./session-handoff.js";
+import { createToolTimingExtension } from "./tool-timing.js";
 import { normalizePiMessage, normalizePiSessionEvent, runtimeProgressToAgentProgress } from "./pi-runtime-adapter.js";
 import { createPiRuntimeAgentRunner, isRuntimeAgentProviderError, normalizePiRuntimeError } from "./pi-runtime-runner.js";
 import type { RuntimeAgentProgress, RuntimeUsage } from "./runtime/agent-runner.js";
@@ -386,7 +387,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     cwd: prepared.cwd, model: { ...prepared.model }, tools: [...prepared.tools] as SessionInput["tools"], sessionLabel: prepared.sessionLabel,
     ...(prepared.agentDir ? { agentDir: prepared.agentDir } : {}), ...(prepared.customTools?.length ? { customTools: [...prepared.customTools] as NonNullable<SessionInput["customTools"]> } : {}),
     ...(prepared.resultTool ? { resultTool: prepared.resultTool } : {}), ...(prepared.systemPrompt === undefined ? {} : { systemPrompt: prepared.systemPrompt }),
-    ...(prepared.systemPromptAppend ? { systemPromptAppend: prepared.systemPromptAppend } : {}), ...(prepared.extensionFactories?.length ? { extensionFactories: [...prepared.extensionFactories] } : {}),
+    ...(prepared.systemPromptAppend ? { systemPromptAppend: prepared.systemPromptAppend } : {}), extensionFactories: [...(prepared.extensionFactories ?? []), createToolTimingExtension()],
     ...(prepared.additionalSkillPaths?.length ? { additionalSkillPaths: [...prepared.additionalSkillPaths] } : {}), ...(prepared.contextFiles === undefined ? {} : { contextFiles: [...prepared.contextFiles] }), ...(prepared.resourcePolicy ? { resourcePolicy: structuredClone(prepared.resourcePolicy) } : {}), ...(prepared.options ? { options: { ...prepared.options } } : {}),
   };
   let nativeHandle = await createLocalPiSessionHandle(input);

@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### New capabilities
+
+- Trajectory records per-tool wall-clock execution timing in workflow-agent session JSONL and displays completed and failed tool durations across its event, agent, inspector, and Gantt views ([#212](https://github.com/vekexasia/pi-extensible-workflows/issues/212)).
+
 ## [5.7.0] - 2026-08-20
 
 ### New capabilities
