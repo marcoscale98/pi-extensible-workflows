@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trajectory</title>
+  <style>
+    :root {
+      --font: "Segoe UI", "SF Pro Text", "Helvetica Neue", sans-serif;
+      --bg: #141414; --bg-2: #1b1b1b; --bg-3: #222; --bg-hover: #2a2a2a; --bg-sel: #2a3140;
+      --line: #2c2c2c; --text: #e8e8e8; --dim: #8d8d8d; --mute: #5c5c5c; --accent: #6ea0ff;
+      --ok: #3ecf8e; --warn: #e6c35c; --err: #e25d5d; --left: 300px; --right: 360px;
+      --side: #101010; --insp: #161616;
+    }
+    html[data-theme="tty"] {
+      --font: ui-monospace, "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+      --bg: #1e1e2e; --bg-2: #181825; --bg-3: #313244; --bg-hover: #313244; --bg-sel: #45475a;
+      --line: #313244; --text: #cdd6f4; --dim: #a6adc8; --mute: #6c7086; --accent: #89b4fa;
+      --ok: #a6e3a1; --warn: #f9e2af; --err: #f38ba8; --side: #181825; --insp: #181825;
+    }
+    html[data-theme="paper"] {
+      --font: "Segoe UI", "SF Pro Text", "Helvetica Neue", sans-serif;
+      --bg: #f6f7f8; --bg-2: #eef0f2; --bg-3: #e4e7eb; --bg-hover: #e8eaed; --bg-sel: #dbe7ff;
+      --line: #d8dce2; --text: #121417; --dim: #5b6370; --mute: #8b929c; --accent: #2563eb;
+      --ok: #17803d; --warn: #b45309; --err: #c41c1c; --side: #eef0f2; --insp: #f3f4f6;
+    }
+    * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--mute) var(--bg-2); }
+    *::-webkit-scrollbar { width: 10px; height: 10px; }
+    *::-webkit-scrollbar-track { background: var(--bg-2); }
+    *::-webkit-scrollbar-thumb { background: var(--mute); border: 2px solid var(--bg-2); border-radius: 6px; }
+    *::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+    :root, html[data-theme="tty"], html[data-theme="harness"] { color-scheme: dark; }
+    html[data-theme="paper"] { color-scheme: light; }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 var(--font); }
+    html[data-theme="tty"] body { letter-spacing: -0.02em; }
+    html[data-theme="tty"] * { border-radius: 0 !important; }
+    button, input { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    .app { height: 100%; display: flex; min-width: 0; }
+    .sidebar { width: var(--left); flex: none; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 12px 10px; overflow: auto; min-width: 180px; }
+    .splitbar { width: 5px; flex: none; cursor: col-resize; background: var(--line); }
+    .splitbar:hover, .splitbar.drag { background: var(--accent); }
+    .brand { font-size: 11px; letter-spacing: .12em; color: var(--dim); font-weight: 600; padding: 4px 8px 12px; display: flex; align-items: center; gap: 6px; }
+    .brand .tab { border: 1px solid var(--line); background: var(--bg-3); color: var(--dim); padding: 2px 5px; font-size: 9px; }
+    .brand .tab.on { color: var(--accent); border-color: var(--accent); }
+    .group { margin-bottom: 14px; }
+    .pub { border-radius: 8px; padding: 8px 10px; }
+    .pub.on { background: #1c1c1c; }
+    .pub .row { display: flex; align-items: center; gap: 8px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mute); }
+    .dot.live { background: var(--ok); box-shadow: 0 0 0 3px #3ecf8e22; }
+    .pub .name { font-weight: 600; }
+    .pub .meta { color: var(--dim); font-size: 11px; margin-top: 3px; padding-left: 15px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .attn { margin-left: auto; font-size: 10px; color: var(--warn); font-weight: 600; }
+    .children { margin: 2px 0 0 12px; padding: 4px 0 2px 10px; border-left: 1px solid #333; }
+    .run-item { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 1px; width: 100%; text-align: left; border: 0; background: none; color: var(--dim); padding: 6px 8px; border-radius: 6px; font-size: 12px; }
+    .run-item.on { background: #1c2433; color: var(--text); }
+    .g-run { width: 14px; flex: none; display: inline-block; text-align: center; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; line-height: 1; }
+    .run-item .g-run { grid-row: 1 / 3; align-self: center; }
+    .g-run.ok { color: var(--ok); }
+    .g-run.wait { color: var(--warn); }
+    .g-run.fail { color: var(--err); }
+    .g-run.queued, .g-run.paused { color: var(--mute); }
+    .g-run.spin { color: var(--accent); }
+    .g-run.spin::before { content: "⠋"; animation: braille .8s linear infinite; }
+    .g-run.budget { color: var(--warn); }
+    @keyframes braille {
+      0% { content: "⠋"; } 12% { content: "⠙"; } 25% { content: "⠹"; } 37% { content: "⠸"; }
+      50% { content: "⠼"; } 62% { content: "⠴"; } 75% { content: "⠦"; } 87% { content: "⠧"; } 100% { content: "⠇"; }
+    }
+    .run-item .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-item .await { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; background: #3a3214; color: var(--warn); }
+    .run-item .tel { grid-column: 2 / 4; font-size: 10px; color: var(--mute); font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .top { display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+    .crumb { color: var(--dim); font-size: 12px; }
+    .crumb a { color: var(--accent); text-decoration: none; cursor: pointer; }
+    .run-stats { margin-left: auto; color: var(--dim); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; display: flex; align-items: center; gap: 8px; }
+    .hidden { display: none !important; }
+    .toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+    .seg button { background: none; border: 0; color: var(--dim); padding: 4px 8px; border-radius: 4px; }
+    .seg button.on { background: var(--bg-3); color: var(--text); }
+    .search { margin-left: auto; background: var(--bg-3); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; width: 180px; }
+    .body { flex: 1; min-height: 0; display: flex; }
+    .inspector { width: var(--right); flex: none; border-left: 1px solid var(--line); background: var(--insp); overflow: hidden; min-width: 220px; display: flex; flex-direction: column; }
+    .inspector .ins-head, .inspector .itabs { flex: none; }
+    .inspector .ins-body { flex: 1; min-height: 0; overflow: auto; }
+    #tool-pane, #sys-pane { overflow: visible; }
+    .inspector .code:not(.script) { flex: 1; max-height: none; min-height: 0; }
+    @media (max-width: 900px) {
+      .app { flex-direction: column; overflow: auto; }
+      .sidebar, .inspector { width: 100% !important; min-width: 0; max-height: 28vh; }
+      .splitbar { display: none; }
+      .stage { min-height: 48vh; }
+      .top, .toolbar { flex-wrap: wrap; }
+      .run-stats { margin-left: 0; width: 100%; }
+      .search { width: 100%; margin: 6px 0 0; }
+      .modal { inset: 8px; }
+      .lane { grid-template-columns: 16px 56px 1fr; }
+    }
+    .swim { padding: 8px 14px 12px; border-bottom: 1px solid var(--line); background: linear-gradient(#1d1d1d 1px, transparent 1px) 0 0 / 100% 18px, linear-gradient(90deg, #1d1d1d 1px, transparent 1px) 0 0 / 24px 100%, #151515; position: relative; user-select: none; }
+    .brush { position: absolute; top: 22px; bottom: 8px; background: #6ea0ff22; border-left: 1px solid #6ea0ff99; border-right: 1px solid #6ea0ff99; pointer-events: none; z-index: 3; }
+    .timeline { position: relative; }
+    .axis { display: grid; grid-template-columns: 92px 1fr; margin-bottom: 6px; font: 10px ui-monospace, Menlo, Consolas, monospace; color: var(--mute); }
+    .axis .ticks { display: flex; justify-content: space-between; position: relative; }
+    .now { position: absolute; top: 22px; bottom: 8px; width: 1px; background: #e25d5d; z-index: 2; }
+    .now span { position: absolute; top: -14px; left: 4px; color: #e25d5d; font: 10px ui-monospace, Menlo, Consolas, monospace; }
+    .lane { display: grid; grid-template-columns: 16px 76px 1fr; gap: 8px; align-items: center; height: 18px; margin: 3px 0; cursor: pointer; border-radius: 3px; }
+    .lane:hover { background: #ffffff08; }
+    .lane.child { padding-left: 12px; grid-template-columns: 16px 64px 1fr; }
+    .lane.crumb { cursor: default; opacity: .85; }
+    .lane.crumb:hover { background: none; }
+    .lane.crumb .lab { text-align: left; color: #9aa; font-style: italic; }
+    .bar.crumb { background: #ffffff18; height: 4px; top: 3px; }
+    .crumbband { font-size: 11px; color: #9aa; padding: 4px 12px 2px 28px; font-family: ui-monospace, Menlo, Consolas, monospace; font-style: italic; }
+    .lane .lab { color: var(--mute); font-size: 11px; text-align: right; overflow: hidden; white-space: nowrap; }
+    .track { position: relative; height: 10px; }
+    .bar { position: absolute; top: 0; height: 10px; border-radius: 2px; }
+    .bar.ok { background: #2f6f55; }
+    .bar.spin { background: #6ea0ff; }
+    .bar.fail { background: var(--err); }
+    .bar.wait { background: var(--warn); }
+    .bar.paused { background: #555; }
+    .split { flex: 1; min-height: 0; display: flex; }
+    .list { flex: 1; overflow: auto; padding: 8px 0; }
+    .workflow-card { border-bottom: 1px solid var(--line); }
+    .workflow-head { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; width: 100%; align-items: center; padding: 8px 12px; border: 0; background: none; color: inherit; text-align: left; }
+    .workflow-head:hover, .workflow-head.on { background: var(--bg-sel); }
+    .workflow-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .workflow-meta { color: var(--dim); font: 11px ui-monospace, Menlo, Consolas, monospace; white-space: nowrap; }
+    .agent-grid { min-width: 720px; padding: 0 12px 8px 28px; }
+    .agent-grid-head, .agent-grid-row { display: grid; grid-template-columns: minmax(220px, 2fr) minmax(140px, 1.2fr) 80px 72px 64px 58px; gap: 8px; align-items: center; }
+    .agent-grid-head { padding: 4px 8px; color: var(--mute); font-size: 10px; letter-spacing: .05em; }
+    .agent-grid-row { min-height: 24px; padding: 3px 8px; cursor: pointer; font-size: 11px; }
+    .agent-grid-row:hover, .agent-grid-row.on { background: var(--bg-hover); }
+    .agent-grid-row .agent-cell { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-grid-row .agent-cell:first-child { color: var(--text); font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .agent-grid-row .agent-path { color: var(--mute); }
+    .agent-grid-row .num { color: var(--dim); text-align: right; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .agent-grid .phaseband { padding-left: 8px; }
+    .row { display: grid; grid-template-columns: 16px 1fr; gap: 8px; align-items: center; padding: 3px 12px; cursor: pointer; }
+    .row.child { padding-left: 28px; }
+    .row:hover { background: var(--bg-hover); }
+    .row.on { background: var(--bg-sel); }
+    .tree { color: var(--dim); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+    .tree .nm { color: var(--text); }
+    .note { color: var(--err); font-size: 11px; }
+    .phaseband { font-size: 11px; color: #5ec8d6; padding: 8px 12px 2px; letter-spacing: .04em; }
+    .timeline { padding: 6px 12px 8px; border-bottom: 1px solid var(--line); background: linear-gradient(#1d1d1d 1px, transparent 1px) 0 0 / 100% 16px, linear-gradient(90deg, #1d1d1d 1px, transparent 1px) 0 0 / 18px 100%, #151515; position: relative; user-select: none; }
+    .timeline > .brush { top: 2px; bottom: 2px; }
+    .tl-lane { display: grid; grid-template-columns: 44px 1fr; gap: 8px; align-items: center; height: 16px; }
+    .tl-lane .lab { font-size: 10px; color: var(--mute); }
+    .ticks { position: relative; height: 12px; }
+    .tick { position: absolute; top: 2px; width: 8px; height: 8px; border-radius: 1px; }
+    .tick.in { background: #3ecf8e; }
+    .tick.model { background: #7b6ad8; }
+    .tick.tl { background: #c47a20; }
+    .tick.err { background: var(--err); }
+    .events { flex: 1; overflow: auto; }
+    .evt { display: grid; grid-template-columns: 13.5rem 86px minmax(0, 1fr); gap: 14px; align-items: center; padding: 5px 12px; cursor: pointer; border-left: 2px solid transparent; }
+    .evt > .pill { justify-self: end; }
+    .evt:hover { background: var(--bg-hover); }
+    .evt.on { background: #243044; border-left-color: var(--accent); }
+    .evt .gutter { color: var(--mute); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pill { display: inline-block; width: max-content; min-width: 0; font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 2px 6px; border-radius: 3px; text-align: center; }
+    .pill.system { background: #3a3a3a; color: #ddd; }
+    .pill.user { background: #2a4a7a; color: #cfe0ff; }
+    .pill.context { background: #1d5a3a; color: #b8f5d4; }
+    .pill.assistant { background: #3d2f6a; color: #ddd0ff; }
+    .pill.tool { background: #5a3a10; color: #ffd08a; }
+    .pill.issue { background: #5a1818; color: #ffb0b0; }
+    .preview { color: var(--dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+    .preview b { color: var(--text); font-weight: 400; }
+    .ins-head { padding: 10px 12px 6px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
+    .ins-sub { color: var(--dim); font-size: 12px; }
+    .tool-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+    .itabs { display: flex; gap: 12px; padding: 8px 12px 0; border-bottom: 1px solid var(--line); }
+    .itabs span { color: var(--dim); padding-bottom: 8px; border-bottom: 2px solid transparent; cursor: pointer; font-size: 12px; }
+    .itabs span.on { color: var(--accent); border-bottom-color: var(--accent); }
+    .ins-body { padding: 12px; font-size: 12px; }
+    .md { line-height: 1.5; }
+    .md h1, .md h2, .md h3 { margin: .7em 0 .3em; font-size: 13px; }
+    .md p { margin: 0 0 .7em; }
+    .md ul { margin: 0 0 .7em; padding-left: 1.2em; }
+    .md code { font-family: ui-monospace, Menlo, Consolas, monospace; background: var(--bg-3); padding: 0 4px; }
+    .md a { color: var(--accent); }
+    .md pre.code { max-height: none; white-space: pre-wrap; }
+    .kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin-bottom: 12px; }
+    .kv .k { color: var(--dim); }
+    .code { background: #101010; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; white-space: pre-wrap; color: #c0caf5; overflow: auto; max-height: 240px; }
+    .code .kw { color: #7aa2f7; }
+    .code .str { color: #9ece6a; }
+    .code.script { max-height: 4.8em; cursor: pointer; }
+    .code.script:hover { border-color: #556; }
+    .ln { display: grid; grid-template-columns: 44px 1fr; }
+    .ln .no { color: var(--mute); text-align: right; padding-right: 12px; user-select: none; }
+    .modal-bg { position: fixed; inset: 0; background: #000c; z-index: 40; }
+    .modal { position: fixed; inset: 32px; background: #0e0e0e; border: 1px solid #333; border-radius: 8px; z-index: 41; display: flex; flex-direction: column; }
+    .modal-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+    .modal-bar .sp { flex: 1; }
+    .modal-bar button { background: var(--bg-3); border: 0; border-radius: 6px; padding: 4px 10px; }
+    .modal .code { flex: 1; max-height: none; border: 0; border-radius: 0; }
+    .tool-item { padding: 7px 8px; border-bottom: 1px solid var(--line); }
+    .tool-item b { font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .tool-item span { color: var(--dim); display: block; }
+    .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .actions button { border: 0; border-radius: 6px; padding: 6px 10px; }
+    .actions button:disabled { opacity: .45; cursor: not-allowed; }
+    .btn-ok { background: #1d5a3a; color: #b8f5d4; }
+    .btn-no { background: #5a1818; color: #ffb0b0; }
+    .btn-alt { background: #2a4a7a; color: #cfe0ff; }
+    .toast { position: fixed; right: 16px; bottom: 16px; background: #111; border: 1px solid #e6c35c; color: #e6c35c; padding: 8px 12px; border-radius: 6px; display: none; z-index: 20; }
+    .hint { color: var(--mute); font-size: 11px; padding: 0 12px 8px; }
+    .acct { width: 100%; border-collapse: collapse; font: 11px ui-monospace, Menlo, Consolas, monospace; }
+    .acct th { text-align: left; color: var(--mute); font-weight: 500; padding: 0 6px 6px; }
+    .acct td { padding: 4px 6px; border-top: 1px solid var(--line); }
+    .acct .num { text-align: right; color: var(--dim); }
+    .acct tr { cursor: pointer; }
+    .acct tr:hover td { background: var(--bg-hover); }
+    .pending { border: 1px solid #5a4b14; background: #1a1608; border-radius: 6px; padding: 8px; margin-bottom: 10px; }
+    .pending.issue { border-color: #5a1818; background: #1a1010; }
+    .pending .ttl { font-weight: 600; margin-bottom: 4px; display: flex; gap: 6px; align-items: center; }
+    .sec { color: var(--mute); font-size: 10px; letter-spacing: .08em; margin: 14px 0 8px; }
+    .offline { color: var(--warn); font-size: 11px; margin-top: 8px; }
+    html[data-theme="paper"] .code { background: #1b1f24; color: #e6edf3; }
+    html[data-theme="paper"] .swim, html[data-theme="paper"] .timeline {
+      background: linear-gradient(#e6e8eb 1px, transparent 1px) 0 0 / 100% 18px,
+                  linear-gradient(90deg, #e6e8eb 1px, transparent 1px) 0 0 / 24px 100%, #f4f5f7;
+    }
+    html[data-theme="paper"] .pub.on { background: #e2e8f4; }
+    html[data-theme="paper"] .run-item.on { background: #dbe7ff; }
+    html[data-theme="paper"] .evt.on { background: #e8eef9; }
+    html[data-theme="paper"] .pending { background: #fff7e6; border-color: #f0d9a8; }
+    html[data-theme="paper"] .pending.issue { background: #fdecec; border-color: #f0b4b4; }
+    html[data-theme="paper"] .pill.system { background: #e8eaed; color: #3c424a; }
+    html[data-theme="paper"] .pill.user { background: #dbe7ff; color: #1e3a8a; }
+    html[data-theme="paper"] .pill.context { background: #d9f0e3; color: #166534; }
+    html[data-theme="paper"] .pill.assistant { background: #ece4ff; color: #4c1d95; }
+    html[data-theme="paper"] .pill.tool { background: #ffedd5; color: #9a3412; }
+    html[data-theme="paper"] .pill.issue { background: #fee2e2; color: #991b1b; }
+    html[data-theme="paper"] .btn-ok { background: #d9f0e3; color: #166534; }
+    html[data-theme="paper"] .btn-no { background: #fee2e2; color: #991b1b; }
+    html[data-theme="paper"] .btn-alt { background: #dbe7ff; color: #1e3a8a; }
+    html[data-theme="paper"] .toast { background: #fff; color: #1c1917; }
+    html[data-theme="tty"] .pub.on, html[data-theme="tty"] .run-item.on { background: #313244; }
+    html[data-theme="tty"] .evt.on { background: #313244; }
+    html[data-theme="tty"] .pending { background: #181825; border-color: #f9e2af; }
+    html[data-theme="tty"] .pending.issue { background: #181825; border-color: #f38ba8; }
+    html[data-theme="tty"] .pill.system { background: #313244; color: #cdd6f4; }
+    html[data-theme="tty"] .pill.user { background: #313244; color: #89b4fa; }
+    html[data-theme="tty"] .pill.context { background: #313244; color: #a6e3a1; }
+    html[data-theme="tty"] .pill.assistant { background: #313244; color: #cba6f7; }
+    html[data-theme="tty"] .pill.tool { background: #313244; color: #fab387; }
+    html[data-theme="tty"] .pill.issue { background: #313244; color: #f38ba8; }
+    html[data-theme="tty"] .btn-ok { background: #313244; color: #a6e3a1; }
+    html[data-theme="tty"] .btn-no { background: #313244; color: #f38ba8; }
+    html[data-theme="tty"] .btn-alt { background: #313244; color: #89b4fa; }
+    html[data-theme="tty"] .code { background: #11111b; }
+    html[data-theme="tty"] .code .kw { color: #cba6f7; }
+    html[data-theme="tty"] .code .str { color: #a6e3a1; }
+    html[data-theme="tty"] .bar.ok { background: #a6e3a1; }
+    html[data-theme="tty"] .bar.spin { background: #89b4fa; }
+    html[data-theme="tty"] .bar.fail { background: #f38ba8; }
+    html[data-theme="tty"] .bar.wait { background: #f9e2af; }
+    html[data-theme="tty"] .swim, html[data-theme="tty"] .timeline {
+      background: linear-gradient(#313244 1px, transparent 1px) 0 0 / 100% 18px,
+                  linear-gradient(90deg, #313244 1px, transparent 1px) 0 0 / 24px 100%, #1e1e2e;
+    }
+  </style>
+</head>
+<body data-view="run">
+  <div class="app">
+    <aside class="sidebar" id="sidebar"></aside>
+    <div class="splitbar" id="split-left"></div>
+    <div class="stage" id="view-run">
+      <div class="top">
+        <div class="crumb"><span id="canvas-pub">—</span> / <span id="canvas-run">—</span></div>
+        <div class="run-stats" id="run-stats"></div><button type="button" class="btn-alt hidden" id="reset-run-range">Reset</button>
+      </div>
+      <div class="swim" id="swim"></div>
+      <div class="split"><div class="list" id="list"></div></div>
+    </div>
+    <div class="stage hidden" id="view-agent">
+      <div class="top">
+        <div class="crumb"><a data-go="run" id="run-crumb">—</a> / <span id="agent-crumb">—</span></div>
+      </div>
+      <div class="toolbar">
+        <b>EVENTS</b><input class="search" id="q" placeholder="Search events" />
+      </div>
+      <div class="timeline" id="agent-timeline"><div id="agent-ticks"></div></div>
+      <div class="body"><div class="events" id="events"></div></div>
+    </div>
+    <div class="splitbar" id="split-right"></div>
+    <aside class="inspector" id="insp"></aside>
+  </div>
+  <div class="toast" id="toast"></div>
+  <div class="modal-bg hidden" id="script-bg"></div>
+  <div class="modal hidden" id="script-modal">
+    <div class="modal-bar"><b id="script-title">script</b><span class="sp"></span><button type="button" id="script-close">close</button></div>
+    <div class="code" id="script-full"></div>
+  </div>
+  <script src="./marked.min.js"></script>
+  <script>
+    const state = { publishers: [], currentPub: null, currentRun: null, currentAgent: null, runRange: null, agentRange: null, agentRangeAgent: null, selectedEvent: null, toolPane: "summary", sysPane: "prompt", inspSig: null, socket: null };
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    const json = (value) => { try { return JSON.stringify(value, null, 2); } catch { return String(value); } };
+    const fmtRuntime = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); if (s < 60) return `${s}s`; const m = Math.floor(s / 60), r = s % 60; if (m < 60) return `${m}m${r ? ` ${r}s` : ""}`; const h = Math.floor(m / 60), rm = m % 60; return `${h}h${rm ? ` ${rm}m` : ""}`; };
+    const fmtCost = (cost) => `$${Number(cost || 0).toFixed(Number(cost || 0) < .01 ? 3 : 2)}`;
+    const fmtTokens = (tokens) => Number(tokens || 0) < 1000 ? `${Number(tokens || 0)}t` : `${(Number(tokens || 0) / 1000).toFixed(Number(tokens || 0) / 1000 < 10 ? 1 : 0)}kt`;
+    const fmtClock = (stamp) => stamp ? new Date(stamp).toLocaleTimeString() : "—";
+    const runKey = (publisher, run) => `${publisher.id}:${run.run.id}`;
+    const allRuns = () => state.publishers.flatMap((publisher) => (publisher.runs || []).map((run) => ({ publisher, record: run })));
+    const selected = () => allRuns().find(({ publisher, record }) => runKey(publisher, record) === state.currentRun);
+    const runState = (record) => record.run.state;
+    const stateClass = (value) => ({ running: "spin", queued: "queued", pausing: "spin", paused: "paused", awaiting_input: "wait", completed: "ok", failed: "fail", stopped: "fail", interrupted: "wait", budget_exhausted: "budget" }[value] || "queued");
+    const glyph = (value) => { const c = stateClass(value); return c === "spin" ? '<span class="g-run spin"></span>' : c === "ok" ? '<span class="g-run ok">✓</span>' : c === "wait" ? '<span class="g-run wait">?</span>' : c === "fail" ? '<span class="g-run fail">✗</span>' : c === "paused" ? '<span class="g-run paused">⏸</span>' : c === "budget" ? '<span class="g-run budget">!</span>' : '<span class="g-run queued">○</span>'; };
+    const accounting = (agent) => agent.accounting || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    const runCost = (record) => record.run.usage?.costUsd ?? record.run.agents.reduce((sum, agent) => sum + accounting(agent).cost, 0);
+    const runTokens = (record) => record.run.usage?.tokens ?? record.run.agents.reduce((sum, agent) => sum + accounting(agent).input + accounting(agent).output, 0);
+    const startOf = (record) => { const times = record.run.agents.map((agent) => agent.startedAt).filter((time) => Number.isFinite(time)); const created = Date.parse(record.createdAt || ""); return new Date(Math.min(...times, Number.isFinite(created) ? created : Date.now())); };
+    const endOf = (record) => { const start = startOf(record).getTime(); const ends = record.run.agents.map((agent) => agent.startedAt && agent.durationMs ? agent.startedAt + agent.durationMs : 0); return Math.max(start + 1, ...ends, record.run.state === "running" || record.run.state === "paused" || record.run.state === "awaiting_input" ? Date.now() : start + (record.run.usage?.durationMs || 0)); };
+    const attention = (record) => (record.awaiting || []).length + record.run.agents.filter((agent) => agent.state === "failed").length;
+    const duration = (record) => Math.max(0, endOf(record) - startOf(record).getTime());
+    const age = (stamp) => { const minutes = Math.floor((Date.now() - stamp) / 60000); return minutes < 60 ? `${minutes}m ago` : `${Math.floor(minutes / 60)}h ago`; };
+    const highlight = (source) => esc(source).replace(/(&quot;.*?&quot;)/g, '<span class="str">$1</span>').replace(/\b(await|return|const|async|agent|parallel|pipeline|phase|checkpoint)\b/g, '<span class="kw">$1</span>');
+    const numbered = (source) => String(source || "").split("\n").map((line, index) => `<div class="ln"><span class="no">${index + 1}</span><span>${highlight(line)}</span></div>`).join("");
+    const contentText = (value) => Array.isArray(value) ? value.map((part) => typeof part === "string" ? part : part?.text || part?.thinking || part?.name || "").join(" ") : typeof value === "string" ? value : value ? json(value) : "";
+    const estTokens = (text) => Math.ceil(String(text || "").length / 4); const eventKind = (entry) => { if (entry.type === "system_prompt" || entry.type === "session" || entry.type === "session_info") return "system"; if (entry.type === "message") { const role = entry.message?.role; return role === "toolResult" ? "tool" : role === "user" ? "user" : "assistant"; } return entry.type === "tool_result" ? "tool" : "context"; }; const toolNameOf = (entry) => entry.toolName || entry.message?.toolName || entry.message?.name || entry.name || "tool";
+    const agentEntries = (record, agent) => { const entries = (record.transcripts?.[agent.id] || []).filter((entry) => entry.type !== "session" && entry.type !== "session_info"); if (agent.systemPrompt) entries.unshift({ type: "system_prompt", prompt: agent.systemPrompt }); return entries; };
+    const toolArgsOf = (entry, entries) => { const id = entry.message?.toolCallId || entry.toolCallId; if (id) { for (const candidate of entries) { const content = candidate.message?.content; if (!Array.isArray(content)) continue; const call = content.find((part) => part && part.type === "toolCall" && part.id === id); if (call && call.arguments !== undefined) return call.arguments; } } return entry.message?.arguments ?? entry.arguments ?? {}; };
+    const toolDescriptionOf = (agent, name) => (agent.toolDefinitions || []).find((tool) => tool.name === name)?.description || "";
+    const sessionResources = (agent) => { const snapshot = selected()?.record.snapshot; const resources = agent?.attemptDetails?.at(-1)?.setup?.resourceSelectors; return { skillFilters: resources?.selectors?.skills?.length ? resources.selectors.skills : snapshot?.settings?.skills || [], skillResolved: resources?.skills || [], extensionFilters: resources?.selectors?.extensions?.length ? resources.selectors.extensions : snapshot?.settings?.extensions || [], extensionResolved: resources?.extensions || [] }; };
+    const resourceTitle = (value) => { const parts = String(value).replaceAll("\\", "/").split("/").filter(Boolean); const file = parts.at(-1) || String(value); if (/^(skill\.md|index\.(ts|js|mjs))$/i.test(file)) return parts.at(-2) || file; return file.replace(/\.(ts|js|mjs)$/i, ""); };
+    const nameList = (items) => items.length ? items.map((item) => `<div class="tool-item"><b>${esc(item)}</b></div>`).join("") : '<div class="hint">None recorded.</div>';
+    const resourceList = (items) => items.length ? items.map((item) => { const title = resourceTitle(item); return `<div class="tool-item"><b>${esc(title)}</b>${title !== item ? `<span>${esc(item)}</span>` : ""}</div>`; }).join("") : '<div class="hint">None resolved.</div>';
+    const eventTime = (entry) => { const raw = entry.timestamp ?? entry.message?.timestamp; const value = typeof raw === "string" ? Date.parse(raw) : Number(raw); return Number.isFinite(value) ? value : undefined; };
+    function timelineScale(entries) {
+      const finiteTimes = entries.map(eventTime).filter((time) => time !== undefined);
+      const start = finiteTimes.length ? Math.min(...finiteTimes) : 0;
+      const end = finiteTimes.length ? Math.max(...finiteTimes) : start + 1;
+      let previous = start;
+      const times = entries.map((entry) => {
+        const time = eventTime(entry);
+        if (time !== undefined) previous = time;
+        return previous;
+      });
+      return { times, start, span: Math.max(1, end - start) };
+    }
+    function renderAgentTimeline(entries) {
+      const { times, start, span } = timelineScale(entries);
+      const lanes = { input: [], model: [], tools: [] };
+      entries.forEach((entry, index) => {
+        const left = (times[index] - start) / span * 100;
+        const kind = eventKind(entry);
+        const lane = kind === "tool" ? "tools" : kind === "assistant" ? "model" : "input";
+        const cls = entry.isError || kind === "issue" ? "err" : kind === "tool" ? "tl" : kind === "assistant" ? "model" : "in";
+        lanes[lane].push(`<i class="tick ${cls}" style="left:${left}%" title="${esc(kind)}"></i>`);
+      });
+      const lane = (name, key) => `<div class="tl-lane"><div class="lab">${name}</div><div class="ticks">${lanes[key].join("")}</div></div>`;
+      return `${lane("Input", "input")}${lane("Model", "model")}${lane("Tools", "tools")}`;
+    }
+
+    const eventPreview = (entry, entries = []) => entry.type === "system_prompt" ? "Initial System Prompt" : (entry.message?.role === "toolResult" || entry.type === "tool_result") ? `${toolNameOf(entry)}: ${JSON.stringify(toolArgsOf(entry, entries))}` : entry.type === "message" ? contentText(entry.message?.content) : entry.type === "session" || entry.type === "session_info" ? "Session started" : entry.type;
+    const eventLabel = (kind) => kind === "toolResult" ? "TOOL" : String(kind || "EVENT").toUpperCase();
+    function renderThemeButtons() { const enabled = state.publishers.some((publisher) => publisher.themes === true); const themes = enabled ? ["harness", "tty", "paper"] : []; if (!enabled) { document.documentElement.dataset.theme = "tty"; localStorage.removeItem("traj-theme"); } else if (!["harness", "tty", "paper"].includes(document.documentElement.dataset.theme || "")) document.documentElement.dataset.theme = localStorage.getItem("traj-theme") || "tty"; $("theme-buttons").innerHTML = themes.map((theme) => `<button class="tab theme" data-theme="${theme}">${theme.toUpperCase()}</button>`).join(""); $("theme-buttons").classList.toggle("hidden", !enabled); $("theme-buttons").querySelectorAll("[data-theme]").forEach((button) => button.addEventListener("click", () => { document.documentElement.dataset.theme = button.dataset.theme; localStorage.setItem("traj-theme", button.dataset.theme); renderThemeButtons(); })); const current = document.documentElement.dataset.theme || "tty"; $("theme-buttons").querySelectorAll("[data-theme]").forEach((button) => button.classList.toggle("on", button.dataset.theme === current)); }
+    function renderSidebar() { $("sidebar").innerHTML = `<div class="brand">TRAJECTORY <span id="theme-buttons"></span></div>` + state.publishers.map((publisher) => { const publisherAttention = (publisher.runs || []).reduce((total, record) => total + attention(record), 0); const runs = (publisher.runs || []).map((record) => { const ref = runKey(publisher, record); const pending = record.awaiting?.length || attention(record); return `<button class="run-item${ref === state.currentRun ? " on" : ""}" data-run="${esc(ref)}" data-publisher="${esc(publisher.id)}">${glyph(runState(record))}<span class="n">${esc(record.run.workflowName)}</span>${pending ? `<span class="await">${pending} attn</span>` : ""}<span class="tel">${fmtCost(runCost(record))} · ${record.run.state === "running" ? fmtRuntime(Date.now() - startOf(record).getTime()) : age(startOf(record).getTime())}</span></button>`; }).join(""); return `<div class="group"><div class="pub${publisher.id === state.currentPub ? " on" : ""}"><div class="row"><span class="dot${publisher.connected ? " live" : ""}"></span><span class="name">${esc(publisher.title || publisher.id)}</span>${publisherAttention ? `<span class="attn">${publisherAttention}</span>` : ""}${publisher.connected ? "" : "<span class=attn>offline</span>"}</div><div class="meta">${esc(publisher.cwd)} · ${publisher.connected ? "connected" : `disconnected ${publisher.lastSeen ? age(Date.parse(publisher.lastSeen)) : ""}`}</div></div><div class="children">${runs || '<div class="hint">no runs</div>'}</div></div>`; }).join(""); renderThemeButtons(); }
+    function renderGantt(record) { const agents = record.run.agents; const start = startOf(record).getTime(), end = endOf(record), span = Math.max(1, end - start); const lanes = []; let previous = ""; for (const agent of agents) { const crumb = agent.parentBreadcrumb || ""; if (crumb && crumb !== previous) { const group = agents.filter((candidate) => (candidate.parentBreadcrumb || "") === crumb); const left = Math.min(...group.map((candidate) => ((candidate.startedAt || start) - start) / span * 100)); const right = Math.max(...group.map((candidate) => ((candidate.startedAt || start) + (candidate.durationMs || 0) - start) / span * 100)); lanes.push(`<div class="lane crumb"><span></span><div class="lab">${esc(crumb)}</div><div class="track"><i class="bar crumb" style="left:${Math.max(0, left)}%;width:${Math.max(1, right - left)}%"></i></div></div>`); } previous = crumb; const left = agent.startedAt ? (agent.startedAt - start) / span * 100 : 0; const width = agent.durationMs ? agent.durationMs / span * 100 : agent.state === "running" ? Math.max(2, (Date.now() - (agent.startedAt || start)) / span * 100) : 0; lanes.push(`<div class="lane${agent.parentId ? " child" : ""}" data-agent="${esc(agent.id)}">${glyph(agent.state)}<div class="lab">${esc(agent.label || agent.name)}</div><div class="track"><i class="bar ${stateClass(agent.state)}" style="left:${Math.max(0, left)}%;width:${Math.max(0, width)}%"></i></div></div>`); } return `<div class="axis"><div></div><div class="ticks"><span>${fmtClock(start)}</span><span>+${fmtRuntime(span / 2)}</span><span>${record.run.state === "running" ? fmtClock(Date.now()) : "end"}</span></div></div>${lanes.join("")}`; }
+    function phases(record) { const history = record.run.phaseHistory || []; if (history.length) { const length = record.run.agents.length; const first = Math.max(0, Math.min(length, history[0].afterAgent)); const groups = first > 0 ? [{ name: "unphased", agents: record.run.agents.slice(0, first).map((agent) => agent.id) }] : []; history.forEach((phase, index) => { const from = Math.max(0, Math.min(length, phase.afterAgent)); const to = Math.max(from, Math.min(length, history[index + 1]?.afterAgent ?? length)); groups.push({ name: phase.phase, agents: record.run.agents.slice(from, to).map((agent) => agent.id) }); }); return groups; } return record.run.agents.length ? [{ name: record.run.phase || "workflow", agents: record.run.agents.map((agent) => agent.id) }] : []; }
+    const agentModel = (agent) => agent.model ? `${agent.model.provider || "?"}/${agent.model.model || "?"}` : "—";
+    function renderAgentGrid(record) { const grouped = phases(record); const body = grouped.map((phase) => `<div class="phaseband">PHASE ${esc(phase.name)}</div>${phase.agents.map((id) => { const agent = record.run.agents.find((candidate) => candidate.id === id); if (!agent) return ""; const path = [...(agent.parentBreadcrumb ? [agent.parentBreadcrumb] : []), ...(agent.structuralPath || [])]; const label = agent.label || agent.name; const settled = path.length ? "•" : "▾"; return `<div class="agent-grid-row${agent.id === state.currentAgent ? " on" : ""}" data-agent="${esc(agent.id)}"><div class="agent-cell" style="padding-left:${path.length * 12}px">${settled} ${esc(label)}${path.length ? `<span class="agent-path"> · ${esc(path.join(" / "))}</span>` : ""}</div><div class="agent-cell">${esc(agentModel(agent))}</div><div class="agent-cell">${esc(agent.role || "agent")}</div><div class="agent-cell num">${fmtRuntime(agent.durationMs || 0)}</div><div class="agent-cell num">${fmtTokens(accounting(agent).input + accounting(agent).output)}</div><div class="agent-cell num">${fmtCost(accounting(agent).cost)}</div></div>`; }).join("")}`).join(""); return `<div class="agent-grid"><div class="agent-grid-head"><span>AGENT</span><span>MODEL</span><span>ROLE</span><span>DURATION</span><span>TOKENS</span><span>COST</span></div>${body}</div>`; }
+    function renderList(record) { const cards = allRuns().map(({ publisher, record: candidate }) => { const ref = runKey(publisher, candidate); const run = candidate.run; const completed = run.agents.filter((agent) => agent.state === "completed").length; const expanded = ref === state.currentRun; return `<section class="workflow-card"><button type="button" class="workflow-head${expanded ? " on" : ""}" data-run="${esc(ref)}">${glyph(run.state)}<span class="workflow-name">${esc(run.workflowName)}</span><span class="workflow-meta">${completed}/${run.agents.length} agents · ${fmtCost(runCost(candidate))} · ${fmtRuntime(duration(candidate))}</span></button>${expanded ? renderAgentGrid(candidate) : ""}</section>`; }).join(""); return cards || '<div class="hint">No workflows recorded.</div>'; }
+    function actionButton(label, action, disabled) { return `<button class="btn-alt" data-act="${action}"${disabled ? " disabled" : ""}>${label}</button>`; }
+    function renderDossier(publisher, record) { const offline = !publisher.connected; const issues = record.run.agents.filter((agent) => agent.state === "failed").map((agent) => `<div class="pending issue"><div class="ttl">${glyph(agent.state)} ${esc(agent.label || agent.name)} needs retry</div><div class="ins-sub">${esc(agent.attemptDetails?.at(-1)?.error?.message || record.run.error?.message || "agent failed")}</div><div class="actions">${actionButton("Retry", "retry", offline)}</div>${offline ? '<div class="offline">publisher offline — actions disabled</div>' : ""}</div>`).join(""); const pending = issues + (record.awaiting || []).map((item) => `<div class="pending" data-name="${esc(item.name)}"><div class="ttl">${glyph("awaiting_input")} checkpoint ${esc(item.name)}</div><div class="ins-sub">${esc(item.prompt)}</div><div class="actions">${actionButton("Approve", "checkpoint-approve", offline)}${actionButton("Reject", "checkpoint-reject", offline)}</div>${offline ? '<div class="offline">publisher offline — actions disabled</div>' : ""}</div>`).join(""); const run = record.run; const controls = run.state === "running" || run.state === "awaiting_input" ? `${actionButton("Pause", "pause", offline)}${actionButton("Abort run", "stop", offline)}` : run.state === "paused" || run.state === "interrupted" || run.state === "budget_exhausted" ? `${actionButton("Resume", "resume", offline)}${actionButton("Abort run", "stop", offline)}` : ""; const rows = run.agents.map((agent) => `<tr data-agent="${esc(agent.id)}"><td>${glyph(agent.state)}</td><td><b>${esc(agent.label || agent.name)}</b><div class="ins-sub">${esc(agent.role || "agent")}</div></td><td class="num">${fmtTokens(accounting(agent).input + accounting(agent).output)}</td><td class="num">${fmtCost(accounting(agent).cost)}</td></tr>`).join(""); const script = record.snapshot?.script ? `<div class="sec">SCRIPT <span class="ins-sub">click to expand</span></div><div class="code script" data-script="1">${highlight(record.snapshot.script)}</div>` : ""; return `<div class="ins-head" data-run-panel="1">${glyph(run.state)}<b>${esc(run.workflowName)}</b><span class="ins-sub">${esc(run.state)}</span></div><div class="ins-body">${pending ? '<div class="sec">NEEDS ATTENTION</div>' + pending : ""}<div class="sec">STATE</div><div class="kv"><div class="k">Phase</div><div>${esc(run.phase || "—")}</div><div class="k">Active</div><div>${run.agents.filter((agent) => agent.state === "running").length} running · ${run.agents.filter((agent) => agent.state === "queued").length} queued · ${run.agents.filter((agent) => agent.state === "failed").length} failed</div><div class="k">Outcome</div><div>${esc(run.error ? `${run.error.code}: ${run.error.message}` : run.state === "completed" ? "completed" : attention(record) ? `${attention(record)} agent(s) need a human` : "—")}</div><div class="k">Cost</div><div>${fmtCost(runCost(record))}${run.budget?.costUsd?.hard !== undefined ? ` / ${fmtCost(run.budget.costUsd.hard)} hard` : ""}</div><div class="k">Tokens</div><div>${fmtTokens(runTokens(record))}${run.budget?.tokens?.hard !== undefined ? ` / ${fmtTokens(run.budget.tokens.hard)} hard` : ""}</div><div class="k">Started</div><div>${fmtClock(startOf(record))}</div><div class="k">Runtime</div><div>${fmtRuntime(duration(record))}</div></div><div class="actions">${controls}</div>${script}<div class="sec">AGENTS</div><table class="acct"><thead><tr><th></th><th>agent</th><th class="num">tok</th><th class="num">cost</th></tr></thead><tbody>${rows}</tbody></table></div>`; }
+    function renderRun() { const found = selected(); if (!found) return; const { publisher, record } = found; $("canvas-pub").textContent = publisher.id.slice(0, 8); $("canvas-run").textContent = record.run.workflowName; $("swim").innerHTML = renderGantt(record); $("list").innerHTML = renderList(record); $("insp").innerHTML = renderDossier(publisher, record); $("run-stats").innerHTML = `${glyph(record.run.state)} ${fmtCost(runCost(record))} · ${fmtTokens(runTokens(record))} · started ${fmtClock(startOf(record))} · runtime ${fmtRuntime(duration(record))}`; applyRunRange(state.runRange); $("reset-run-range").classList.toggle("hidden", !state.runRange); }
+    function entryDetails(entry, agent) { const kind = eventKind(entry); if (kind === "tool" || entry.type === "tool_result") return { kind: "tool", entry, agent }; if (kind === "system") return { kind: "system", entry, agent }; return { kind: kind === "user" ? "user" : "assistant", entry, agent }; }
+    function renderToolPane(detail) { const entry = detail.entry; const message = entry.message || entry; const found = selected(); const entries = found && detail.agent ? agentEntries(found.record, detail.agent) : []; const args = toolArgsOf(entry, entries); const description = toolDescriptionOf(detail.agent, toolNameOf(entry)); const panes = { summary: () => `<div class="kv"><div class="k">Tool</div><div>${esc(toolNameOf(entry))}</div>${description ? `<div class="k">Description</div><div>${esc(description)}</div>` : ""}<div class="k">Hierarchy</div><div>${esc(entry.type)}</div><div class="k">Status</div><div>${entry.isError ? "Failed" : "Completed"}</div></div>`, payload: () => `<div class="code">${highlight(json(args))}</div>`, result: () => `<div class="code">${esc(contentText(entry.result ?? entry.content ?? message.content))}</div>`, schema: () => `<div class="code">${esc(toolNameOf(entry))}(${esc(json(args))})</div>`, timing: () => `<div class="kv"><div class="k">Timestamp</div><div>${esc(entry.timestamp || "—")}</div><div class="k">Source</div><div>Session JSONL</div></div>` }; $("tool-pane").innerHTML = (panes[state.toolPane] || panes.summary)(); $("tool-tabs").querySelectorAll("span").forEach((tab) => tab.classList.toggle("on", tab.dataset.pane === state.toolPane)); }
+    function renderSystemPane(agent) { const prompt = agent.systemPrompt || agent.prompt || ""; const { skillFilters, skillResolved, extensionFilters, extensionResolved } = sessionResources(agent); const panes = { prompt: () => `<div class="kv"><div class="k">Tokens</div><div>est. ${estTokens(prompt)}</div></div><div class="md">${prompt ? marked.parse(prompt, { mangle: false, headerIds: false }) : "System prompt unavailable"}</div>`, tools: () => (agent.tools || []).map((tool) => { const description = toolDescriptionOf(agent, tool); return `<div class="tool-item"><b>${esc(tool)}</b>${description ? `<span>${esc(description)}</span>` : ""}</div>`; }).join("") || '<div class="hint">No tools recorded.</div>', skills: () => `<div class="sec">FILTERS</div>${nameList(skillFilters)}<div class="sec">RESOLVED</div>${resourceList(skillResolved)}`, extensions: () => `<div class="sec">FILTERS</div>${nameList(extensionFilters)}<div class="sec">RESOLVED</div>${resourceList(extensionResolved)}`, env: () => `<div class="code">${esc(json({ role: agent.role, model: agent.model, requestedModel: agent.requestedModel, attempts: agent.attempts, structuralPath: agent.structuralPath, worktreeOwner: agent.worktreeOwner }))}</div>` }; $("sys-pane").innerHTML = (panes[state.sysPane] || panes.prompt)(); $("sys-tabs").querySelectorAll("span").forEach((tab) => tab.classList.toggle("on", tab.dataset.pane === state.sysPane)); }
+    function renderInspector(detail, agent) { if (!detail) { $("insp").innerHTML = '<div class="ins-body hint">Select an event.</div>'; return; } if (detail.kind === "tool") { $("insp").innerHTML = `<div class="ins-head"><span class="pill tool">TOOL</span><b class="tool-name">${esc(toolNameOf(detail.entry))}</b><span class="ins-sub">${esc(detail.entry.timestamp || "")}</span></div><div class="itabs" id="tool-tabs"><span data-pane="summary">Summary</span><span data-pane="payload">Input</span><span data-pane="result">Output</span><span data-pane="schema">Schema</span><span data-pane="timing">Timing</span></div><div class="ins-body"><div id="tool-pane"></div></div>`; renderToolPane(detail); return; } if (detail.kind === "system") { $("insp").innerHTML = `<div class="ins-head"><span class="pill system">SYSTEM</span><span class="ins-sub">est. ${estTokens(agent.systemPrompt || agent.prompt || detail.entry.prompt || "")} tok</span></div><div class="itabs" id="sys-tabs"><span data-pane="prompt">Prompt</span><span data-pane="tools">Tools</span><span data-pane="skills">Skills</span><span data-pane="extensions">Extensions</span><span data-pane="env">Environment</span></div><div class="ins-body"><div id="sys-pane"></div></div>`; renderSystemPane(agent); return; } const message = detail.entry.message || detail.entry; const body = contentText(message.content ?? detail.entry.content); const usage = message.usage || detail.entry.usage; const counted = usage?.totalTokens ?? ((usage?.input || 0) + (usage?.output || 0)); const tokenLabel = counted ? `${counted} tok` : `est. ${estTokens(body)} tok`; const bodyHtml = detail.kind === "assistant" ? marked.parse(body) : esc(body); $("insp").innerHTML = `<div class="ins-head"><span class="pill ${detail.kind}">${eventLabel(detail.kind)}</span><span class="ins-sub">${tokenLabel}</span></div><div class="ins-body"><div class="kv"><div class="k">Tokens</div><div>${tokenLabel}</div></div><div class="${detail.kind === "assistant" ? "md" : "code"}">${bodyHtml}</div></div>`; }
+    function renderAgent() { const scroller = $("insp")?.querySelector(".code:not(.script)"); const scroll = scroller ? scroller.scrollTop : 0; const found = selected(); if (!found) return; const agent = found.record.run.agents.find((candidate) => candidate.id === state.currentAgent) || found.record.run.agents[0]; if (!agent) { $("events").innerHTML = '<div class="hint">No agent selected.</div>'; return; } state.currentAgent = agent.id; if (state.agentRangeAgent !== agent.id) { state.agentRangeAgent = agent.id; state.agentRange = null; } $("run-crumb").textContent = found.record.run.workflowName; $("agent-crumb").textContent = agent.label || agent.name; const entries = agentEntries(found.record, agent); const { times, start, span } = timelineScale(entries); $("agent-ticks").innerHTML = renderAgentTimeline(entries); $("events").innerHTML = entries.length ? entries.map((entry, index) => { const detail = entryDetails(entry, agent); const t = (times[index] - start) / span * 100; return `<div class="evt${index === state.selectedEvent ? " on" : ""}" data-event="${index}" data-t="${t}"><div class="gutter">${esc(entry.timestamp || `#${index + 1}`)}</div><span class="pill ${detail.kind}">${eventLabel(detail.kind)}</span><div class="preview">${esc(eventPreview(entry, entries))}</div></div>`; }).join("") : '<div class="hint">No transcript events recorded.</div>'; const detail = entries[state.selectedEvent || 0] ? entryDetails(entries[state.selectedEvent || 0], agent) : undefined; const sig = `${agent.id}:${state.selectedEvent ?? 0}:${state.sysPane}:${state.toolPane}:${detail?.kind || ""}`; if (state.inspSig !== sig) { renderInspector(detail, agent); state.inspSig = sig; } if (!state.agentRange) $("agent-timeline").querySelector(":scope > .brush")?.classList.add("hidden"); applyEventSearch(); }
+    function applyEventSearch() { const query = ($("q")?.value || "").toLowerCase(); const range = state.agentRange; document.querySelectorAll("#events .evt").forEach((event) => { const t = Number(event.dataset.t); const inRange = !range || (Number.isFinite(t) && t >= range.from && t <= range.to); const inQuery = !query || event.textContent.toLowerCase().includes(query); event.style.display = inRange && inQuery ? "" : "none"; }); }
+    function setView(view, mode = "push") { document.body.dataset.view = view; $("view-run").classList.toggle("hidden", view !== "run"); $("view-agent").classList.toggle("hidden", view === "run"); if (view === "run") renderRun(); else renderAgent(); syncUrl(mode); }
+    function syncUrl(mode) { const url = new URL(location.href); url.searchParams.set("view", document.body.dataset.view); if (state.currentRun) url.searchParams.set("run", state.currentRun); else url.searchParams.delete("run"); if (document.body.dataset.view === "agent" && state.currentAgent) url.searchParams.set("agent", state.currentAgent); else url.searchParams.delete("agent"); const next = url.pathname + url.search; if (mode !== "pop" && next !== location.pathname + location.search) (mode === "replace" ? history.replaceState : history.pushState).call(history, { view: document.body.dataset.view, run: state.currentRun, agent: state.currentAgent }, next); }
+    function selectRun(ref, mode = "push") { state.currentRun = ref; state.currentPub = selected()?.publisher.id; state.currentAgent = selected()?.record.run.agents[0]?.id || null; renderSidebar(); setView("run", mode); }
+    function sendAction(action, extra = {}) { const found = selected(); if (!found || !state.socket || state.socket.readyState !== 1 || !found.publisher.connected) { showToast("publisher offline"); return; } state.socket.send(JSON.stringify({ type: "ui:action", requestId: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`, publisherId: found.publisher.id, runId: found.record.run.id, action, ...extra })); showToast(`sent ${action}`); }
+    function showToast(text) { $("toast").textContent = text; $("toast").style.display = "block"; setTimeout(() => { $("toast").style.display = "none"; }, 1800); }
+    function applyRunRange(range) { const found = selected(); if (!found) return; const start = startOf(found.record).getTime(), end = endOf(found.record), span = Math.max(1, end - start); document.querySelectorAll("#swim [data-agent], #list [data-agent], .acct [data-agent]").forEach((element) => { const agent = found.record.run.agents.find((candidate) => candidate.id === element.dataset.agent); const left = agent?.startedAt ? (agent.startedAt - start) / span * 100 : 0; const right = agent?.durationMs ? left + agent.durationMs / span * 100 : left + 1; element.style.display = !range || (left < range.to && right > range.from) ? "" : "none"; }); }
+    function setRunRange(range) { state.runRange = range; applyRunRange(range); $("reset-run-range").classList.toggle("hidden", !range); if (!range) $("swim").querySelector(":scope > .brush")?.classList.add("hidden"); }
+    function bindBrush(root, selector, callback) { if (!root || root.dataset.brushBound) return; root.dataset.brushBound = "1"; let drag; const paint = (range) => { let brush = root.querySelector(":scope > .brush"); if (!brush) { brush = document.createElement("div"); brush.className = "brush"; root.appendChild(brush); } if (!range) { brush.classList.add("hidden"); return; } const track = root.querySelector(selector); if (!track) return; const box = track.getBoundingClientRect(), rootBox = root.getBoundingClientRect(); brush.classList.remove("hidden"); brush.style.left = `${box.left - rootBox.left + Math.min(range.from, range.to) / 100 * box.width}px`; brush.style.width = `${Math.abs(range.to - range.from) / 100 * box.width}px`; }; root.addEventListener("mousedown", (event) => { const track = root.querySelector(selector); if (event.button !== 0 || !track) return; const box = track.getBoundingClientRect(); if (event.clientX < box.left) return; drag = { x: event.clientX, box }; }); window.addEventListener("mousemove", (event) => { if (!drag) return; if (Math.abs(event.clientX - drag.x) < 5) return; const from = Math.max(0, Math.min(100, (drag.x - drag.box.left) / drag.box.width * 100)); const to = Math.max(0, Math.min(100, (event.clientX - drag.box.left) / drag.box.width * 100)); const range = { from: Math.min(from, to), to: Math.max(from, to) }; paint(range); callback(range); }); window.addEventListener("mouseup", () => { drag = undefined; }); root.addEventListener("dblclick", () => { paint(null); callback(null); }); }
+    function openScript() { const record = selected()?.record; if (!record?.snapshot?.script) return; $("script-full").innerHTML = numbered(record.snapshot.script); $("script-title").textContent = `${record.run.workflowName} script`; $("script-bg").classList.remove("hidden"); $("script-modal").classList.remove("hidden"); }
+    function closeScript() { $("script-bg").classList.add("hidden"); $("script-modal").classList.add("hidden"); }
+    function acceptState(value) { if (!value || !Array.isArray(value.publishers)) return; state.publishers = value.publishers; if (!selected() && allRuns()[0]) { const first = allRuns()[0]; state.currentRun = runKey(first.publisher, first.record); state.currentPub = first.publisher.id; state.currentAgent = first.record.run.agents[0]?.id || null; } renderSidebar(); if (document.body.dataset.view === "run") renderRun(); else renderAgent(); }
+    function connect() { const Socket = window.WebSocket; state.socket = new Socket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`); state.socket.addEventListener("open", () => state.socket.send(JSON.stringify({ type: "ui:attach" }))); state.socket.addEventListener("message", (event) => { try { const message = JSON.parse(event.data); if (message.type === "state") acceptState(message); if (message.type === "publisher:action-result" || message.type === "action-result") showToast(message.ok ? "action accepted" : `action failed: ${message.error}`); } catch { showToast("invalid Trajectory update"); } }); state.socket.addEventListener("close", () => setTimeout(connect, 1000)); }
+    $("script-close").addEventListener("click", closeScript); $("script-bg").addEventListener("click", closeScript); document.addEventListener("keydown", (event) => { if (event.key === "Escape") { closeScript(); state.runRange = null; state.agentRange = null; if (document.body.dataset.view === "run") renderRun(); else renderAgent(); } });
+    document.querySelector(".app").addEventListener("click", (event) => { const target = event.target.closest("[data-act], [data-run], [data-agent], [data-script], [data-pane]"); if (!target) return; if (target.dataset.act) { const name = target.closest("[data-name]")?.dataset.name; sendAction(target.dataset.act, name ? { name } : {}); return; } if (target.dataset.script) { openScript(); return; } if (target.dataset.pane) { if (target.closest("#tool-tabs")) { state.toolPane = target.dataset.pane; const found = selected(), agent = found?.record.run.agents.find((candidate) => candidate.id === state.currentAgent); const entries = found && agent ? agentEntries(found.record, agent) : []; renderInspector(entries[state.selectedEvent || 0] ? entryDetails(entries[state.selectedEvent || 0], agent) : undefined, agent); } else { state.sysPane = target.dataset.pane; const found = selected(), agent = found?.record.run.agents.find((candidate) => candidate.id === state.currentAgent); if (agent) renderSystemPane(agent); } return; } if (target.dataset.run) { selectRun(target.dataset.run); return; } if (target.dataset.agent && document.body.dataset.view === "run") { state.currentAgent = target.dataset.agent; setView("agent"); } });
+    $("q").addEventListener("input", applyEventSearch); $("run-crumb").addEventListener("click", () => setView("run"));
+    $("events").addEventListener("click", (event) => { const item = event.target.closest("[data-event]"); if (!item) return; state.selectedEvent = Number(item.dataset.event); renderAgent(); });
+    window.addEventListener("popstate", (event) => { const next = event.state || Object.fromEntries(new URL(location.href).searchParams); if (next.run) state.currentRun = next.run; if (next.agent) state.currentAgent = next.agent; setView(next.view || "run", "pop"); });
+    $("reset-run-range").addEventListener("click", () => setRunRange(null)); bindBrush($("swim"), ".track", (range) => setRunRange(range)); bindBrush($("agent-timeline"), ".ticks", (range) => { state.agentRange = range; applyEventSearch(); }); bindSplit($("split-left"), "--left", "left", 180, 520); bindSplit($("split-right"), "--right", "right", 240, 640);
+    function bindSplit(element, property, direction, min, max) { element.addEventListener("mousedown", (event) => { event.preventDefault(); const start = event.clientX, width = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(property)); const move = (next) => { const delta = direction === "left" ? next.clientX - start : start - next.clientX; document.documentElement.style.setProperty(property, `${Math.max(min, Math.min(max, width + delta))}px`); }; const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); }; window.addEventListener("mousemove", move); window.addEventListener("mouseup", up); }); }
+    document.documentElement.dataset.theme = "tty"; const query = new URLSearchParams(location.search); state.currentRun = query.get("run"); state.currentAgent = query.get("agent"); document.body.dataset.view = query.get("view") || "run"; connect(); setInterval(() => { if (document.body.dataset.view === "run") renderRun(); }, 1000);
+  </script>
+</body>
+</html>

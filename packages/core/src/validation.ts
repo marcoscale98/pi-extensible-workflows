@@ -78,12 +78,21 @@ function validateWorkflowExtensions(value: unknown, settingsPath: string, errorC
   if (value === undefined) return undefined;
   const base = `${settingsPath}.extensionSettings`;
   if (!object(value)) fail(errorCode, `${base} must be an object`);
-  if (Object.keys(value).some((key) => key !== "herdr")) fail(errorCode, `${base} contains an unsupported extension setting`);
-  if (value.herdr === undefined) return Object.freeze({});
-  if (!object(value.herdr)) fail(errorCode, `${base}.herdr must be an object`);
-  if (Object.keys(value.herdr).some((key) => key !== "enableFullyInspectableMode")) fail(errorCode, `${base}.herdr contains an unsupported setting`);
-  if (value.herdr.enableFullyInspectableMode !== undefined && typeof value.herdr.enableFullyInspectableMode !== "boolean") fail(errorCode, `${base}.herdr.enableFullyInspectableMode must be a boolean`);
-  return Object.freeze({ herdr: Object.freeze({ ...(value.herdr.enableFullyInspectableMode === undefined ? {} : { enableFullyInspectableMode: value.herdr.enableFullyInspectableMode }) }) });
+  if (Object.keys(value).some((key) => key !== "herdr" && key !== "trajectory")) fail(errorCode, `${base} contains an unsupported extension setting`);
+  const herdr = value.herdr === undefined ? undefined : (() => {
+    if (!object(value.herdr)) fail(errorCode, `${base}.herdr must be an object`);
+    if (Object.keys(value.herdr).some((key) => key !== "enableFullyInspectableMode")) fail(errorCode, `${base}.herdr contains an unsupported setting`);
+    if (value.herdr.enableFullyInspectableMode !== undefined && typeof value.herdr.enableFullyInspectableMode !== "boolean") fail(errorCode, `${base}.herdr.enableFullyInspectableMode must be a boolean`);
+    return Object.freeze({ ...(value.herdr.enableFullyInspectableMode === undefined ? {} : { enableFullyInspectableMode: value.herdr.enableFullyInspectableMode }) });
+  })();
+  const trajectory = value.trajectory === undefined ? undefined : (() => {
+    if (!object(value.trajectory)) fail(errorCode, `${base}.trajectory must be an object`);
+    if (Object.keys(value.trajectory).some((key) => key !== "port" && key !== "themes")) fail(errorCode, `${base}.trajectory contains an unsupported setting`);
+    if (value.trajectory.port !== undefined && (!positiveInteger(value.trajectory.port) || value.trajectory.port > 65535)) fail(errorCode, `${base}.trajectory.port must be an integer from 1 to 65535`);
+    if (value.trajectory.themes !== undefined && typeof value.trajectory.themes !== "boolean") fail(errorCode, `${base}.trajectory.themes must be a boolean`);
+    return Object.freeze({ ...(value.trajectory.port === undefined ? {} : { port: value.trajectory.port }), themes: value.trajectory.themes ?? false });
+  })();
+  return Object.freeze({ ...(herdr === undefined ? {} : { herdr }), ...(trajectory === undefined ? {} : { trajectory }) });
 }
 function positiveRetentionInteger(value: unknown): value is number { return positiveInteger(value) && Number.isSafeInteger(value); }
 function validateRetention(value: unknown, settingsPath: string): Readonly<WorkflowRetentionSettings> | undefined {

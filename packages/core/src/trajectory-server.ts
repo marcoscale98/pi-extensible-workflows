@@ -1,0 +1,204 @@
+import { createHash, randomUUID } from "node:crypto";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { URL } from "node:url";
+import { withPiToolDescriptions, withResolvedResources } from "./trajectory.js";
+import type { PersistedRun } from "./persistence.js";
+const TRAJECTORY_IDLE_EXIT_MS = 5 * 60 * 1000;
+
+type Socket = import("node:stream").Duplex;
+type ClientKind = "publisher" | "browser";
+type Client = { socket: Socket; kind: ClientKind; publisherId?: string; buffer: Buffer };
+type State = { type: "state"; publishers: readonly unknown[]; updatedAt: number };
+const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
+async function withDescribedRuns(runs: unknown): Promise<unknown[]> {
+  if (!Array.isArray(runs)) return [];
+  return Promise.all(runs.map(async (item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || !("run" in item)) return item;
+    const run = (item as { run?: PersistedRun }).run;
+    if (!run || !Array.isArray(run.agents)) return item;
+    const cwd = run.agents[0]?.attemptDetails?.at(-1)?.setup.cwd || process.cwd();
+    return { ...item, run: await withResolvedResources(withPiToolDescriptions(run), cwd) };
+  }));
+}
+
+function frame(payload: string): Buffer {
+  const body = Buffer.from(payload);
+  if (body.length > MAX_FRAME_BYTES) throw new Error("Trajectory WebSocket frame is too large");
+  if (body.length < 126) return Buffer.concat([Buffer.from([0x81, body.length]), body]);
+  if (body.length <= 0xffff) { const header = Buffer.alloc(4); header[0] = 0x81; header[1] = 126; header.writeUInt16BE(body.length, 2); return Buffer.concat([header, body]); }
+  const header = Buffer.alloc(10); header[0] = 0x81; header[1] = 127; header.writeBigUInt64BE(BigInt(body.length), 2); return Buffer.concat([header, body]);
+}
+
+function send(client: Client, value: unknown): void {
+  try { client.socket.write(frame(JSON.stringify(value))); } catch { client.socket.destroy(); }
+}
+
+function parseFrames(client: Client, chunk: Buffer): readonly string[] {
+  client.buffer = Buffer.concat([client.buffer, chunk]);
+  if (client.buffer.length > MAX_FRAME_BYTES + 14) throw new Error("Trajectory WebSocket buffer is too large");
+  const messages: string[] = [];
+  while (client.buffer.length >= 2) {
+    const first = client.buffer[0] ?? 0;
+    const second = client.buffer[1] ?? 0;
+    const opcode = first & 0x0f;
+    const masked = (second & 0x80) !== 0;
+    if ((first & 0x70) !== 0 || (first & 0x80) === 0 || !masked) throw new Error("Invalid Trajectory WebSocket frame");
+    let offset = 2;
+    let length = second & 0x7f;
+    if (length === 126) { if (client.buffer.length < 4) break; length = client.buffer.readUInt16BE(2); offset = 4; }
+    else if (length === 127) { if (client.buffer.length < 10) break; const longLength = client.buffer.readBigUInt64BE(2); if (longLength > BigInt(MAX_FRAME_BYTES)) throw new Error("Trajectory WebSocket frame is too large"); length = Number(longLength); offset = 10; }
+    if (opcode >= 0x8 && (length > 125 || (first & 0x80) === 0)) throw new Error("Invalid Trajectory WebSocket control frame");
+    if (client.buffer.length < offset + 4 + length) break;
+    const mask = client.buffer.subarray(offset, offset + 4); offset += 4;
+    const data = client.buffer.subarray(offset, offset + length);
+    client.buffer = client.buffer.subarray(offset + length);
+    if (opcode === 0x8) { client.socket.end(); break; }
+    if (opcode === 0x9) { const pong = Buffer.alloc(2 + length); pong[0] = 0x8a; pong[1] = length; for (let index = 0; index < length; index += 1) pong[index + 2] = (data[index] ?? 0) ^ (mask[index % 4] ?? 0); client.socket.write(pong); continue; }
+    if (opcode === 0xA) continue;
+    if (opcode !== 0x1) throw new Error("Unsupported Trajectory WebSocket frame");
+    const decoded = Buffer.alloc(length);
+    for (let index = 0; index < length; index += 1) decoded[index] = (data[index] ?? 0) ^ (mask[index % 4] ?? 0);
+    messages.push(decoded.toString("utf8"));
+  }
+  return messages;
+}
+
+function writeJson(response: ServerResponse, status: number, value: unknown): void {
+  const body = JSON.stringify(value);
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(body), "cache-control": "no-store" });
+  response.end(body);
+}
+function authorized(request: IncomingMessage, port: number): boolean {
+  const origin = request.headers.origin;
+  return origin === undefined || origin === `http://127.0.0.1:${String(port)}` || origin === `http://localhost:${String(port)}`;
+}
+
+export function createTrajectoryServer(port: number, lockPath: string): Server {
+  const clients = new Set<Client>();
+  const publishers = new Map<string, { client: Client; value: Record<string, unknown> }>();
+  let latest: State = { type: "state", publishers: [], updatedAt: Date.now() };
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let closed = false;
+  const scheduleIdleExit = () => {
+    if (closed || [...publishers.values()].some(({ value }) => value.connected === true) || idleTimer !== undefined) return;
+    idleTimer = setTimeout(() => {
+      server.close(() => {
+        void rm(lockPath, { force: true }).then(() => { process.exit(0); }).catch(() => { process.exit(1); });
+      });
+    }, TRAJECTORY_IDLE_EXIT_MS);
+    idleTimer.unref();
+  };
+  const cancelIdleExit = () => {
+    if (idleTimer !== undefined) { clearTimeout(idleTimer); idleTimer = undefined; }
+  };
+  const broadcast = (value: unknown) => { for (const client of clients) if (client.kind === "browser") send(client, value); };
+  const publishState = () => {
+    const values = [...publishers.values()].map(({ value }) => value);
+    latest = { type: "state", publishers: values, updatedAt: Date.now() };
+    broadcast(latest);
+  };
+  const disconnect = (client: Client) => {
+    clients.delete(client);
+    if (client.kind === "publisher" && client.publisherId && publishers.get(client.publisherId)?.client === client) {
+      const current = publishers.get(client.publisherId);
+      if (current) publishers.set(client.publisherId, { client, value: { ...current.value, connected: false, lastSeen: new Date().toISOString() } });
+      publishState();
+      scheduleIdleExit();
+    }
+  };
+  const handleMessage = (client: Client, raw: string) => {
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch { return; }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const message = value as Record<string, unknown>;
+    if (message.type === "ui:attach") { client.kind = "browser"; send(client, latest); return; }
+    if (client.kind === "publisher" && message.type === "publisher:attach" && typeof message.publisherId === "string") {
+      cancelIdleExit();
+      client.publisherId = message.publisherId;
+      const previous = publishers.get(message.publisherId);
+      publishers.set(message.publisherId, { client, value: { ...(previous?.value ?? { id: message.publisherId }), id: message.publisherId, connected: true } });
+      publishState();
+      return;
+    }
+    if (client.kind === "publisher" && message.type === "publisher:state" && typeof message.publisher === "object" && message.publisher !== null) {
+      const publisher = message.publisher as Record<string, unknown>;
+      const id = typeof publisher.id === "string" ? publisher.id : client.publisherId;
+      if (!id) return;
+      client.publisherId = id;
+      cancelIdleExit();
+      publishers.set(id, { client, value: { ...(publishers.get(id)?.value ?? { id }), ...publisher, connected: true } });
+      void withDescribedRuns(message.runs).then((runs) => {
+        if (client.publisherId !== id) return;
+        publishers.set(id, { client, value: { ...publisher, connected: true, runs } });
+        publishState();
+      }, () => {
+        publishers.set(id, { client, value: { ...publisher, connected: true, runs: Array.isArray(message.runs) ? message.runs : [] } });
+        publishState();
+      });
+      return;
+    }
+    if (client.kind === "publisher" && message.type === "publisher:action-result" && typeof message.requestId === "string") { broadcast(message); return; }
+    if (client.kind !== "browser" || message.type !== "ui:action" || typeof message.publisherId !== "string" || typeof message.runId !== "string" || typeof message.action !== "string") return;
+    const target = publishers.get(message.publisherId);
+    if (!target || !target.value.connected) { send(client, { type: "action-result", requestId: message.requestId, ok: false, error: "Publisher is disconnected" }); return; }
+    send(target.client, { type: "publisher:action", requestId: typeof message.requestId === "string" ? message.requestId : randomUUID(), action: message.action, runId: message.runId, ...(typeof message.name === "string" ? { name: message.name } : {}) });
+  };
+  const server = createServer((request, response) => {
+    let url: URL;
+    try { url = new URL(request.url ?? "/", `http://127.0.0.1:${String(port)}`); }
+    catch { writeJson(response, 400, { error: "Invalid request" }); return; }
+    if (!authorized(request, port)) { writeJson(response, 403, { error: "Forbidden" }); return; }
+    const path = url.pathname;
+    if (request.method === "GET" && path === "/health") { writeJson(response, 200, { ok: true }); return; }
+    if (request.method === "GET" && (path === "/" || path === "/index.html")) {
+      void readFile(new URL("./trajectory/index.html", import.meta.url)).then((html) => {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": html.byteLength, "cache-control": "no-store" });
+        response.end(html);
+      }).catch(() => { writeJson(response, 500, { error: "Trajectory UI is unavailable" }); });
+      return;
+    }
+    if (request.method === "GET" && path === "/marked.min.js") {
+      void readFile(new URL("./trajectory/marked.min.js", import.meta.url)).then((script) => {
+        response.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "content-length": script.byteLength, "cache-control": "no-store" });
+        response.end(script);
+      }).catch(() => { writeJson(response, 500, { error: "Trajectory markdown renderer is unavailable" }); });
+      return;
+    }
+    writeJson(response, 404, { error: "Not found" });
+  });
+  server.on("upgrade", (request, socket) => {
+    let url: URL;
+    try { url = new URL(request.url ?? "/", `http://127.0.0.1:${String(port)}`); }
+    catch { socket.destroy(); return; }
+    const key = request.headers["sec-websocket-key"];
+    if (!authorized(request, port) || url.pathname !== "/ws" || typeof key !== "string") { socket.destroy(); return; }
+    const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const client: Client = { socket, kind: "publisher", buffer: Buffer.alloc(0) };
+    clients.add(client);
+    socket.on("data", (chunk: unknown) => {
+      if (!Buffer.isBuffer(chunk)) return;
+      try { for (const message of parseFrames(client, chunk)) handleMessage(client, message); } catch { socket.destroy(); }
+    });
+    socket.on("close", () => { disconnect(client); });
+    socket.on("error", () => { disconnect(client); });
+  });
+  server.once("listening", () => { void writeFile(lockPath, `${JSON.stringify({ pid: process.pid, port })}\n`, { mode: 0o600 }).catch(() => { process.exitCode = 1; }); scheduleIdleExit(); });
+  server.on("close", () => { closed = true; if (idleTimer !== undefined) { clearTimeout(idleTimer); idleTimer = undefined; } for (const client of clients) client.socket.destroy(); });
+  return server;
+}
+
+async function main(): Promise<void> {
+  const args = new Map<string, string>();
+  for (let index = 2; index + 1 < process.argv.length; index += 2) args.set(process.argv[index] ?? "", process.argv[index + 1] ?? "");
+  const port = Number(args.get("--port"));
+  const lockPath = args.get("--lock");
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535 || !lockPath) throw new Error("Invalid Trajectory server arguments");
+  const server = createTrajectoryServer(port, lockPath);
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", () => { resolve(); }); });
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) void main().catch((error: unknown) => { console.error(error); process.exitCode = 1; });

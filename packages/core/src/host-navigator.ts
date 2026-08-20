@@ -96,15 +96,20 @@ export type WorkflowNavigatorDependencies = {
   resumeSelectedWorkflow: (runId: string, foreground: boolean, context: unknown, budgetPatch?: unknown) => Promise<{ workflowName: string; state: "running" | "completed" | "awaiting_approval"; attached: boolean; value?: JsonValue }>;
   reportBlocked?: ReportBlocked;
   setNavigatorOpen?: (open: boolean) => void;
+  openTrajectory: (context: unknown) => Promise<void>;
 };
 export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): void {
-  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked, setNavigatorOpen } = deps;
+  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked, setNavigatorOpen, openTrajectory } = deps;
   const command = {
     description: "Open the workflow picker; workflow actions are available contextually",
     handler: async (args, ctx) => {
       const command = args.trim();
-      if (command) {
+      if (command && command !== "trajectory") {
         ctx.ui.notify("Workflow slash commands do not accept arguments. Open the workflow picker with /workflow; actions are available there or through workflow tools.", "warning");
+        return;
+      }
+      if (command === "trajectory") {
+        await openTrajectory(ctx);
         return;
       }
       await ensureSessionLease(ctx.cwd, ctx.sessionManager.getSessionId());

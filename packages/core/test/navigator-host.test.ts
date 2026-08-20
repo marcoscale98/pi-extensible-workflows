@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { registerWorkflowNavigator, type WorkflowNavigatorDependencies } from "../src/host-navigator.js";
 import { executeCommand, testExtensionApi } from "./support.js";
 import workflowExtension, { agentActionLabels, createLaunchSnapshot, DEFAULT_SETTINGS, formatAgentDetail, formatNavigatorDashboard, formatNavigatorRun, formatWorkflowPhaseDashboard, registerWorkflowExtension, RunStore, openWorkflowArtifact, WorkflowError, WORKFLOW_BLOCKED_EVENT } from "../src/index.js";
 import { testTransport, type TestPiSession } from "./test-transport.js";
@@ -27,6 +28,18 @@ void test("workflow slash subcommands are rejected with picker guidance", async 
   assert.ok(command);
   await executeCommand(command, "resume run-id", { ui: { notify(message: string) { notices.push(message); } } });
   assert.match(notices[0] ?? "", /\/workflow/);
+  assert.match(notices[0] ?? "", /do not accept arguments/);
+});
+void test("trajectory is the only accepted workflow argument", async () => {
+  let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+  const opened: unknown[] = [];
+  registerWorkflowNavigator({ pi: { registerCommand(_name: string, options: { handler: typeof handler }) { handler = options.handler; } }, openTrajectory: async (context: unknown) => { opened.push(context); } } as unknown as WorkflowNavigatorDependencies);
+  assert.ok(handler);
+  const notices: string[] = [];
+  const context = { ui: { notify(message: string) { notices.push(message); } } };
+  await executeCommand(handler, "trajectory", context);
+  assert.equal(opened.length, 1);
+  await executeCommand(handler, "resume run-id", context);
   assert.match(notices[0] ?? "", /do not accept arguments/);
 });
 void test("selected workflow agent details use the shared formatter seam", () => {

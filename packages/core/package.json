@@ -41,7 +41,7 @@
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && cp -R starter/roles dist/starter/roles",
+    "build": "rm -rf dist && tsc -p tsconfig.json && cp -R starter/roles dist/starter/roles && cp -R src/trajectory dist/src/trajectory",
     "lint": "eslint .",
     "test": "npm run test:layout && npm run build && npm run test:widget && npm run test:run && npm run test:herdr && npm run test:subagents",
     "test:layout": "node --test --test-timeout=10000 --test-force-exit test/workspace-layout.test.mjs",

@@ -124,13 +124,25 @@ function decodeWorkflowMetadata(value: unknown): LaunchSnapshot["metadata"] | un
   if (description === INVALID_PERSISTED_VALUE) return undefined;
   return { name: value.name, ...(description === undefined ? {} : { description }) };
 }
-function decodeWorkflowExtensions(value: unknown): { herdr?: { enableFullyInspectableMode?: boolean } } | undefined {
-  if (!object(value)) return undefined;
-  if (value.herdr === undefined) return {};
-  if (!object(value.herdr)) return undefined;
-  const enableFullyInspectableMode = optionalBoolean(value.herdr.enableFullyInspectableMode);
-  if (enableFullyInspectableMode === INVALID_PERSISTED_VALUE) return undefined;
-  return { herdr: { ...(enableFullyInspectableMode === undefined ? {} : { enableFullyInspectableMode }) } };
+function decodeWorkflowExtensions(value: unknown): { herdr?: { enableFullyInspectableMode?: boolean }; trajectory?: { port?: number; themes: boolean } } | undefined {
+  if (!object(value) || Object.keys(value).some((key) => key !== "herdr" && key !== "trajectory")) return undefined;
+  const herdr = value.herdr === undefined ? undefined : (() => {
+    if (!object(value.herdr) || Object.keys(value.herdr).some((key) => key !== "enableFullyInspectableMode")) return undefined;
+    const enableFullyInspectableMode = optionalBoolean(value.herdr.enableFullyInspectableMode);
+    if (enableFullyInspectableMode === INVALID_PERSISTED_VALUE) return undefined;
+    return { enableFullyInspectableMode };
+  })();
+  if (value.herdr !== undefined && herdr === undefined) return undefined;
+  const trajectory = value.trajectory === undefined ? undefined : (() => {
+    if (!object(value.trajectory) || Object.keys(value.trajectory).some((key) => key !== "port" && key !== "themes")) return undefined;
+    const port = value.trajectory.port;
+    if (port !== undefined && (!safePositiveInteger(port) || port > 65535)) return undefined;
+    const themes = optionalBoolean(value.trajectory.themes);
+    if (themes === INVALID_PERSISTED_VALUE) return undefined;
+    return { ...(port === undefined ? {} : { port }), themes: themes ?? false };
+  })();
+  if (value.trajectory !== undefined && trajectory === undefined) return undefined;
+  return { ...(herdr === undefined ? {} : { herdr: { ...(herdr.enableFullyInspectableMode === undefined ? {} : { enableFullyInspectableMode: herdr.enableFullyInspectableMode }) } }), ...(trajectory === undefined ? {} : { trajectory }) };
 }
 function decodeBudgetLimits(value: unknown): NonNullable<NonNullable<RunRecord["budget"]>[BudgetDimension]> | undefined {
   if (!object(value)) return undefined;

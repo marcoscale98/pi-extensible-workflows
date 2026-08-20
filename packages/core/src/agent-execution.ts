@@ -564,6 +564,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     getHerdrContextFiles: () => native.herdrContextFiles,
     getHerdrModelContext: () => native.herdrModelContext,
     getState: () => Object.freeze(workflowAgentState(native, prepared)),
+    getResourceInspection: () => native.getResourceInspection(),
     getSessionStats: () => workflowAgentStats(native.getSessionStats()),
     getLastAssistant: () => latestUsableAssistant(native.messages),
     subscribe(listener: (event: WorkflowAgentSessionEvent) => void) { listeners.add(listener); listener({ type: "state_changed", state: workflowAgentState(native, prepared) }); return () => listeners.delete(listener); },
@@ -1002,7 +1003,15 @@ export class WorkflowAgentExecutor {
               await options.onAttempt?.(activeAttempt);
             },
             onSessionReady: async () => {
-              if (attemptSetup.sessionInput.resourcePolicy) setupSummary = { ...setupSummary, resourceSelectors: resourcePolicySummary(attemptSetup.sessionInput.resourcePolicy, attemptSetup.sessionInput.tools) };
+              const policy = attemptSetup.sessionInput.resourcePolicy;
+              const inspection = session?.getResourceInspection?.();
+              if (policy && inspection) {
+                try {
+                  policy.selectedSkills = [...inspection.skills];
+                  policy.selectedExtensions = [...inspection.extensions];
+                } catch { /* Frozen prepared policies still receive the inspection overlay below. */ }
+              }
+              if (policy) setupSummary = { ...setupSummary, resourceSelectors: { ...resourcePolicySummary(policy, attemptSetup.sessionInput.tools), ...(inspection ? { skills: [...inspection.skills], extensions: [...inspection.extensions] } : {}) } };
             },
             onBeforeComplete: async () => {
               if (options.worktreeOwner) await runStore?.snapshotWorktree(options.worktreeOwner);

@@ -83,7 +83,8 @@ export interface WorkflowModelAliasResolverContext { cwd: string; projectTrusted
 export interface WorkflowModelAlias { resolve: (context: Readonly<WorkflowModelAliasResolverContext>) => string | Promise<string> }
 export interface WorkflowMetadata { name: string; description?: string }
 export interface HerdrExtensionSettings { enableFullyInspectableMode?: boolean }
-export interface WorkflowExtensionSettings { herdr?: Readonly<HerdrExtensionSettings> }
+export interface TrajectoryExtensionSettings { port?: number; themes?: boolean }
+export interface WorkflowExtensionSettings { herdr?: Readonly<HerdrExtensionSettings>; trajectory?: Readonly<TrajectoryExtensionSettings> }
 export interface WorkflowRetentionSettings { olderThanDays?: number; maxTerminalRuns?: number }
 export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; retention?: Readonly<WorkflowRetentionSettings> }
 export interface WorkflowSettingsOverrides { concurrency?: number; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; retention?: Readonly<WorkflowRetentionSettings> }
@@ -144,6 +145,7 @@ export interface AgentRecord {
   requestedModel?: string;
   model: ModelSpec;
   tools: readonly string[];
+  toolDefinitions?: readonly { readonly name: string; readonly description: string }[];
   attempts: number;
   startedAt?: number;
   durationMs?: number;
@@ -252,6 +254,7 @@ export interface WorkflowAgentSession {
   suspendForHandoff?(): Promise<void>;
   resumeFromHandoff?(): Promise<void>;
   dispose(): Promise<void>;
+  getResourceInspection?(): { readonly skills: readonly string[]; readonly extensions: readonly string[] };
 }
 type SessionTools = NonNullable<CreateAgentSessionOptions["tools"]>;
 type SessionCustomTools = NonNullable<CreateAgentSessionOptions["customTools"]>;

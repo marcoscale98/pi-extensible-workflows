@@ -4,6 +4,7 @@
 ### New capabilities
 
 - Added the bundled `reviewLoop` starter, packaged developer and reviewer roles, and durable standalone subagent tools to the core package.
+- Added Trajectory, a local browser UI opened with `/workflow trajectory` for inspecting live workflow runs, agents, transcripts, tools, skills, and extensions.
 
 ### Packaging
 

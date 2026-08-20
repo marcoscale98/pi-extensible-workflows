@@ -18,6 +18,7 @@ import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIf
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
 import backgroundWidget, { type BackgroundWidgetAPI } from "./background-widget.js";
 import { showChangelogNotice } from "./changelog.js";
+import { createTrajectoryController, createTrajectoryRunLoader, openTrajectoryUrl, trajectoryUrl, type TrajectoryActionRequest } from "./trajectory.js";
 import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import {
   SETTLED_AGENT_STATES,
@@ -341,6 +342,52 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     });
   };
   const liveAgents = new LiveAgentRegistry();
+  const trajectoryController = createTrajectoryController(extensionAgentDir);
+  const trajectoryRuns = (context: unknown) => {
+    const host = object(context) ? context : undefined;
+    const cwd = typeof host?.cwd === "string" ? host.cwd : undefined;
+    const sessionManager = host && object(host.sessionManager) ? host.sessionManager : undefined;
+    const sessionId = typeof sessionManager?.getSessionId === "function" ? String(Reflect.apply(sessionManager.getSessionId, sessionManager, [])) : undefined;
+    if (!cwd || !sessionId) throw new WorkflowError("RUN_NOT_FOUND", "Trajectory requires the current project and Pi session");
+    return { cwd, sessionId };
+  };
+  const trajectoryAction = async (request: Readonly<TrajectoryActionRequest>, context: unknown): Promise<void> => {
+    if (!request.runId.trim()) throw new WorkflowError("RUN_NOT_FOUND", "Trajectory action requires a run ID");
+    const run = runs.get(request.runId);
+    if (request.action === "checkpoint-approve" || request.action === "checkpoint-reject") {
+      if (!request.name || !await answerCheckpoint(request.runId, request.name, request.action === "checkpoint-approve", true)) throw new WorkflowError("RUN_NOT_FOUND", "Checkpoint is no longer awaiting a response");
+      return;
+    }
+    if (request.action === "pause") { if (!run) throw new WorkflowError("RUN_NOT_FOUND", "Workflow run is not active"); await run.lifecycle.pause(); return; }
+    if (request.action === "stop") { const result = await stopWorkflowRun(request.runId); if (!result.stopped && result.reason !== "already_terminal") throw new WorkflowError("RUN_NOT_FOUND", "Workflow run is not active"); return; }
+    if (request.action === "resume") { await resumeSelectedWorkflow(request.runId, false, context); return; }
+    await recovery.retryWorkflowRun(request.runId, context);
+  };
+  const openTrajectory = async (context: unknown): Promise<void> => {
+    try {
+      const { cwd, sessionId } = trajectoryRuns(context);
+      const trusted = projectTrusted(context);
+      const settings = resolveWorkflowSettings(cwd, trusted, workflowSettingsPath(extensionAgentDir)).effective.extensionSettings?.trajectory;
+      const port = settings?.port;
+      const themes = settings?.themes ?? false;
+      const current = object(context) ? context : undefined;
+      const loadRuns = createTrajectoryRunLoader(cwd, sessionId, home, (run) => {
+        const active = runs.get(run.id);
+        const live = withLiveActivities(run);
+        return active ? { ...live, state: active.lifecycle.state, usage: active.budget.usage } : live;
+      });
+      const input = { cwd, sessionId, ...(port === undefined ? {} : { port }), themes, loadRuns, handleAction: (request: Readonly<TrajectoryActionRequest>) => trajectoryAction(request, context) };
+      const server = await trajectoryController.open(input);
+      const url = trajectoryUrl(server.port);
+      openTrajectoryUrl(url);
+      const ui = current && object(current.ui) ? current.ui : undefined;
+      if (typeof ui?.notify === "function") Reflect.apply(ui.notify, ui, [`Trajectory opened at ${url}`, "info"]);
+    } catch (error) {
+      const current = object(context) ? context : undefined;
+      const ui = current && object(current.ui) ? current.ui : undefined;
+      if (typeof ui?.notify === "function") Reflect.apply(ui.notify, ui, [`Unable to open Trajectory: ${errorText(error)}`, "error"]);
+    }
+  };
   const withLiveActivities = (run: PersistedRun): PersistedRun => liveAgents.overlay(run);
   const terminalRunStates = new Map<string, "completed" | "failed" | "stopped">();
   let sessionLease: SessionLease | undefined;
@@ -1229,7 +1276,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     },
   };
   pi.registerTool(workflowTool);
-  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground: deliveryController.moveForegroundToBackground, isForegroundAttached: deliveryController.isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked, setNavigatorOpen: (open) => { if (open) backgroundWidgetController.suspend(); else backgroundWidgetController.resume(); } });
+  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground: deliveryController.moveForegroundToBackground, isForegroundAttached: deliveryController.isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked, openTrajectory, setNavigatorOpen: (open) => { if (open) backgroundWidgetController.suspend(); else backgroundWidgetController.resume(); } });
   pi.on("session_shutdown", async () => {
     try {
       await Promise.all([...runs.entries()].map(async ([runId, run]) => {
@@ -1243,6 +1290,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         await run.completion?.catch(() => undefined);
       }));
       await scheduler.flush();
+      await trajectoryController.close();
     } finally {
       try { await releaseSessionLease(); } finally {
         if (releaseWorkflowRegistry) {
