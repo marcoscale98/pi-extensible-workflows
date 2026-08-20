@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { applySystemPrompts, applyToolDescriptions, trajectoryUrl } from "../src/trajectory.js";
+import { createTrajectoryRunLoader, applySystemPrompts, applyToolDescriptions, trajectoryUrl } from "../src/trajectory.js";
+import { RunStore } from "../src/persistence.js";
+import { createLaunchSnapshot } from "../src/utils.js";
 import type { PersistedRun } from "../src/persistence.js";
 
 void test("applySystemPrompts fills missing prompts from session records", () => {
@@ -46,4 +50,35 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
   assert.match(source, /root\.dataset\.timelineHasTime !== "true"/);
   assert.doesNotMatch(source, /paintBrush\(root, selector, range\); callback\(range\)/);
   assert.doesNotMatch(source, /\.range-edge\.end\.stacked \{ top: -31px; \}/);
+});
+
+void test("trajectory transcript retention stays bounded with timing entries", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-cap-"));
+  const cwd = join(root, "project");
+  const home = join(root, "home");
+  const sessionFile = join(root, "session.jsonl");
+  mkdirSync(cwd, { recursive: true });
+  const transcript = Array.from({ length: 400 }, (_, index) => {
+    const toolCallId = `call-${String(index)}`;
+    return [
+      { type: "message", message: { role: "toolResult", toolCallId } },
+      { type: "custom", customType: "pi-workflows:tool-timing", data: { toolCallId, toolName: "bash", startedAt: index, completedAt: index + 1, durationMs: 1, isError: false } },
+    ];
+  }).flat();
+  writeFileSync(sessionFile, `${transcript.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+  const store = new RunStore(cwd, "session", "run", home);
+  const model = { provider: "fixture", model: "fixture-model" };
+  const run = {
+    id: "run", workflowName: "trajectory", cwd, sessionId: "session", state: "completed", agentSessions: [],
+    agents: [{ id: "agent", name: "agent", path: "agent", state: "completed", attempts: 1, model, tools: [], attemptDetails: [{ attempt: 1, transport: "local", session: { transport: "local", sessionId: "native", locator: { sessionFile } }, setup: { cwd, hookNames: [], model, tools: [] }, accounting: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } }] }],
+  } as unknown as PersistedRun;
+  try {
+    await store.create(run, createLaunchSnapshot({ script: "return true;", args: null, metadata: { name: "trajectory" }, settings: { concurrency: 1 }, models: ["fixture/fixture-model"], tools: [], agentTypes: [], roles: {}, schemas: [] }));
+    const [loaded] = await createTrajectoryRunLoader(cwd, "session", home)();
+    const entries = loaded?.transcripts.agent ?? [];
+    assert.equal(entries.length, 400);
+    assert.equal(entries.filter((entry) => (entry as { type?: string }).type === "custom").length, 200);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -49,13 +49,14 @@ import { SerialLane, assertModelThinking, deepFreeze, errorText, jsonObject, jso
 import { type AgentState, type ThinkingLevel } from "./types.js";
 import { WorkflowError } from "./types.js";
 import { createLiveSessionHandoff } from "./session-handoff.js";
-import { TOOL_TIMING_EXTENSION } from "./tool-timing.js";
+import { createToolTimingExtension } from "./tool-timing.js";
 import { normalizePiMessage, normalizePiSessionEvent, runtimeProgressToAgentProgress } from "./pi-runtime-adapter.js";
 import { createPiRuntimeAgentRunner, isRuntimeAgentProviderError, normalizePiRuntimeError } from "./pi-runtime-runner.js";
 import type { RuntimeAgentProgress, RuntimeUsage } from "./runtime/agent-runner.js";
 import { validateAgentOptions, validateSchema } from "./validation.js";
 import type { RunStore } from "./persistence.js";
 type AgentExecutionRunStore = Pick<RunStore, "recordSystemPrompt" | "validateWorktree" | "worktree" | "snapshotWorktree">;
+const localToolTimingExtension = createToolTimingExtension();
 export type { AgentAccounting, AgentActivity, AgentInspectionMode, AgentSetup, AgentSetupContext, AgentSetupHook, AgentTransport, AgentTransportContext, PiRuntimeLaunchInfo, PreparedAgentSession, RegisteredAgentSetupHook, SessionInput, WorkflowAgentMessage, WorkflowAgentSession, WorkflowAgentSessionEvent, WorkflowAgentSessionReference, WorkflowAgentSessionState, WorkflowAgentSessionStats, WorkflowAgentTurnResult } from "./types.js";
 export interface AgentBudgetHooks {
   beforeAttempt(): void;
@@ -387,7 +388,7 @@ export async function createLocalWorkflowAgentSession(prepared: Readonly<Prepare
     cwd: prepared.cwd, model: { ...prepared.model }, tools: [...prepared.tools] as SessionInput["tools"], sessionLabel: prepared.sessionLabel,
     ...(prepared.agentDir ? { agentDir: prepared.agentDir } : {}), ...(prepared.customTools?.length ? { customTools: [...prepared.customTools] as NonNullable<SessionInput["customTools"]> } : {}),
     ...(prepared.resultTool ? { resultTool: prepared.resultTool } : {}), ...(prepared.systemPrompt === undefined ? {} : { systemPrompt: prepared.systemPrompt }),
-    ...(prepared.systemPromptAppend ? { systemPromptAppend: prepared.systemPromptAppend } : {}), extensionFactories: [...(prepared.extensionFactories ?? []), ...(prepared.extensionFactories?.includes(TOOL_TIMING_EXTENSION) ? [] : [TOOL_TIMING_EXTENSION])],
+    ...(prepared.systemPromptAppend ? { systemPromptAppend: prepared.systemPromptAppend } : {}), extensionFactories: [...(prepared.extensionFactories ?? []), ...(prepared.extensionFactories?.includes(localToolTimingExtension) ? [] : [localToolTimingExtension])],
     ...(prepared.additionalSkillPaths?.length ? { additionalSkillPaths: [...prepared.additionalSkillPaths] } : {}), ...(prepared.contextFiles === undefined ? {} : { contextFiles: [...prepared.contextFiles] }), ...(prepared.resourcePolicy ? { resourcePolicy: structuredClone(prepared.resourcePolicy) } : {}), ...(prepared.options ? { options: { ...prepared.options } } : {}),
   };
   let nativeHandle = await createLocalPiSessionHandle(input);
@@ -754,7 +755,7 @@ function preparedAgentSession(input: SessionInput, initialPrompt?: string): Read
     cwd: input.cwd, model: Object.freeze({ ...input.model }), tools: Object.freeze([...input.tools]), sessionLabel: input.sessionLabel, ...(initialPrompt === undefined ? {} : { initialPrompt }),
     ...(input.agentDir ? { agentDir: input.agentDir } : {}), ...(input.customTools?.length ? { customTools: Object.freeze([...input.customTools]) } : {}), ...(input.resultTool ? { resultTool: input.resultTool } : {}), ...(input.options ? { options: Object.freeze(structuredClone(input.options)) } : {}),
     ...(piRuntime ? { piRuntime } : {}), ...(piRuntimeError ? { piRuntimeError } : {}),
-    ...(input.systemPrompt === undefined ? {} : { systemPrompt: input.systemPrompt }), ...(systemPromptPath ? { systemPromptPath } : {}), ...(input.systemPromptAppend ? { systemPromptAppend: input.systemPromptAppend } : {}), extensionFactories: Object.freeze([...(input.extensionFactories ?? []), TOOL_TIMING_EXTENSION]), ...(input.additionalSkillPaths?.length ? { additionalSkillPaths: Object.freeze([...input.additionalSkillPaths]) } : {}), ...(input.contextFiles === undefined ? {} : { contextFiles: Object.freeze([...input.contextFiles]) }),
+    ...(input.systemPrompt === undefined ? {} : { systemPrompt: input.systemPrompt }), ...(systemPromptPath ? { systemPromptPath } : {}), ...(input.systemPromptAppend ? { systemPromptAppend: input.systemPromptAppend } : {}), ...(input.extensionFactories?.length ? { extensionFactories: Object.freeze([...input.extensionFactories]) } : {}), ...(input.additionalSkillPaths?.length ? { additionalSkillPaths: Object.freeze([...input.additionalSkillPaths]) } : {}), ...(input.contextFiles === undefined ? {} : { contextFiles: Object.freeze([...input.contextFiles]) }),
     ...(input.resourcePolicy ? { resourcePolicy: Object.freeze(structuredClone(input.resourcePolicy)) } : {}),
   };
   return deepFreeze(prepared);

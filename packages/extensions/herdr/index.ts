@@ -11,6 +11,7 @@ import {
   WORKFLOW_RUN_COMPLETED_EVENT,
   WORKFLOW_RUN_STATE_CHANGED_EVENT,
   createHerdrAgentReporter,
+  createToolTimingExtension,
   errorText,
   herdrAvailable,
   herdrCommandRunner,
@@ -179,7 +180,8 @@ function inlineFactorySource(extension: InlineExtension): string {
   return source;
 }
 function createInlineExtensionBridge(prepared: Readonly<PreparedAgentSession>): ExtensionBridge | undefined {
-  const factories = prepared.extensionFactories ?? [];
+  const timingFactory = createToolTimingExtension();
+  const factories = prepared.extensionFactories?.includes(timingFactory) ? [...(prepared.extensionFactories ?? [])] : [...(prepared.extensionFactories ?? []), timingFactory];
   if (!factories.length) return undefined;
   const extensionPath = join(tmpdir(), `pi-herdr-extensions-${String(process.pid)}-${randomBytes(6).toString("hex")}.mjs`);
   const source = `const factories = [${factories.map(inlineFactorySource).join(",")}];\nexport default async function(pi) { for (const factory of factories) await factory(pi); }\n`;

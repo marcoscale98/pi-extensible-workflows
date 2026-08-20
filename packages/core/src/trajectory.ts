@@ -195,7 +195,7 @@ async function readTranscript(path: string): Promise<readonly unknown[]> {
     const retainedIds = new Set(retainedEntries.map(transcriptToolCallId).filter((id): id is string => id !== undefined));
     const retainedTiming = entries.filter((entry) => { const id = timingToolCallId(entry); return id !== undefined && retainedIds.has(id); });
     const retained = new Set([...retainedEntries, ...retainedTiming]);
-    return entries.filter((entry) => retained.has(entry));
+    return entries.filter((entry) => retained.has(entry)).slice(-TRAJECTORY_MAX_TRANSCRIPT_ENTRIES);
   } catch { return []; }
   finally { await handle?.close(); }
 }

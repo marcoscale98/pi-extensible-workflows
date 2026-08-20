@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { localAgentTransport, type AgentTransportContext } from "../src/agent-execution.js";
 import type { PreparedAgentSession } from "../src/types.js";
-import { TOOL_TIMING_ENTRY_TYPE, type ToolTimingEntry } from "../src/tool-timing.js";
+import { createToolTimingExtension, TOOL_TIMING_ENTRY_TYPE, type ToolTimingEntry } from "../src/tool-timing.js";
 
 type JsonRecord = Record<string, unknown>;
 function isRecord(value: unknown): value is JsonRecord { return value !== null && typeof value === "object" && !Array.isArray(value); }
@@ -100,4 +100,20 @@ void test("records real parallel tool execution timing in the workflow session J
     await new Promise<void>((resolve) => server.close(() => { resolve(); }));
     rmSync(rootDir, { recursive: true, force: true });
   }
+});
+
+void test("tool timing extension supports a deterministic clock", () => {
+  assert.doesNotMatch(Function.prototype.toString.call(createToolTimingExtension()), /TOOL_TIMING_ENTRY_TYPE|toolTimingExtension/);
+  let now = 100;
+  const entries: Array<{ type: string; data: unknown }> = [];
+  const handlers = new Map<string, (event: unknown) => void>();
+  const pi = {
+    on(name: string, handler: (event: unknown) => void) { handlers.set(name, handler); },
+    appendEntry(type: string, data: unknown) { entries.push({ type, data }); },
+  } as unknown as ExtensionAPI;
+  void createToolTimingExtension(() => now)(pi);
+  handlers.get("tool_execution_start")?.({ toolCallId: "call", toolName: "bash" });
+  now = 250;
+  handlers.get("tool_execution_end")?.({ toolCallId: "call", toolName: "bash", isError: true });
+  assert.deepEqual(entries, [{ type: TOOL_TIMING_ENTRY_TYPE, data: { toolCallId: "call", toolName: "bash", startedAt: 100, completedAt: 250, durationMs: 150, isError: true } }]);
 });
