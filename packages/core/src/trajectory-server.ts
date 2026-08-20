@@ -15,12 +15,13 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 async function withDescribedRuns(runs: unknown): Promise<unknown[]> {
   if (!Array.isArray(runs)) return [];
-  return Promise.all(runs.map(async (item) => {
+  const items: unknown[] = runs;
+  return Promise.all(items.map(async (item) => {
     if (!item || typeof item !== "object" || Array.isArray(item) || !("run" in item)) return item;
-    const run = (item as { run?: PersistedRun }).run;
-    if (!run || !Array.isArray(run.agents)) return item;
-    const cwd = run.agents[0]?.attemptDetails?.at(-1)?.setup.cwd || process.cwd();
-    return { ...item, run: await withResolvedResources(withPiToolDescriptions(run), cwd) };
+    const record = item as { run: PersistedRun };
+    const run = record.run;
+    const cwd = run.agents.at(0)?.attemptDetails?.at(-1)?.setup.cwd ?? process.cwd();
+    return { ...record, run: await withResolvedResources(withPiToolDescriptions(run), cwd) };
   }));
 }
 

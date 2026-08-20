@@ -286,8 +286,8 @@ export async function withResolvedResources(run: PersistedRun, cwd: string): Pro
     const inspection = last?.setup.resourceSelectors;
     if (!details || !last || !inspection) return agent;
     const sources = inspection.selectorSources ?? { global: inspection.selectors, project: {} };
-    const skills = inspection.skills.length ? inspection.skills : selectResourcesByLayers([sources.global?.skills, sources.project?.skills, sources.role?.skills, sources.call?.skills], discovered.skills);
-    const extensions = inspection.extensions.length ? inspection.extensions : selectResourcesByLayers([sources.global?.extensions, sources.project?.extensions, sources.role?.extensions, sources.call?.extensions].map((layer) => layer?.map((selector) => canonicalExtensionSelector(selector, last.setup.cwd || cwd))), discovered.extensions);
+    const skills = inspection.skills.length ? inspection.skills : selectResourcesByLayers([sources.global.skills, sources.project.skills, sources.role?.skills, sources.call?.skills], discovered.skills);
+    const extensions = inspection.extensions.length ? inspection.extensions : selectResourcesByLayers([sources.global.extensions, sources.project.extensions, sources.role?.extensions, sources.call?.extensions].map((layer) => layer?.map((selector) => canonicalExtensionSelector(selector, last.setup.cwd || cwd))), discovered.extensions);
     if (skills === inspection.skills && extensions === inspection.extensions) return agent;
     return { ...agent, attemptDetails: [...details.slice(0, -1), { ...last, setup: { ...last.setup, resourceSelectors: { ...inspection, skills, extensions } } }] };
   });
