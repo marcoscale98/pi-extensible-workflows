@@ -30,3 +30,20 @@ void test("Trajectory agent grid groups persisted agent scopes", () => {
   assert.match(source, /class="agent-grid-scope"/);
   assert.doesNotMatch(source, /const path = \[\.\.\.\(agent\.parentBreadcrumb/);
 });
+
+void test("Trajectory timelines keep cursors and agent-only range selection", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /bindTimeCursor\(\$\("swim"\), "\.axis \.ticks"\)/);
+  assert.match(source, /bindTimeCursor\(\$\("agent-timeline"\), "\.axis \.ticks"\)/);
+  assert.match(source, /bindBrush\(\$\("agent-timeline"\), "\.axis \.ticks", setAgentRange\)/);
+  assert.doesNotMatch(source, /bindBrush\(\$\("swim"\)/);
+  assert.doesNotMatch(source, /runRange/);
+  assert.match(source, /id="reset-agent-range"/);
+  assert.match(source, /\.swim \.lane \{ grid-template-columns: 16px 56px 1fr; \}/);
+  assert.match(source, /\.swim \.axis \{ grid-template-columns: 80px 1fr; \}/);
+  assert.match(source, /const middle = hasTime \? `\+\$\{fmtRuntime\(span \/ 2\)\}` : "—"/);
+  assert.match(source, /if \(!hasTime\) state\.agentRange = null/);
+  assert.match(source, /root\.dataset\.timelineHasTime !== "true"/);
+  assert.doesNotMatch(source, /paintBrush\(root, selector, range\); callback\(range\)/);
+  assert.doesNotMatch(source, /\.range-edge\.end\.stacked \{ top: -31px; \}/);
+});
