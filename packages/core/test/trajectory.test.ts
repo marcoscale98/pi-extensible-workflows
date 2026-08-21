@@ -81,20 +81,22 @@ type TrajectoryPreviewHelpers = {
   compactSkillReadPreview: (entry: unknown, entries?: readonly unknown[]) => string | undefined;
   eventPreview: (entry: unknown, entries?: readonly unknown[]) => string;
   eventSearchText: (entry: unknown, entries?: readonly unknown[]) => string;
+  eventLabel: (kind: string) => string;
+  entryDetails: (entry: unknown, agent: unknown, entries?: readonly unknown[]) => { kind: string; entry: unknown; agent: unknown };
 };
 
 function loadTrajectoryPreviewHelpers(source: string): TrajectoryPreviewHelpers {
   const helperStart = source.indexOf("    const contentText");
-  const helperEnd = source.indexOf("    const eventLabel", helperStart);
+  const helperEnd = source.indexOf("    function renderToolPane", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, eventSearchText }; })()`) as TrajectoryPreviewHelpers;
+  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, eventSearchText, eventLabel, entryDetails }; })()`) as TrajectoryPreviewHelpers;
 }
 
 void test("Trajectory compacts canonical skill reads without losing event details", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   const helpers = loadTrajectoryPreviewHelpers(source);
   const readCall = (id: string, args: Record<string, unknown>) => ({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id, name: "read", arguments: args }] } });
-  const toolResult = (id: string) => ({ type: "message", _toolTiming: { durationMs: 12, isError: false }, message: { role: "toolResult", toolCallId: id, toolName: "read", content: [] } });
+  const toolResult = (id: string, toolName = "read") => ({ type: "message", _toolTiming: { durationMs: 12, isError: false }, message: { role: "toolResult", toolCallId: id, toolName, content: [] } });
   const skillArgs = { path: "/home/andrea/.pi/agent/skills/tigerstyle/SKILL.md", offset: 1, limit: 400 };
   const call = readCall("skill-read", skillArgs);
   const result = toolResult("skill-read");
@@ -103,6 +105,10 @@ void test("Trajectory compacts canonical skill reads without losing event detail
   assert.equal(helpers.compactSkillReadPreview(result, entries), "[skill] tigerstyle:1-400");
   assert.equal(helpers.eventPreview(call, entries), "[skill] tigerstyle:1-400");
   assert.equal(helpers.eventPreview(result, entries), "[skill] tigerstyle:1-400");
+  assert.equal(helpers.entryDetails(call, {}, entries).kind, "skill");
+  assert.equal(helpers.entryDetails(result, {}, entries).kind, "skill");
+  assert.equal(helpers.eventLabel(helpers.entryDetails(call, {}, entries).kind), "SKILL");
+  assert.equal(helpers.eventLabel(helpers.entryDetails(result, {}, entries).kind), "SKILL");
   assert.match(helpers.eventSearchText(call, entries), /read/);
   assert.match(helpers.eventSearchText(call, entries), /tigerstyle\/SKILL\.md/);
 
@@ -111,6 +117,11 @@ void test("Trajectory compacts canonical skill reads without losing event detail
   assert.equal(helpers.compactSkillReadPreview(nestedCall, [nestedCall]), undefined);
   assert.equal(helpers.eventPreview(nestedCall, [nestedCall]), "read");
   assert.equal(helpers.eventPreview(toolResult("nested-read"), [nestedCall, toolResult("nested-read")]), `read: ${JSON.stringify(nestedArgs)} · 12ms`);
+  const nestedResult = toolResult("nested-read");
+  assert.equal(helpers.entryDetails(nestedResult, {}, [nestedCall, nestedResult]).kind, "tool");
+  const bashCall = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "git status --short" } }] } };
+  const bashResult = toolResult("bash-call", "bash");
+  assert.equal(helpers.entryDetails(bashResult, {}, [bashCall, bashResult]).kind, "tool");
 
   const textCall = { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Loading the skill now" }, { type: "toolCall", id: "text-read", name: "read", arguments: skillArgs }] } };
   assert.equal(helpers.compactSkillReadPreview(textCall, [textCall]), "[skill] tigerstyle:1-400");
