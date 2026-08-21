@@ -94,6 +94,8 @@ function signalProcess(pid: number, signal: NodeJS.Signals): void {
   }
 }
 async function stopStaleServer(lock: TrajectoryLock): Promise<void> {
+  // During startup, the lock can name the current Pi process rather than the detached server.
+  if (lock.pid === process.pid) return;
   signalProcess(lock.pid, "SIGTERM");
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {

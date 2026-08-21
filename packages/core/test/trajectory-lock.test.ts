@@ -165,3 +165,30 @@ void test("unhealthy live Trajectory lock is replaced after the startup budget e
     await cleanup(home, controllers, pids);
   }
 });
+
+void test("unhealthy Trajectory lock owned by the attacher is replaced without killing it", async () => {
+  const home = await mkdtemp(join(tmpdir(), "trajectory-lock-self-"));
+  const port = await availablePort();
+  const pids: number[] = [];
+  try {
+    const fingerprint = await currentFingerprint();
+    const trajectoryModule = new URL("../src/trajectory.js", import.meta.url).href;
+    const childScript = `import { mkdir, writeFile } from "node:fs/promises"; import { dirname } from "node:path"; const { createTrajectoryController } = await import(${JSON.stringify(trajectoryModule)}); const home = ${JSON.stringify(home)}; const lockPath = ${JSON.stringify(lockPath(home))}; const port = ${String(port)}; await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 }); await writeFile(lockPath, JSON.stringify({ pid: process.pid, port, fingerprint: ${JSON.stringify(fingerprint)} }) + String.fromCharCode(10)); const controller = createTrajectoryController(home); await controller.open({ cwd: home, sessionId: "trajectory-lock-self-test", port, themes: false, loadRuns: async () => [], handleAction: async () => {} }); await controller.close();`;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], { stdio: "ignore" });
+    assert.ok(child.pid);
+    pids.push(child.pid);
+    const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => { resolve({ code, signal }); });
+    });
+    assert.equal(result.code, 0);
+    assert.equal(result.signal, null);
+    const lock = await readLock(home);
+    pids.push(lock.pid);
+    assert.notEqual(lock.pid, child.pid);
+    assert.equal(lock.fingerprint, fingerprint);
+    assert.equal((await fetch(`http://127.0.0.1:${String(port)}/health`)).ok, true);
+  } finally {
+    await cleanup(home, [], pids);
+  }
+});
