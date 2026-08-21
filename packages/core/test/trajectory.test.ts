@@ -172,3 +172,36 @@ void test("trajectory transcript retention stays bounded with timing entries", a
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+type TrajectoryInspectorHelpers = {
+  messageTokenRows: (kind: string, message: Record<string, unknown>, body: string) => string;
+};
+
+function loadTrajectoryInspectorHelpers(source: string): TrajectoryInspectorHelpers {
+  const helperStart = source.indexOf("    const messageTokenRows");
+  const helperEnd = source.indexOf("    const timingEntryType", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  return runInNewContext(`(() => { const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); const estTokens = (text) => Math.ceil(String(text || "").length / 4); ${source.slice(helperStart, helperEnd)}; return { messageTokenRows }; })()`) as TrajectoryInspectorHelpers;
+}
+
+void test("Trajectory message inspector distinguishes provider usage from estimates", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helpers = loadTrajectoryInspectorHelpers(source);
+  const renderStart = source.indexOf("    function renderInspector");
+  const messageStart = source.indexOf("const message =", renderStart);
+  const headerStart = source.indexOf('<div class="ins-head">', messageStart);
+  const bodyStart = source.indexOf('<div class="ins-body">', headerStart);
+  assert.ok(renderStart >= 0 && messageStart > renderStart && headerStart > messageStart && bodyStart > headerStart);
+  assert.doesNotMatch(source.slice(headerStart, bodyStart), /tok|token/i);
+  const providerRows = helpers.messageTokenRows("assistant", { usage: { input: 0, output: 8, reasoning: 3, cacheRead: 2, cacheWrite: 0 } }, "displayed text");
+  assert.match(providerRows, /Input.*0 tok/);
+  assert.match(providerRows, /Output.*8 tok/);
+  assert.match(providerRows, /Reasoning.*3 tok/);
+  assert.match(providerRows, /Cache read.*2 tok/);
+  assert.doesNotMatch(providerRows, /est\./);
+  assert.doesNotMatch(providerRows, /Total/);
+  const noReasoningRows = helpers.messageTokenRows("assistant", { usage: { input: 1, output: 2 } }, "displayed text");
+  assert.doesNotMatch(noReasoningRows, /Reasoning/);
+  assert.equal(helpers.messageTokenRows("assistant", {}, "1234567"), '<div class="k">Tokens</div><div>est. 2 tok</div>');
+  assert.equal(helpers.messageTokenRows("user", { usage: { input: 1, output: 2 } }, "1234567"), "");
+});
