@@ -325,17 +325,24 @@ void test("Trajectory idle exit closes open clients and removes its lock", async
   const childScript = `const realSetTimeout = globalThis.setTimeout; globalThis.setTimeout = (callback, delay, ...args) => realSetTimeout(callback, delay === 300000 ? 10000 : delay, ...args); const { createTrajectoryServer } = await import(${JSON.stringify(moduleUrl)}); const server = createTrajectoryServer(${String(port)}, ${JSON.stringify(lockPath)}, { maxFrameBytes: 33554432, fingerprint: "test-fingerprint" }); server.listen(${String(port)}, "127.0.0.1");`;
   const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], { stdio: "ignore" });
   let socket: Socket | undefined;
+  let pending: Socket | undefined;
   try {
     const connected = await handshakeWhenReady(port, `http://127.0.0.1:${String(port)}`);
     socket = connected.socket;
     const socketClosed = new Promise<void>((resolve) => socket?.once("close", () => { resolve(); }));
     assert.match(connected.response, /^HTTP\/1\.1 101 Switching Protocols/);
+    // An unterminated request keeps a connection in flight, which is what actually blocks server.close().
+    pending = createConnection(port, "127.0.0.1");
+    await new Promise<void>((resolve, reject) => { pending?.once("connect", () => { resolve(); }); pending?.once("error", reject); });
+    pending.write(`GET /health HTTP/1.1\r\nHost: 127.0.0.1:${String(port)}\r\n`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(await waitForExit(child, 15000), 0);
     await socketClosed;
     await assert.rejects(readFile(lockPath), { code: "ENOENT" });
     await assert.rejects(fetch(`http://127.0.0.1:${String(port)}/health`));
   } finally {
     socket?.destroy();
+    pending?.destroy();
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await rm(root, { recursive: true, force: true });
   }
