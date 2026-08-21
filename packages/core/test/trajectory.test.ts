@@ -399,3 +399,12 @@ void test("Trajectory message inspector distinguishes provider usage from estima
   assert.equal(entryUsageWithoutMessageUsage, '<div class="k">Tokens</div><div>est. 2 tok</div>');
   assert.equal(helpers.messageTokenRows("user", { usage: { input: 1, output: 2 } }, "1234567"), "");
 });
+
+void test("Trajectory restores home, run, and agent views from the query on refresh", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /\$\("view-run"\)\.classList\.toggle\("hidden", document\.body\.dataset\.view !== "run"\)/);
+  assert.match(source, /\$\("view-agent"\)\.classList\.toggle\("hidden", document\.body\.dataset\.view === "run"\)/);
+  assert.match(source, /shouldAutoSelect = !hasAcceptedState && !state\.currentRun && !new URLSearchParams\(location\.search\)\.has\("view"\)/);
+  assert.match(source, /state\.currentRun = next\.run \|\| null; state\.currentAgent = next\.agent \|\| null;/);
+  assert.doesNotMatch(source, /if \(next\.run\) state\.currentRun = next\.run; if \(next\.agent\) state\.currentAgent = next\.agent;/);
+});
