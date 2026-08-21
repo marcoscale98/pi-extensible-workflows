@@ -56,6 +56,16 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
   assert.doesNotMatch(source, /agent-path/);
 });
 
+void test("Trajectory compacts canonical skill reads in event previews", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /const compactSkillReadPreview = \(entry, entries = \[\]\) =>/);
+  assert.match(source, /args\.file_path \?\? args\.path/);
+  assert.match(source, /pathParts\.at\(-1\) !== "SKILL\.md"/);
+  assert.match(source, /return `\[skill\] \$\{pathParts\.at\(-2\) \|\| "SKILL\.md"\}/);
+  assert.match(source, /compactSkillReadPreview\(entry, entries\) \|\|/);
+  assert.ok(source.includes('payload: () => `<div class="code">${highlight(json(args))}</div>`'));
+});
+
 void test("trajectory transcript retention stays bounded with timing entries", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-cap-"));
   const cwd = join(root, "project");
