@@ -356,6 +356,48 @@ void test("Trajectory relays subagents, enriches their attempt, and compacts onl
   }
 });
 
+void test("Trajectory rejects an oversized subagent transcript reply", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trajectory-server-subagent-transcript-cap-"));
+  const port = await availablePort();
+  const maxFrameBytes = 1000;
+  const transcript = Array.from({ length: 20 }, () => ({ type: "message", text: "x", value: 1e20 }));
+  const publisherMessage = JSON.stringify({ type: "publisher:state", publisher: { id: "one" }, runs: [], subagents: [{ id: "subagent", state: "running", transcript }] }).replaceAll("100000000000000000000", "1e20");
+  assert.ok(Buffer.byteLength(publisherMessage) <= maxFrameBytes);
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), { maxFrameBytes });
+  await listen(server, port);
+  const sockets: Socket[] = [];
+  try {
+    const origin = `http://127.0.0.1:${String(port)}`;
+    const publisher = await handshake(port, origin);
+    sockets.push(publisher.socket);
+    publisher.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "one" })));
+    publisher.socket.write(maskedFrame(publisherMessage));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const browser = await handshake(port, origin);
+    sockets.push(browser.socket);
+    const state = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:attach" })));
+    const value = await state as { publishers?: { subagents?: { id?: unknown; transcript?: unknown[] }[] }[] };
+    const current = value.publishers?.[0]?.subagents?.[0];
+    assert.ok(current);
+    assert.equal(current.id, "subagent");
+    assert.deepEqual(current.transcript, []);
+    const reply = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:transcript", publisherId: "one", subagentId: "subagent" })));
+    const transcriptReply = await reply as { subagentId?: unknown; ok?: unknown; error?: unknown };
+    assert.equal(transcriptReply.subagentId, "subagent");
+    assert.equal(transcriptReply.ok, false);
+    assert.equal(transcriptReply.error, "Transcript is too large");
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    server.closeAllConnections();
+    server.closeIdleConnections();
+    server.close();
+    server.unref();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 void test("Trajectory relays target-addressed actions and rejects run-only subagent actions", async () => {
   const root = await mkdtemp(join(tmpdir(), "trajectory-server-actions-"));
   const port = await availablePort();
