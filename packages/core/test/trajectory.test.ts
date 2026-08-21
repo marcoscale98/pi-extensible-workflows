@@ -27,6 +27,27 @@ void test("trajectoryUrl does not include an auth token", () => {
   assert.equal(trajectoryUrl(7432), "http://127.0.0.1:7432/");
 });
 
+void test("Trajectory preference storage failures preserve defaults", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helperStart = source.indexOf("    const defaultRunLayout");
+  const helperEnd = source.indexOf("    const state", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const storage = {
+    getItem: () => { throw new Error("storage unavailable"); },
+    setItem: () => { throw new Error("storage unavailable"); },
+  };
+  const helpers = runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; const state = { runLayout: defaultRunLayout(), sidebarCollapsed: new Set() }; return { loadRunLayout, loadSidebarCollapsed, saveRunLayout, saveSidebarCollapsed }; })()`, { localStorage: storage }) as {
+    loadRunLayout: () => { swimHeight: number; ganttCollapsed: boolean; agentsCollapsed: boolean; logsCollapsed: boolean };
+    loadSidebarCollapsed: () => Set<string>;
+    saveRunLayout: () => void;
+    saveSidebarCollapsed: () => void;
+  };
+  assert.deepEqual({ ...helpers.loadRunLayout() }, { swimHeight: 220, ganttCollapsed: false, agentsCollapsed: false, logsCollapsed: false });
+  assert.deepEqual([...helpers.loadSidebarCollapsed()], []);
+  assert.doesNotThrow(() => { helpers.saveRunLayout(); });
+  assert.doesNotThrow(() => { helpers.saveSidebarCollapsed(); });
+});
+
 void test("Trajectory agent grid groups persisted agent scopes", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   assert.match(source, /function agentGridGroups\(agents\)/);
@@ -185,14 +206,74 @@ type TrajectoryPreviewHelpers = {
   eventSearchText: (entry: unknown, entries?: readonly unknown[]) => string;
   eventLabel: (kind: string) => string;
   entryDetails: (entry: unknown, agent: unknown, entries?: readonly unknown[]) => { kind: string; entry: unknown; agent: unknown };
+  isDisplayableTranscriptEntry: (entry: { type?: unknown }) => boolean;
 };
 
 function loadTrajectoryPreviewHelpers(source: string): TrajectoryPreviewHelpers {
   const helperStart = source.indexOf("    const esc");
   const helperEnd = source.indexOf("    function renderToolPane", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, eventPreviewParts, toolPreviewHtml, eventSearchText, eventLabel, entryDetails }; })()`) as TrajectoryPreviewHelpers;
+  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, eventPreviewParts, toolPreviewHtml, eventSearchText, eventLabel, entryDetails, isDisplayableTranscriptEntry }; })()`) as TrajectoryPreviewHelpers;
 }
+
+type TrajectoryMarkdownHelpers = { sanitizeMarkdown: (html: string) => string };
+type MarkdownAttribute = { name: string; value: string };
+
+class FakeMarkdownElement {
+  public removed = false;
+  constructor(public readonly tagName: string, public readonly attributes: MarkdownAttribute[] = [], public readonly children: FakeMarkdownElement[] = [], public readonly text = "") {}
+  remove(): void { this.removed = true; }
+  removeAttribute(name: string): void { const index = this.attributes.findIndex((attribute) => attribute.name === name); if (index >= 0) this.attributes.splice(index, 1); }
+  querySelectorAll(selector: string): FakeMarkdownElement[] {
+    assert.equal(selector, "*");
+    return this.children.flatMap((child) => [child, ...child.querySelectorAll(selector)]);
+  }
+  get innerHTML(): string { return this.children.filter((child) => !child.removed).map(renderFakeMarkdownElement).join(""); }
+}
+
+function renderFakeMarkdownElement(element: FakeMarkdownElement): string {
+  if (element.removed) return "";
+  const attributes = element.attributes.map((attribute) => ` ${attribute.name}="${attribute.value}"`).join("");
+  return `<${element.tagName.toLowerCase()}${attributes}>${element.text}${element.children.map(renderFakeMarkdownElement).join("")}</${element.tagName.toLowerCase()}>`;
+}
+
+class FakeDOMParser {
+  parseFromString(input: string, mimeType: string): { body: FakeMarkdownElement } {
+    assert.equal(input, '<p onclick="alert(1)"><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre><script>alert(1)</script>');
+    assert.equal(mimeType, "text/html");
+    return { body: new FakeMarkdownElement("body", [], [
+      new FakeMarkdownElement("p", [{ name: "onclick", value: "alert(1)" }], [new FakeMarkdownElement("strong", [], [], "Normal"), new FakeMarkdownElement("a", [{ name: "href", value: "https://example.com" }], [], "link")]),
+      new FakeMarkdownElement("pre", [], [new FakeMarkdownElement("code", [{ name: "class", value: "language-js" }], [], "code")]),
+      new FakeMarkdownElement("script", [], [], "alert(1)"),
+    ]) };
+  }
+}
+
+function loadTrajectoryMarkdownHelpers(source: string): TrajectoryMarkdownHelpers {
+  const helperStart = source.indexOf("    const markdownAllowedTags");
+  const helperEnd = source.indexOf("    const timingEntryType", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { sanitizeMarkdown }; })()`, { DOMParser: FakeDOMParser }) as TrajectoryMarkdownHelpers;
+}
+
+void test("Trajectory sanitizes markdown before rendering transcript and system prompt content", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helpers = loadTrajectoryMarkdownHelpers(source);
+  assert.equal(helpers.sanitizeMarkdown('<p onclick="alert(1)"><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre><script>alert(1)</script>'), '<p><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre>');
+  assert.match(source, /sanitizeMarkdown\(marked\.parse\(prompt, \{ mangle: false, headerIds: false \}\)\)/);
+  assert.match(source, /sanitizeMarkdown\(marked\.parse\(body\)\)/);
+});
+
+
+void test("Trajectory excludes non-message session records from agent events", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helpers = loadTrajectoryPreviewHelpers(source);
+  assert.equal(helpers.isDisplayableTranscriptEntry({ type: "message" }), true);
+  assert.equal(helpers.isDisplayableTranscriptEntry({ type: "tool_result" }), true);
+  assert.equal(helpers.isDisplayableTranscriptEntry({ type: "model_change" }), false);
+  assert.equal(helpers.isDisplayableTranscriptEntry({ type: "thinking_level_change" }), false);
+  assert.match(source, /source\.filter\(\(entry\) => isDisplayableTranscriptEntry\(entry\)/);
+});
 
 void test("Trajectory compacts canonical skill reads without losing event details", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");

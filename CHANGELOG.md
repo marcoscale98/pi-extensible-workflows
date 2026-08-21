@@ -14,6 +14,9 @@
 - Trajectory summarizes assistant tool calls as separate event chips and inspector blocks with searchable arguments ([#220](https://github.com/vekexasia/pi-extensible-workflows/issues/220)).
 
 ### Fixes
+- Sanitize Trajectory markdown before rendering assistant messages and system prompts.
+- Keep Trajectory layout and sidebar preference storage failures from stopping the UI, preserving defaults.
+- Exclude non-message session records from Trajectory agent transcripts instead of labeling them assistant messages.
 - Ensure idle Trajectory servers destroy connected client sockets before closing, remove their lock, and exit.
 - Recover from live but unhealthy Trajectory server locks by replacing the stale process after the startup budget expires.
 - Give Trajectory server frame-size and fingerprint configuration separate, unambiguous options.
