@@ -281,7 +281,7 @@ void test("trajectory transcript retention stays bounded with timing entries", a
 });
 
 type TrajectoryInspectorHelpers = {
-  messageTokenRows: (kind: string, message: Record<string, unknown>, body: string) => string;
+  messageTokenRows: (kind: string, message: Record<string, unknown>, body: string, entryUsage?: Record<string, unknown>) => string;
 };
 
 function loadTrajectoryInspectorHelpers(source: string): TrajectoryInspectorHelpers {
@@ -310,5 +310,7 @@ void test("Trajectory message inspector distinguishes provider usage from estima
   const noReasoningRows = helpers.messageTokenRows("assistant", { usage: { input: 1, output: 2 } }, "displayed text");
   assert.doesNotMatch(noReasoningRows, /Reasoning/);
   assert.equal(helpers.messageTokenRows("assistant", {}, "1234567"), '<div class="k">Tokens</div><div>est. 2 tok</div>');
+  const entryUsageWithoutMessageUsage = helpers.messageTokenRows("assistant", {}, "1234567", { input: 9, output: 1 });
+  assert.equal(entryUsageWithoutMessageUsage, '<div class="k">Tokens</div><div>est. 2 tok</div>');
   assert.equal(helpers.messageTokenRows("user", { usage: { input: 1, output: 2 } }, "1234567"), "");
 });
