@@ -77,6 +77,38 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
   assert.doesNotMatch(source, /agent-path/);
 });
 
+void test("Trajectory run layout supports bounded Gantt resizing and persisted section toggles", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /--swim: 220px/);
+  assert.match(source, /\.swim \{[^}]*height: var\(--swim\)[^}]*overflow-y: auto/);
+  assert.match(source, /\.swim \.axis \{ position: sticky; top: 0; z-index: 4; background: var\(--bg-2\); \}/);
+  assert.match(source, /\.swim > \.now \{ top: 22px; bottom: 8px; z-index: 5; \}/);
+  assert.match(source, /#toggle-gantt \{ padding: 0 14px; \}/);
+  assert.match(source, /\.section-toggle \{[^}]*font: inherit;[^}]*cursor: pointer;/);
+  assert.match(source, /id="split-swim"/);
+  assert.match(source, /bindSplit\(\$\("split-swim"\), "--swim", 72, maxSwimHeight, \{ axis: "y"/);
+  assert.match(source, /const start = axis === "y" \? event\.clientY : event\.clientX;/);
+  assert.match(source, /const delta = axis === "y" \? coordinate - start : options\.direction === "left" \? coordinate - start : start - coordinate;/);
+  assert.match(source, /translateY\(\$\{root\.scrollTop\}px\)/);
+  assert.match(source, /root\.addEventListener\("scroll", syncCursor\)/);
+  assert.match(source, /window\.addEventListener\("resize", clampSwimHeight\)/);
+  assert.match(source, /data-toggle="gantt"/);
+  assert.match(source, /data-toggle="agents"/);
+  assert.match(source, /data-toggle="logs"/);
+  assert.match(source, /ganttCollapsed/);
+  assert.match(source, /agentsCollapsed/);
+  assert.match(source, /logsCollapsed/);
+  assert.match(source, /localStorage\.getItem\("traj-run-layout"\)/);
+  assert.match(source, /localStorage\.setItem\("traj-run-layout"/);
+  assert.match(source, /splitSwim\.classList\.toggle\("hidden", ganttCollapsed\)/);
+  assert.match(source, /function clampSwimHeight\(\) \{ renderRunLayout\(\); \}/);
+  assert.match(source, /swimHeight: Number\.isFinite\(value\.swimHeight\) && value\.swimHeight >= 72 \? value\.swimHeight : fallback\.swimHeight/);
+  assert.match(source, /const swimHeight = Math\.min\(state\.runLayout\.swimHeight, maxSwimHeight\(\)\)/);
+  assert.match(source, /<div class="timeline" id="agent-timeline"><div id="agent-ticks"><\/div><div class="now hidden"><span><\/span><\/div><\/div>/);
+  assert.match(source, /\.timeline \{ position: relative; \}/);
+  assert.match(source, /\.timeline \.axis \{ grid-template-columns: 44px 1fr; gap: 8px; margin-bottom: 2px; \}/);
+});
+
 void test("Trajectory returns to an empty home when a publisher disappears", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   assert.match(source, /const livePublishers = \(\) => state\.publishers\.filter\(\(publisher\) => publisher\.connected === true\)/);

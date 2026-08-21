@@ -4,6 +4,7 @@
 ### New capabilities
 
 - Registered-function `context.invoke(name, input, label?)` now supports presentation-only nested breadcrumbs without changing journal identity ([#223](https://github.com/vekexasia/pi-extensible-workflows/issues/223)).
+- Trajectory adds a resizable, scrollable workflow Gantt with sticky time axis and independently collapsible Gantt, agent, and log sections, with layout state persisted in local storage ([#224](https://github.com/vekexasia/pi-extensible-workflows/issues/224)).
 
 - Trajectory auto-attaches once per interactive Pi session when persisted workflow runs are restored or after the first successful workflow launch; `/workflow trajectory` remains the manual re-open ([#217](https://github.com/vekexasia/pi-extensible-workflows/issues/217)).
 - Trajectory records per-tool wall-clock execution timing in workflow-agent session JSONL and displays completed and failed tool durations across its event, agent, inspector, and Gantt views. Loaded transcripts retain up to 400 non-timing entries plus their matching timing entries ([#212](https://github.com/vekexasia/pi-extensible-workflows/issues/212)).
