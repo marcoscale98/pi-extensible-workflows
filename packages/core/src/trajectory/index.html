@@ -422,22 +422,23 @@
       if (typeof usage.cacheWrite === "number" && usage.cacheWrite !== 0) rows.push(`<div class="k">Cache write</div><div>${esc(usage.cacheWrite)} tok</div>`);
       return rows.join("");
     };
-    const markdownAllowedTags = new Set(["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "li", "ol", "p", "pre", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"]);
-    const markdownAllowedAttributes = new Set(["alt", "class", "href", "rel", "src", "target", "title"]);
+    const markdownAllowedTags = new Set(["a", "blockquote", "br", "code", "del", "em", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "img", "input", "li", "ol", "p", "pre", "strong", "table", "tbody", "td", "th", "thead", "tr", "ul"]);
+    const markdownAllowedAttributes = new Set(["alt", "checked", "class", "disabled", "href", "rel", "src", "target", "title", "type"]);
     function sanitizeMarkdown(html) {
-      const document = new DOMParser().parseFromString(String(html), "text/html");
-      for (const element of document.body.querySelectorAll("*")) {
+      const parsed = new DOMParser().parseFromString(String(html), "text/html");
+      for (const element of parsed.body.querySelectorAll("*")) {
         const tag = element.tagName.toLowerCase();
         if (!markdownAllowedTags.has(tag)) { element.remove(); continue; }
         for (const attribute of [...element.attributes]) {
           const name = attribute.name.toLowerCase();
-          const value = attribute.value.trim();
-          if (name.startsWith("on") || !markdownAllowedAttributes.has(name) || name === "style" || ((name === "href" || name === "src") && /^(?:javascript|data):/i.test(value))) element.removeAttribute(attribute.name);
+          const value = attribute.value;
+          const safeClass = name !== "class" || (tag === "code" && /^(?:language|lang)-[a-z0-9_-]+(?:\s+(?:language|lang)-[a-z0-9_-]+)*$/i.test(value));
+          if (name.startsWith("on") || !markdownAllowedAttributes.has(name) || name === "style" || !safeClass || ((name === "href" || name === "src") && /^(?:javascript|data):/i.test(value.replace(/[\u0000-\u0020]/g, "")))) element.removeAttribute(attribute.name);
         }
       }
-      return document.body.innerHTML;
+      return parsed.body.innerHTML;
     }
-    const isDisplayableTranscriptEntry = (entry) => entry.type === "message" || entry.type === "tool_result";
+    const isDisplayableTranscriptEntry = (entry) => entry.type !== "session" && entry.type !== "session_info" && entry.type !== "model_change" && entry.type !== "thinking_level_change";
     const timingEntryType = "pi-workflows:tool-timing"; const isTimingEntry = (entry) => entry?.type === "custom" && entry?.customType === timingEntryType; const timingData = (entry) => { const data = entry?.data; return data && typeof data.toolCallId === "string" && typeof data.toolName === "string" && Number.isFinite(data.startedAt) && Number.isFinite(data.completedAt) && Number.isFinite(data.durationMs) && typeof data.isError === "boolean" ? data : undefined; }; const toolCallPartOf = (entry) => { const content = entry?.message?.content; return Array.isArray(content) ? content.find((part) => part && part.type === "toolCall") : undefined; }; const toolCallIdOf = (entry) => entry.toolCallId || entry.message?.toolCallId || toolCallPartOf(entry)?.id; const isToolResult = (entry) => entry.type === "tool_result" || entry.type === "message" && entry.message?.role === "toolResult"; const eventKind = (entry) => { if (entry.type === "system_prompt" || entry.type === "session" || entry.type === "session_info") return "system"; if (entry.type === "message") { const role = entry.message?.role; return role === "toolResult" ? "tool" : role === "user" ? "user" : "assistant"; } return entry.type === "tool_result" ? "tool" : "context"; }; const toolNameOf = (entry) => entry.toolName || entry.message?.toolName || entry.message?.name || toolCallPartOf(entry)?.name || entry.name || "tool"; const toolTimingOf = (entry) => entry?._toolTiming || timingData(entry); const formatToolTiming = (timing) => timing ? `${timing.durationMs}ms${timing.isError ? " (failed)" : ""}` : "timing unavailable";
     const agentTimingRecords = (record, agent) => { const source = record.transcripts?.[agent.id] || []; return source.flatMap((entry) => { const timing = isTimingEntry(entry) ? timingData(entry) : undefined; return timing ? [{ name: timing.toolName, timing }] : []; }); }; const agentEntries = (record, agent) => { const found = selected(); const key = found ? transcriptKey(found.publisher.id, found.record.run.id, agent.id) : ""; const source = (key && Object.prototype.hasOwnProperty.call(state.transcripts, key) ? state.transcripts[key] : record.transcripts?.[agent.id]) || []; const timings = new Map(agentTimingRecords(record, agent).map(({ timing }) => [timing.toolCallId, timing])); const entries = source.filter((entry) => isDisplayableTranscriptEntry(entry) && !isTimingEntry(entry)).map((entry) => { const timing = isToolResult(entry) ? timings.get(toolCallIdOf(entry)) : undefined; return timing ? { ...entry, _toolTiming: timing } : entry; }); if (agent.systemPrompt) entries.unshift({ type: "system_prompt", prompt: agent.systemPrompt }); return entries; };
     const toolTimingSummary = (timings) => { const limit = 8; const visible = timings.slice(0, limit).map(({ name, timing }) => `${name} ${formatToolTiming(timing)}`); return visible.length ? `${visible.join(", ")}${timings.length > limit ? ` +${timings.length - limit} more` : ""}` : "—"; };
@@ -540,7 +541,22 @@
     const eventSearchText = (entry, entries = []) => { const toolCalls = toolCallsOf(entry); if (toolCalls.length) return toolCalls.map((call) => `${call.name} ${JSON.stringify(toolArgsOf(call, entries))}`).join(" "); return eventKind(entry) === "tool" ? `${toolNameOf(entry)} ${JSON.stringify(toolArgsOf(entry, entries))}` : ""; };
     const renderAssistantPreview = (preview) => { const text = preview.text ? `<span>${esc(preview.text)}</span>` : ""; const separator = text && preview.names.length ? '<span class="preview-sep"> | </span>' : ""; const names = preview.names.slice(0, 3).map((name) => `<span class="pill tool preview-tool">${esc(name)}</span>`).join(""); const overflow = preview.overflow ? `<span class="preview-overflow">+${preview.overflow} others</span>` : ""; return `${text}${separator}${names}${overflow}`; };
     const eventLabel = (kind) => kind === "toolResult" ? "TOOL" : String(kind || "EVENT").toUpperCase();
-    function renderThemeButtons() { const enabled = state.publishers.some((publisher) => publisher.themes === true); const themes = enabled ? ["harness", "tty", "paper"] : []; if (enabled && !["harness", "tty", "paper"].includes(document.documentElement.dataset.theme || "")) document.documentElement.dataset.theme = localStorage.getItem("traj-theme") || "tty"; $("theme-buttons").innerHTML = themes.map((theme) => `<button class="tab theme" data-theme="${theme}">${theme.toUpperCase()}</button>`).join(""); $("theme-buttons").classList.toggle("hidden", !enabled); $("theme-buttons").querySelectorAll("[data-theme]").forEach((button) => button.addEventListener("click", () => { document.documentElement.dataset.theme = button.dataset.theme; localStorage.setItem("traj-theme", button.dataset.theme); renderThemeButtons(); })); const current = document.documentElement.dataset.theme || "tty"; $("theme-buttons").querySelectorAll("[data-theme]").forEach((button) => button.classList.toggle("on", button.dataset.theme === current)); }
+    function renderThemeButtons() {
+      const enabled = state.publishers.some((publisher) => publisher.themes === true);
+      const themes = enabled ? ["harness", "tty", "paper"] : [];
+      if (enabled && !["harness", "tty", "paper"].includes(document.documentElement.dataset.theme || "")) {
+        try { document.documentElement.dataset.theme = localStorage.getItem("traj-theme") || "tty"; } catch { document.documentElement.dataset.theme = "tty"; }
+      }
+      $("theme-buttons").innerHTML = themes.map((theme) => `<button class="tab theme" data-theme="${theme}">${theme.toUpperCase()}</button>`).join("");
+      $("theme-buttons").classList.toggle("hidden", !enabled);
+      $("theme-buttons").querySelectorAll("[data-theme]").forEach((button) => button.addEventListener("click", () => {
+        document.documentElement.dataset.theme = button.dataset.theme;
+        try { localStorage.setItem("traj-theme", button.dataset.theme); } catch { /* Preferences are optional. */ }
+        renderThemeButtons();
+      }));
+      const current = document.documentElement.dataset.theme || "tty";
+      $("theme-buttons").querySelectorAll("[data-theme]").forEach((button) => button.classList.toggle("on", button.dataset.theme === current));
+    }
     function renderSidebar() {
       const groups = sidebarGroups(livePublishers());
       const html = groups.map((group) => {

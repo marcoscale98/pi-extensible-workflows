@@ -48,6 +48,21 @@ void test("Trajectory preference storage failures preserve defaults", () => {
   assert.doesNotThrow(() => { helpers.saveSidebarCollapsed(); });
 });
 
+void test("Trajectory theme preference storage failures preserve the default", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helperStart = source.indexOf("    function renderThemeButtons");
+  const helperEnd = source.indexOf("    function renderSidebar", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  let clickHandler: (() => void) | undefined;
+  const button = { dataset: { theme: "harness" }, addEventListener: (_type: string, handler: () => void) => { clickHandler = handler; }, classList: { toggle: () => {} } };
+  const themeButtons = { innerHTML: "", classList: { toggle: () => {} }, querySelectorAll: () => [button] };
+  const document = { documentElement: { dataset: {} as Record<string, string> } };
+  const helpers = runInNewContext(`(() => { const state = { publishers: [{ themes: true }] }; const $ = () => themeButtons; ${source.slice(helperStart, helperEnd)}; return { document, renderThemeButtons }; })()`, { document, localStorage: { getItem: () => { throw new Error("storage unavailable"); }, setItem: () => { throw new Error("storage unavailable"); } }, themeButtons }) as { document: typeof document; renderThemeButtons: () => void };
+  helpers.renderThemeButtons();
+  assert.equal(helpers.document.documentElement.dataset.theme, "tty");
+  assert.doesNotThrow(() => { clickHandler?.(); });
+});
+
 void test("Trajectory agent grid groups persisted agent scopes", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   assert.match(source, /function agentGridGroups\(agents\)/);
@@ -218,10 +233,12 @@ function loadTrajectoryPreviewHelpers(source: string): TrajectoryPreviewHelpers 
 
 type TrajectoryMarkdownHelpers = { sanitizeMarkdown: (html: string) => string };
 type MarkdownAttribute = { name: string; value: string };
+const voidMarkdownTags = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
 
 class FakeMarkdownElement {
   public removed = false;
-  constructor(public readonly tagName: string, public readonly attributes: MarkdownAttribute[] = [], public readonly children: FakeMarkdownElement[] = [], public readonly text = "") {}
+  public text = "";
+  constructor(public readonly tagName: string, public readonly attributes: MarkdownAttribute[] = [], public readonly children: FakeMarkdownElement[] = []) {}
   remove(): void { this.removed = true; }
   removeAttribute(name: string): void { const index = this.attributes.findIndex((attribute) => attribute.name === name); if (index >= 0) this.attributes.splice(index, 1); }
   querySelectorAll(selector: string): FakeMarkdownElement[] {
@@ -234,18 +251,43 @@ class FakeMarkdownElement {
 function renderFakeMarkdownElement(element: FakeMarkdownElement): string {
   if (element.removed) return "";
   const attributes = element.attributes.map((attribute) => ` ${attribute.name}="${attribute.value}"`).join("");
-  return `<${element.tagName.toLowerCase()}${attributes}>${element.text}${element.children.map(renderFakeMarkdownElement).join("")}</${element.tagName.toLowerCase()}>`;
+  const tag = element.tagName.toLowerCase();
+  if (voidMarkdownTags.has(tag)) return `<${tag}${attributes}>`;
+  return `<${tag}${attributes}>${element.text}${element.children.map(renderFakeMarkdownElement).join("")}</${tag}>`;
+}
+
+function decodeMarkdownEntities(value: string): string {
+  return value.replace(/&#x([0-9a-f]+);?/gi, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 16))).replace(/&#([0-9]+);?/g, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 10)));
+}
+
+function parseMarkdownAttributes(source: string): MarkdownAttribute[] {
+  const attributes: MarkdownAttribute[] = [];
+  const pattern = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  for (const [, name, doubleQuoted, singleQuoted, bare] of source.matchAll(pattern)) {
+    if (!name) continue;
+    attributes.push({ name, value: decodeMarkdownEntities(doubleQuoted ?? singleQuoted ?? bare ?? "") });
+  }
+  return attributes;
 }
 
 class FakeDOMParser {
   parseFromString(input: string, mimeType: string): { body: FakeMarkdownElement } {
-    assert.equal(input, '<p onclick="alert(1)"><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre><script>alert(1)</script>');
     assert.equal(mimeType, "text/html");
-    return { body: new FakeMarkdownElement("body", [], [
-      new FakeMarkdownElement("p", [{ name: "onclick", value: "alert(1)" }], [new FakeMarkdownElement("strong", [], [], "Normal"), new FakeMarkdownElement("a", [{ name: "href", value: "https://example.com" }], [], "link")]),
-      new FakeMarkdownElement("pre", [], [new FakeMarkdownElement("code", [{ name: "class", value: "language-js" }], [], "code")]),
-      new FakeMarkdownElement("script", [], [], "alert(1)"),
-    ]) };
+    const body = new FakeMarkdownElement("body");
+    const stack = [body];
+    const tokens = /<!--[\s\S]*?-->|<\/?([a-z][\w-]*)([^>]*)>|([^<]+)/gi;
+    for (const match of input.matchAll(tokens)) {
+      if (match[0].startsWith("<!--")) continue;
+      const tag = match[1];
+      const parent = stack.at(-1);
+      assert.ok(parent);
+      if (!tag) { parent.text += match[3] || ""; continue; }
+      if (match[0].startsWith("</")) { stack.pop(); continue; }
+      const element = new FakeMarkdownElement(tag, parseMarkdownAttributes(match[2] || ""));
+      parent.children.push(element);
+      if (!voidMarkdownTags.has(tag.toLowerCase()) && !/\/\s*>$/.test(match[0])) stack.push(element);
+    }
+    return { body };
   }
 }
 
@@ -259,7 +301,8 @@ function loadTrajectoryMarkdownHelpers(source: string): TrajectoryMarkdownHelper
 void test("Trajectory sanitizes markdown before rendering transcript and system prompt content", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   const helpers = loadTrajectoryMarkdownHelpers(source);
-  assert.equal(helpers.sanitizeMarkdown('<p onclick="alert(1)"><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre><script>alert(1)</script>'), '<p><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre>');
+  const markdown = '<p onclick="alert(1)"><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre><script>alert(1)</script><a href="javascript:alert(1)">blocked</a><a href="java&#9;script:alert(1)">tab</a><img src="data:text/html,alert(1)" alt="image"><ul><li>done <input checked="" disabled="" type="checkbox"></li></ul>';
+  assert.equal(helpers.sanitizeMarkdown(markdown), '<p><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre><a>blocked</a><a>tab</a><img alt="image"><ul><li>done <input checked="" disabled="" type="checkbox"></li></ul>');
   assert.match(source, /sanitizeMarkdown\(marked\.parse\(prompt, \{ mangle: false, headerIds: false \}\)\)/);
   assert.match(source, /sanitizeMarkdown\(marked\.parse\(body\)\)/);
 });
@@ -272,6 +315,8 @@ void test("Trajectory excludes non-message session records from agent events", (
   assert.equal(helpers.isDisplayableTranscriptEntry({ type: "tool_result" }), true);
   assert.equal(helpers.isDisplayableTranscriptEntry({ type: "model_change" }), false);
   assert.equal(helpers.isDisplayableTranscriptEntry({ type: "thinking_level_change" }), false);
+  assert.equal(helpers.isDisplayableTranscriptEntry({ type: "compaction" }), true);
+  assert.equal(helpers.isDisplayableTranscriptEntry({ type: "custom_message" }), true);
   assert.match(source, /source\.filter\(\(entry\) => isDisplayableTranscriptEntry\(entry\)/);
 });
 
