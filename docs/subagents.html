@@ -28,6 +28,7 @@
       <a href="#installation">Installation</a>
       <a href="#choose">Subagents or workflows</a>
       <a href="#tools">Five tools</a>
+      <a href="#trajectory">Trajectory browser</a>
       <a href="#execution">Execution and lifecycle</a>
       <a href="#roles">Roles and options</a>
       <a href="#worktrees">Worktrees and storage</a>
@@ -85,6 +86,12 @@
   <span class="tok-property">mode</span><span class="tok-punctuation">:</span> <span class="tok-string">"foreground"</span><span class="tok-punctuation">,</span>
 <span class="tok-punctuation">})</span>
 <span class="tok-punctuation">// { "id": "...", "state": "completed", "value": ... }</span></code></pre>
+      </section>
+      <section id="trajectory">
+        <h2>Trajectory browser</h2>
+        <p>Open <code>/workflow trajectory</code> to inspect standalone subagents in Trajectory's local browser UI. Each publisher session shows a sibling <code>SUBAGENTS</code> section beside its workflow runs, scoped to the current Pi session and sorted attention-first: running, failed, stopped, then completed.</p>
+        <p>The publisher home view includes a subagent Gantt with one lane per subagent and matching tool-timing bars. Select a subagent to open its own view with the transcript event timeline, searchable events, model, tools, accounting, result or failure, and worktree path and branch when available.</p>
+        <p>While a subagent is running, its view exposes <code>Stop</code> and <code>Steer</code>. Failed or stopped subagents expose <code>Retry</code>; retry starts a fresh subagent with a new ID and follows that ID in the UI. Pause, resume, and checkpoint controls are not shown for subagents.</p>
       </section>
       <section id="execution">
         <h2>Execution and lifecycle</h2>
