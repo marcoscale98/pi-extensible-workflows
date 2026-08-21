@@ -324,9 +324,12 @@ function skillNameFromPath(path: string): string {
   return file.toLowerCase() === "skill.md" ? basename(dirname(path)) : file;
 }
 
-let discoveredResourcesPromise: Promise<{ skills: readonly string[]; extensions: readonly string[] }> | undefined;
-async function discoveredResources(cwd: string): Promise<{ skills: readonly string[]; extensions: readonly string[] }> {
-  discoveredResourcesPromise ??= (async () => {
+type DiscoveredResources = { skills: readonly string[]; extensions: readonly string[] };
+const discoveredResourcesByCwd = new Map<string, Promise<DiscoveredResources>>();
+async function discoveredResources(cwd: string): Promise<DiscoveredResources> {
+  const cached = discoveredResourcesByCwd.get(cwd);
+  if (cached) return cached;
+  const pending = (async (): Promise<DiscoveredResources> => {
     const agentDir = getAgentDir();
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
     const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
@@ -336,7 +339,10 @@ async function discoveredResources(cwd: string): Promise<{ skills: readonly stri
       skills: [...new Set(resolved.skills.filter((entry) => entry.enabled).map((entry) => skillNameFromPath(entry.path)))],
     };
   })();
-  return discoveredResourcesPromise;
+  discoveredResourcesByCwd.set(cwd, pending);
+  // A cached rejection would keep the fallback empty for the rest of the process lifetime.
+  pending.catch(() => discoveredResourcesByCwd.delete(cwd));
+  return pending;
 }
 
 export async function withResolvedResources(run: PersistedRun, cwd: string): Promise<PersistedRun> {
