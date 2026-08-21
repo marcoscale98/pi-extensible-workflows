@@ -123,10 +123,14 @@ export class WorkflowRegistry {
   }
   catalogIndex(context?: WorkflowCatalogContext): WorkflowCatalogIndex {
     const catalog = this.catalog(context);
-    const modelAliasEntries = catalog.modelAliasEntries === undefined ? undefined : [...catalog.modelAliasEntries.reduce((entries, entry) => {
-      if (!entries.has(entry.name) || entry.kind === "static") entries.set(entry.name, entry);
-      return entries;
-    }, new Map<string, WorkflowCatalogModelAlias>()).values()];
+    let modelAliasEntries: WorkflowCatalogModelAlias[] | undefined;
+    if (catalog.modelAliasEntries !== undefined) {
+      const winningEntries = new Map<string, WorkflowCatalogModelAlias>();
+      for (const entry of catalog.modelAliasEntries) {
+        if (!winningEntries.has(entry.name) || entry.kind === "static") winningEntries.set(entry.name, entry);
+      }
+      modelAliasEntries = [...winningEntries.values()];
+    }
     const index: WorkflowCatalogIndex = {
       functions: catalog.functions.map(({ name, description, input }) => ({ name, description, input: structuredClone(input) })),
       ...(modelAliasEntries ? { modelAliasEntries: structuredClone(modelAliasEntries) } : {}),
@@ -139,7 +143,8 @@ export class WorkflowRegistry {
     const catalog = this.catalog(context);
     const entry = catalog.functions.find((candidate) => candidate.name === name);
     if (entry) return entry;
-    const alias = catalog.modelAliasEntries?.find((candidate) => candidate.name === name);
+    const alias = catalog.modelAliasEntries?.find((candidate) => candidate.name === name && candidate.kind === "static")
+      ?? catalog.modelAliasEntries?.find((candidate) => candidate.name === name);
     if (alias) return alias;
     return deepFreeze({ error: { code: "NOT_FOUND", name, message: `No registered workflow function is available: ${name}` } });
   }

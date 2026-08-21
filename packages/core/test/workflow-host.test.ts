@@ -178,6 +178,7 @@ void test("collapses shadowed aliases in the catalog index while retaining full 
     { name: "reviewer-model", kind: "static", provenance: "global settings" },
   ]);
   assert.deepEqual(registry.catalogIndex(context).modelAliasEntries, [{ name: "reviewer-model", kind: "static", provenance: "global settings" }]);
+  assert.deepEqual(registry.catalogDetail("reviewer-model", context), { name: "reviewer-model", kind: "static", provenance: "global settings" });
 });
 void test("rejects duplicate and invalid dynamic alias registrations with extension provenance", async () => {
   const duplicate = new WorkflowRegistry();
@@ -537,7 +538,7 @@ void test("registers workflow_catalog only for active non-empty registries", asy
   let activeStart: ((event: unknown, ctx: unknown) => Promise<void>) | undefined;
   let activeShutdown: (() => Promise<void>) | undefined;
   workflowExtension(testExtensionApi({ registerTool(tool: (typeof activeTools)[number]) { activeTools.push(tool); }, registerCommand() {}, getActiveTools: () => ["workflow"], on(name: string, handler: unknown) { if (name === "session_start") activeStart = handler as typeof activeStart; if (name === "session_shutdown") activeShutdown = handler as typeof activeShutdown; } }), activeHome);
-  registerWorkflowExtension(reuseExtension);
+  registerWorkflowExtension({ ...reuseExtension, modelAliases: { "project-only": { resolve: () => "dynamic/model" } } });
   assert.ok(activeStart && activeShutdown);
   assert.equal(activeTools.filter(({ name }) => name === "workflow_catalog").length, 0);
   const activeContext = { cwd: activeHome, sessionManager: { getSessionId: () => "active" } };
