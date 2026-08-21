@@ -343,6 +343,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   };
   const liveAgents = new LiveAgentRegistry();
   const trajectoryController = createTrajectoryController(extensionAgentDir);
+  let trajectoryAutoOpened = false;
   const trajectoryRuns = (context: unknown) => {
     const host = object(context) ? context : undefined;
     const cwd = typeof host?.cwd === "string" ? host.cwd : undefined;
@@ -387,6 +388,11 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const ui = current && object(current.ui) ? current.ui : undefined;
       if (typeof ui?.notify === "function") Reflect.apply(ui.notify, ui, [`Unable to open Trajectory: ${errorText(error)}`, "error"]);
     }
+  };
+  const autoOpenTrajectory = (context: unknown): void => {
+    if (trajectoryAutoOpened || !object(context) || context.hasUI !== true) return;
+    trajectoryAutoOpened = true;
+    void openTrajectory(context);
   };
   const withLiveActivities = (run: PersistedRun): PersistedRun => liveAgents.overlay(run);
   const terminalRunStates = new Map<string, "completed" | "failed" | "stopped">();
@@ -968,7 +974,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     try { retention = resolveWorkflowSettings(ctx.cwd, projectTrusted(ctx), workflowSettingsPath(extensionAgentDir)).effective.retention; } catch { retention = undefined; }
     // Retention is optional housekeeping; a corrupt or racing run must not block resume.
     if (retention !== undefined) void retainTerminalRuns({ cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), ...(home === undefined ? {} : { home }), allSessions: true, retention }).catch(() => undefined);
-    for (const runId of await listRunIds(ctx.cwd, ctx.sessionManager.getSessionId(), home)) {
+    const runIds = await listRunIds(ctx.cwd, ctx.sessionManager.getSessionId(), home);
+    for (const runId of runIds) {
       if (runs.has(runId)) continue;
       const store = new RunStore(ctx.cwd, ctx.sessionManager.getSessionId(), runId, home);
       let loaded: { run: PersistedRun; snapshot: Readonly<LaunchSnapshot> };
@@ -1012,6 +1019,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       for (const decision of await store.pendingWorkflowDecisions()) deliver(pi, recovery.budgetDecisionDelivery(loaded.snapshot.metadata, decision));
       scheduler.restoreRun(runId, loaded.snapshot.settings.concurrency, loaded.snapshot.identityVersion === LAUNCH_SNAPSHOT_IDENTITY_VERSION ? await store.loadOwnership() : [], () => runs.get(runId)?.budget.checkAgentLaunch());
     }
+    if (runIds.length > 0) autoOpenTrajectory(ctx);
     const resumeSelect = uiHostCapabilities(ctx.ui)?.select;
     if (ctx.hasUI && resumeSelect) {
       const interrupted = [...runs.values()].filter((r) => r.lifecycle.state === "interrupted");
@@ -1109,6 +1117,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const budgetRuntime = new WorkflowBudgetRuntime(budget);
       const initialBudget = budgetRuntime.snapshot();
       await store.create({ id: runId, workflowName: checked.metadata.name, cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), state: "running", ...(parentRunId !== undefined ? { parentRunId } : {}), agents: [], agentSessions: [], delivery: params.foreground ? { mode: "foreground", state: "attached", toolCallId } : { mode: "background", state: "pending" }, ...(budget ? { budget } : {}), budgetVersion: 1, ...initialBudget }, snapshot);
+      autoOpenTrajectory(ctx);
       if (params.foreground) {
         const delivery: ForegroundDelivery = {
           store, inline: false, detached: false,
