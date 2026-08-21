@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type, type Api, type Model, type Static, type TSchema } from "@earendil-works/pi-ai";
-import { copyToClipboard, getAgentDir, ModelSelectorComponent, SettingsManager, type ExtensionAPI, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { copyToClipboard, getAgentDir, ModelSelectorComponent, SettingsManager, type ExtensionAPI, type ExtensionContext, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { FairAgentScheduler, getAgentAttempts, WorkflowAgentExecutor, localAgentTransport, type AgentActivity, type AgentAttempt, type AgentDefinition, type AgentProgress, type AgentProviderFailure, type AgentProviderRecovery } from "./agent-execution.js";
 import { RunLifecycle, WorkflowEventPublisher, nextNamedOccurrence, withWorkflowFunctions, workflowRunContext, type WorkflowRunRecord, type WorkflowToolUpdate } from "./host-runtime.js";
 import { createWorkflowRecovery, persistedFailure } from "./host-recovery.js";
@@ -18,7 +18,7 @@ import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIf
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
 import backgroundWidget, { type BackgroundWidgetAPI } from "./background-widget.js";
 import { showChangelogNotice } from "./changelog.js";
-import { createTrajectoryController, createTrajectoryRunLoader, openTrajectoryUrl, trajectoryUrl, type TrajectoryActionRequest } from "./trajectory.js";
+import { createTrajectoryController, createTrajectoryRunLoader, openTrajectoryUrl, trajectoryUrl, type TrajectoryActionRequest, type TrajectoryController } from "./trajectory.js";
 import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import {
   SETTLED_AGENT_STATES,
@@ -54,7 +54,14 @@ import {
   type WorkflowLogEntry,
 } from "./host-delivery.js";
 
-export type WorkflowExtensionAPI = Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "getThinkingLevel" | "on" | "registerCommand" | "registerTool" | "sendMessage"> & Pick<BackgroundWidgetAPI, "events" | "registerEntryRenderer" | "registerShortcut">;
+export type WorkflowTrajectoryDependencies = {
+  controller?: TrajectoryController;
+  openUrl?: (url: string) => void;
+};
+
+export type WorkflowExtensionAPI = Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "getThinkingLevel" | "on" | "registerCommand" | "registerTool" | "sendMessage"> & Pick<BackgroundWidgetAPI, "events" | "registerEntryRenderer" | "registerShortcut"> & {
+  trajectory?: WorkflowTrajectoryDependencies;
+};
 
 export {
   agentBreadcrumb,
@@ -342,7 +349,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     });
   };
   const liveAgents = new LiveAgentRegistry();
-  const trajectoryController = createTrajectoryController(extensionAgentDir);
+  const trajectoryController = pi.trajectory?.controller ?? createTrajectoryController(extensionAgentDir);
+  const openTrajectoryUrlFn = pi.trajectory?.openUrl ?? openTrajectoryUrl;
   let trajectoryAutoOpened = false;
   const trajectoryRuns = (context: unknown) => {
     const host = object(context) ? context : undefined;
@@ -380,7 +388,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const input = { cwd, sessionId, ...(port === undefined ? {} : { port }), themes, loadRuns, handleAction: (request: Readonly<TrajectoryActionRequest>) => trajectoryAction(request, context) };
       const server = await trajectoryController.open(input);
       const url = trajectoryUrl(server.port);
-      openTrajectoryUrl(url);
+      openTrajectoryUrlFn(url);
       const ui = current && object(current.ui) ? current.ui : undefined;
       if (typeof ui?.notify === "function") Reflect.apply(ui.notify, ui, [`Trajectory opened at ${url}`, "info"]);
     } catch (error) {
@@ -389,8 +397,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       if (typeof ui?.notify === "function") Reflect.apply(ui.notify, ui, [`Unable to open Trajectory: ${errorText(error)}`, "error"]);
     }
   };
-  const autoOpenTrajectory = (context: unknown): void => {
-    if (trajectoryAutoOpened || !object(context) || context.hasUI !== true) return;
+  const autoOpenTrajectory = (context: Pick<ExtensionContext, "hasUI">): void => {
+    if (trajectoryAutoOpened || !context.hasUI) return;
     trajectoryAutoOpened = true;
     void openTrajectory(context);
   };

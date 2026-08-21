@@ -10,7 +10,7 @@ export * from "./host.js";
 export * from "./workflow-artifacts.js";
 export { formatCost } from "./background-widget.js";
 export { createTrajectoryController, createTrajectoryRunLoader, loadTrajectoryRuns, openTrajectoryUrl, trajectoryUrl } from "./trajectory.js";
-export type { TrajectoryAction, TrajectoryActionHandler, TrajectoryActionRequest, TrajectoryPublisherInput, TrajectoryRun, TrajectoryRunLoader } from "./trajectory.js";
+export type { TrajectoryAction, TrajectoryActionHandler, TrajectoryActionRequest, TrajectoryController, TrajectoryPublisherInput, TrajectoryRun, TrajectoryRunLoader } from "./trajectory.js";
 export { agentActionLabels, formatAgentDetail, navigatorAttentionSortByState, themeWorkflowProgressStyles, visibleStandaloneAgentAttemptActions } from "./host-view.js";
 export type { AgentDetailPresentation, WorkflowProgressStyles } from "./host-view.js";
 export { default } from "./host.js";

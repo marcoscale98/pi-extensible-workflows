@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createExtensionRuntime, ExtensionRunner, ModelRegistry, ModelRuntime, SessionManager, type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { ERROR_CODES, RUN_STATES } from "../src/index.js";
-import type { AgentTransportContext, JsonValue, WorkflowExtension, WorkflowFailureDiagnostics } from "../src/index.js";
+import type { AgentTransportContext, JsonValue, TrajectoryController, WorkflowExtension, WorkflowFailureDiagnostics } from "../src/index.js";
 import type { WorkflowExtensionAPI } from "../src/host.js";
 
 export const reuseExtension: WorkflowExtension = { version: "1.0.0", headline: "Reusable", functions: { inspect: { description: "Inspect", input: { type: "object", additionalProperties: false }, output: { type: "string" }, run: () => "ok" }, hello: { description: "Say hello", input: { type: "object", properties: { name: { type: "string" } }, required: ["name"], additionalProperties: false }, output: { type: "string" }, run: (input) => typeof input.name === "string" ? input.name : "" } } };
@@ -60,7 +60,14 @@ type TestExtensionApiOptions = {
     emit?: ExtensionAPI["events"]["emit"];
     on?: ExtensionAPI["events"]["on"];
   };
+  trajectory?: {
+    controller?: TrajectoryController;
+    openUrl?: (url: string) => void;
+  };
 };
+const testTrajectoryController: TrajectoryController = { open: async () => ({ port: 7432 }), close: async () => {} };
+const testTrajectoryOpenUrl = (): void => {};
+
 function isTestWorkflowLogEntry(value: unknown): value is TestWorkflowLogEntry {
   return typeof value === "object" && value !== null && "workflowName" in value && typeof value.workflowName === "string" && "message" in value && typeof value.message === "string";
 }
@@ -83,7 +90,8 @@ export function testExtensionApi(options: TestExtensionApiOptions = {}): Workflo
     },
   };
   const registerEntryRenderer: ExtensionAPI["registerEntryRenderer"] = (type, renderer) => { options.registerEntryRenderer?.(type, renderer); };
-  return { ...api, ...(options.registerEntryRenderer ? { registerEntryRenderer } : {}), ...(options.registerShortcut ? { registerShortcut: options.registerShortcut } : {}), ...(options.events ? { events: options.events } : {}) };
+  const trajectory = options.trajectory;
+  return { ...api, trajectory: { controller: trajectory?.controller ?? testTrajectoryController, openUrl: trajectory?.openUrl ?? testTrajectoryOpenUrl }, ...(options.registerEntryRenderer ? { registerEntryRenderer } : {}), ...(options.registerShortcut ? { registerShortcut: options.registerShortcut } : {}), ...(options.events ? { events: options.events } : {}) };
 }
 const testModelRegistry = new ModelRegistry(await ModelRuntime.create({ modelsPath: null }));
 const testExtensionRunner = new ExtensionRunner([], createExtensionRuntime(), "/repo", SessionManager.inMemory("/repo", { id: "test-session" }), testModelRegistry);

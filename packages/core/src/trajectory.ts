@@ -50,8 +50,10 @@ type TrajectoryPublisherClient = {
 type TrajectoryPublisherConstructor = new (url: string) => TrajectoryPublisherClient;
 
 type TrajectoryLock = { pid: number; port: number };
-type TrajectoryServer = { port: number };
-
+export type TrajectoryController = {
+  open(input: TrajectoryPublisherInput): Promise<{ port: number }>;
+  close(): Promise<void>;
+};
 function trajectoryLockPath(agentDir: string): string { return join(agentDir, "pi-extensible-workflows", TRAJECTORY_LOCK_NAME); }
 function trajectoryServerPath(): string {
   const moduleDirectory = dirname(fileURLToPath(import.meta.url));
@@ -90,7 +92,7 @@ async function waitForServer(port: number): Promise<void> {
   throw new Error(`Trajectory server did not start on port ${String(port)}`);
 }
 
-async function ensureTrajectoryServer(agentDir: string, configuredPort: number): Promise<TrajectoryServer> {
+async function ensureTrajectoryServer(agentDir: string, configuredPort: number): Promise<{ port: number }> {
   const lockPath = trajectoryLockPath(agentDir);
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   const existing = await readLock(lockPath);
@@ -380,10 +382,7 @@ function openBrowser(url: string): void {
 export function trajectoryUrl(port: number): string { return `http://127.0.0.1:${String(port)}/`; }
 export function openTrajectoryUrl(url: string): void { openBrowser(url); }
 
-export function createTrajectoryController(agentDir: string): {
-  open(input: TrajectoryPublisherInput): Promise<TrajectoryServer>;
-  close(): Promise<void>;
-} {
+export function createTrajectoryController(agentDir: string): TrajectoryController {
   let socket: TrajectoryPublisherClient | undefined;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let currentInput: TrajectoryPublisherInput | undefined;

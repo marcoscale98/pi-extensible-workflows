@@ -1,0 +1,182 @@
+import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, RunStore, type PersistedRun, type TrajectoryPublisherInput } from "../src/index.js";
+import { testExtensionApi } from "./support.js";
+
+type TestTool = { name: string; execute?: (...args: unknown[]) => Promise<unknown> };
+type WorkflowHandler = (args: string, context: unknown) => Promise<void>;
+type SessionStartHandler = (event: unknown, context: unknown) => Promise<void>;
+type TrajectoryProbe = {
+  inputs: TrajectoryPublisherInput[];
+  urls: string[];
+  waiters: Array<() => void>;
+  controller: {
+    open(input: TrajectoryPublisherInput): Promise<{ port: number }>;
+    close(): Promise<void>;
+  };
+};
+
+const SESSION_ID = "session";
+
+function trajectoryProbe(): TrajectoryProbe {
+  const inputs: TrajectoryPublisherInput[] = [];
+  const urls: string[] = [];
+  const waiters: Array<() => void> = [];
+  return {
+    inputs,
+    urls,
+    waiters,
+    controller: {
+      async open(input) {
+        inputs.push(input);
+        for (const resolve of waiters.splice(0)) resolve();
+        return { port: 9876 };
+      },
+      async close() {},
+    },
+  };
+}
+
+function install(home: string, probe: TrajectoryProbe): { workflow: TestTool; command: WorkflowHandler; start: SessionStartHandler; shutdown: () => Promise<void> } {
+  const tools: TestTool[] = [];
+  let command: WorkflowHandler | undefined;
+  let start: SessionStartHandler | undefined;
+  let shutdown: (() => Promise<void>) | undefined;
+  workflowExtension(testExtensionApi({
+    registerTool(tool) { tools.push(tool); },
+    registerCommand(_name, options) { command = options.handler as WorkflowHandler; },
+    on(name, handler) {
+      if (name === "session_start") start = handler as SessionStartHandler;
+      if (name === "session_shutdown") shutdown = handler as () => Promise<void>;
+    },
+    getThinkingLevel: () => "medium",
+    getActiveTools: () => ["workflow"],
+    trajectory: { controller: probe.controller, openUrl: (url) => { probe.urls.push(url); } },
+  }), home);
+  assert.ok(tools.find(({ name }) => name === "workflow"));
+  assert.ok(command && start && shutdown);
+  return { workflow: tools.find(({ name }) => name === "workflow") as TestTool, command, start, shutdown };
+}
+
+function context(cwd: string, hasUI: boolean, select: (prompt: string, options: string[]) => Promise<string | undefined> = async () => undefined): Record<string, unknown> {
+  return {
+    cwd,
+    mode: "rpc",
+    hasUI,
+    model: { provider: "openai", id: "gpt" },
+    modelRegistry: { getAvailable: () => [{ provider: "openai", id: "gpt" }] },
+    sessionManager: { getSessionId: () => SESSION_ID },
+    ui: { notify() {}, select },
+  };
+}
+
+function snapshot(name: string) {
+  return createLaunchSnapshot({
+    script: "return true;",
+    args: null,
+    metadata: { name, description: name },
+    settings: DEFAULT_SETTINGS,
+    models: ["openai/gpt"],
+    tools: [],
+    agentTypes: [],
+    schemas: [],
+  });
+}
+
+async function persistRun(cwd: string, home: string, state: PersistedRun["state"], runId: string): Promise<void> {
+  const store = new RunStore(cwd, SESSION_ID, runId, home);
+  await store.create({ id: runId, workflowName: runId, cwd, sessionId: SESSION_ID, state, agents: [], agentSessions: [] }, snapshot(runId));
+}
+
+async function waitForOpen(probe: TrajectoryProbe, count: number): Promise<void> {
+  if (probe.inputs.length < count) await new Promise<void>((resolve) => { probe.waiters.push(resolve); });
+  assert.equal(probe.inputs.length, count);
+}
+
+async function launch(workflow: TestTool, ctx: Record<string, unknown>, name: string): Promise<void> {
+  assert.ok(workflow.execute);
+  await workflow.execute("call", { name, script: "return true;", foreground: true }, new AbortController().signal, undefined, ctx);
+}
+
+void test("headless sessions never auto-open Trajectory", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-headless-"));
+  const cwd = join(home, "project");
+  await persistRun(cwd, home, "completed", "completed");
+  const probe = trajectoryProbe();
+  const host = install(home, probe);
+  const ctx = context(cwd, false);
+  await host.start({}, ctx);
+  await launch(host.workflow, ctx, "headless-launch");
+  assert.equal(probe.inputs.length, 0);
+  assert.equal(probe.urls.length, 0);
+  await host.shutdown();
+});
+
+void test("empty interactive sessions auto-open once after the first successful launch", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-first-launch-"));
+  const cwd = join(home, "project");
+  const probe = trajectoryProbe();
+  const host = install(home, probe);
+  const ctx = context(cwd, true);
+  await host.start({}, ctx);
+  assert.equal(probe.inputs.length, 0);
+  await launch(host.workflow, ctx, "first-launch");
+  await waitForOpen(probe, 1);
+  const attached = probe.inputs[0];
+  assert.ok(attached);
+  assert.equal(attached.cwd, cwd);
+  assert.equal(attached.sessionId, SESSION_ID);
+  assert.deepEqual(probe.urls, ["http://127.0.0.1:9876/"]);
+  await launch(host.workflow, ctx, "second-launch");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(probe.inputs.length, 1);
+  await host.shutdown();
+});
+
+void test("completed sessions auto-open on session_start without a resume picker", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-completed-"));
+  const cwd = join(home, "project");
+  await persistRun(cwd, home, "completed", "completed");
+  const probe = trajectoryProbe();
+  const host = install(home, probe);
+  await host.start({}, context(cwd, true));
+  await waitForOpen(probe, 1);
+  await host.shutdown();
+});
+
+void test("interrupted sessions auto-open before the resume picker and keep one attachment", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-interrupted-"));
+  const cwd = join(home, "project");
+  await persistRun(cwd, home, "interrupted", "interrupted");
+  const probe = trajectoryProbe();
+  const host = install(home, probe);
+  let resolvePicker!: (value: string | undefined) => void;
+  const picker = new Promise<string | undefined>((resolve) => { resolvePicker = resolve; });
+  const ctx = context(cwd, true, async () => picker);
+  const starting = host.start({}, ctx);
+  await waitForOpen(probe, 1);
+  resolvePicker(undefined);
+  await starting;
+  await launch(host.workflow, ctx, "after-resume-picker");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(probe.inputs.length, 1);
+  await host.shutdown();
+});
+
+void test("manual Trajectory re-open uses the same path after auto-attach", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-manual-"));
+  const cwd = join(home, "project");
+  const probe = trajectoryProbe();
+  const host = install(home, probe);
+  const ctx = context(cwd, true);
+  await host.start({}, ctx);
+  await launch(host.workflow, ctx, "manual-reopen");
+  await waitForOpen(probe, 1);
+  await host.command("trajectory", ctx);
+  assert.equal(probe.inputs.length, 2);
+  assert.deepEqual(probe.urls, ["http://127.0.0.1:9876/", "http://127.0.0.1:9876/"]);
+  await host.shutdown();
+});
