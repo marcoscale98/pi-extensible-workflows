@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createConnection, createServer as createNetServer, type Socket } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -70,7 +70,7 @@ function decodeTextFrame(buffer: Buffer): { payload: string } | undefined {
 async function readJsonFrame(socket: Socket): Promise<unknown> {
   let buffer = Buffer.alloc(0);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timed out waiting for Trajectory frame")), 2000);
+    const timer = setTimeout(() => { reject(new Error("timed out waiting for Trajectory frame")); }, 2000);
     const onData = (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
       const decoded = decodeTextFrame(buffer);
@@ -107,6 +107,23 @@ async function handshake(port: number, origin: string): Promise<{ socket: Socket
     socket.write(`GET /ws HTTP/1.1\r\nHost: 127.0.0.1:${String(port)}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: ${origin}\r\n\r\n`);
   });
 }
+
+void test("Trajectory persists the server fingerprint in its listening lock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trajectory-server-lock-"));
+  const port = await availablePort();
+  const fingerprint = "server-hash:html-hash";
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), fingerprint);
+  await listen(server, port);
+  try {
+    assert.deepEqual(JSON.parse(await readFile(join(root, "trajectory.lock"), "utf8")), { pid: process.pid, port, fingerprint });
+  } finally {
+    server.closeAllConnections();
+    server.closeIdleConnections();
+    server.close();
+    server.unref();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 void test("Trajectory HTTP and WebSocket boundaries require localhost and origin", async () => {
   const root = await mkdtemp(join(tmpdir(), "trajectory-server-"));

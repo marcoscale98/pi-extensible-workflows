@@ -49,7 +49,7 @@ type TrajectoryPublisherClient = {
 
 type TrajectoryPublisherConstructor = new (url: string) => TrajectoryPublisherClient;
 
-type TrajectoryLock = { pid: number; port: number };
+type TrajectoryLock = { pid: number; port: number; fingerprint?: string };
 export type TrajectoryController = {
   open(input: TrajectoryPublisherInput): Promise<{ port: number }>;
   close(): Promise<void>;
@@ -62,6 +62,10 @@ function trajectoryServerPath(): string {
   if (!path) throw new Error("Trajectory server implementation is unavailable");
   return path;
 }
+async function trajectoryFingerprint(serverPath: string): Promise<string> {
+  const [serverBytes, htmlBytes] = await Promise.all([readFile(serverPath), readFile(join(dirname(serverPath), "trajectory/index.html"))]);
+  return `${createHash("sha256").update(serverBytes).digest("hex")}:${createHash("sha256").update(htmlBytes).digest("hex")}`;
+}
 function publisherId(cwd: string, sessionId: string): string { return createHash("sha256").update(`${cwd}\n${sessionId}`).digest("hex").slice(0, 16); }
 function trajectoryPort(value: unknown): number { return positiveInteger(value) && value <= 65535 ? value : DEFAULT_TRAJECTORY_PORT; }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
@@ -73,11 +77,40 @@ async function serverHealthy(port: number): Promise<boolean> {
   } catch { return false; }
 }
 
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (isNodeError(error, "ESRCH")) return false;
+    throw error;
+  }
+}
+function signalProcess(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (!isNodeError(error, "ESRCH")) throw error;
+  }
+}
+async function stopStaleServer(lock: TrajectoryLock): Promise<void> {
+  signalProcess(lock.pid, "SIGTERM");
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (!await serverHealthy(lock.port)) break;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await delay(Math.min(50, remaining));
+  }
+  if (processAlive(lock.pid)) signalProcess(lock.pid, "SIGKILL");
+}
+
 async function readLock(path: string): Promise<TrajectoryLock | undefined> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
     if (!object(parsed) || !positiveInteger(parsed.pid) || !positiveInteger(parsed.port) || parsed.port > 65535) return undefined;
-    return { pid: parsed.pid, port: parsed.port };
+    const fingerprint = typeof parsed.fingerprint === "string" ? parsed.fingerprint : undefined;
+    return { pid: parsed.pid, port: parsed.port, ...(fingerprint === undefined ? {} : { fingerprint }) };
   } catch (error) {
     if (isNodeError(error, "ENOENT")) return undefined;
     return undefined;
@@ -91,46 +124,51 @@ async function waitForServer(port: number): Promise<void> {
   }
   throw new Error(`Trajectory server did not start on port ${String(port)}`);
 }
+async function resolveExistingServer(lockPath: string, existing: TrajectoryLock, fingerprint: string): Promise<TrajectoryLock | undefined> {
+  if (await serverHealthy(existing.port)) {
+    if (existing.fingerprint === fingerprint) return existing;
+    await stopStaleServer(existing);
+    await rm(lockPath, { force: true });
+    return undefined;
+  }
+  if (processAlive(existing.pid)) {
+    await waitForServer(existing.port);
+    return existing;
+  }
+  await rm(lockPath, { force: true });
+  return undefined;
+}
 
 async function ensureTrajectoryServer(agentDir: string, configuredPort: number): Promise<{ port: number }> {
   const lockPath = trajectoryLockPath(agentDir);
+  const serverPath = trajectoryServerPath();
+  const fingerprint = await trajectoryFingerprint(serverPath);
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   const existing = await readLock(lockPath);
   if (existing) {
-    if (await serverHealthy(existing.port)) return existing;
-    let alive = true;
-    try { process.kill(existing.pid, 0); } catch (error) {
-      if (!isNodeError(error, "ESRCH")) throw error;
-      alive = false;
-    }
-    if (alive) {
-      await waitForServer(existing.port);
-      return existing;
-    }
-    await rm(lockPath, { force: true });
+    const reused = await resolveExistingServer(lockPath, existing, fingerprint);
+    if (reused) return reused;
   }
   let lockHandle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     lockHandle = await open(lockPath, "wx", 0o600);
-    await lockHandle.writeFile(`${JSON.stringify({ pid: process.pid, port: configuredPort })}\n`, "utf8");
+    await lockHandle.writeFile(`${JSON.stringify({ pid: process.pid, port: configuredPort, fingerprint })}\n`, "utf8");
   } catch (error) {
     if (isNodeError(error, "EEXIST")) {
       const raced = await readLock(lockPath);
-      if (raced && await serverHealthy(raced.port)) return raced;
-      if (!raced) {
-        await rm(lockPath, { force: true });
-        lockHandle = await open(lockPath, "wx", 0o600);
-        await lockHandle.writeFile(`${JSON.stringify({ pid: process.pid, port: configuredPort })}\n`, "utf8");
-      } else {
-        await waitForServer(raced.port);
-        return raced;
+      if (raced) {
+        const reused = await resolveExistingServer(lockPath, raced, fingerprint);
+        if (reused) return reused;
       }
+      await rm(lockPath, { force: true });
+      lockHandle = await open(lockPath, "wx", 0o600);
+      await lockHandle.writeFile(`${JSON.stringify({ pid: process.pid, port: configuredPort, fingerprint })}\n`, "utf8");
     } else {
       throw error;
     }
   } finally { await lockHandle?.close(); }
   try {
-    const child = spawn(process.execPath, [trajectoryServerPath(), "--port", String(configuredPort), "--lock", lockPath], { detached: true, stdio: "ignore" });
+    const child = spawn(process.execPath, [serverPath, "--port", String(configuredPort), "--lock", lockPath, "--fingerprint", fingerprint], { detached: true, stdio: "ignore" });
     const startupError = new Promise<never>((_resolve, reject) => { child.once("error", reject); });
     child.unref();
     await Promise.race([waitForServer(configuredPort), startupError]);
