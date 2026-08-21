@@ -11,7 +11,39 @@ type Socket = import("node:stream").Duplex;
 type ClientKind = "publisher" | "browser";
 type Client = { socket: Socket; kind: ClientKind; publisherId?: string; buffer: Buffer };
 type State = { type: "state"; publishers: readonly unknown[]; updatedAt: number };
-const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+const MAX_FRAME_BYTES = 32 * 1024 * 1024;
+const TIMING_ENTRY_TYPE = "pi-workflows:tool-timing";
+
+function isTimingEntry(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && (value as { type?: unknown }).type === "custom" && (value as { customType?: unknown }).customType === TIMING_ENTRY_TYPE);
+}
+
+function compactRun(run: unknown): unknown {
+  if (!run || typeof run !== "object" || Array.isArray(run)) return run;
+  const record = run as { transcripts?: unknown };
+  if (!record.transcripts || typeof record.transcripts !== "object" || Array.isArray(record.transcripts)) return { ...record, transcripts: {} };
+  const transcripts: Record<string, unknown[]> = {};
+  for (const [id, entries] of Object.entries(record.transcripts as Record<string, unknown>)) transcripts[id] = Array.isArray(entries) ? entries.filter(isTimingEntry) : [];
+  return { ...record, transcripts };
+}
+
+function compactPublishers(publishers: readonly unknown[]): unknown[] {
+  return publishers.map((publisher) => {
+    if (!publisher || typeof publisher !== "object" || Array.isArray(publisher)) return publisher;
+    const value = publisher as { runs?: unknown };
+    if (!Array.isArray(value.runs)) return publisher;
+    return { ...value, runs: value.runs.map(compactRun) };
+  });
+}
+
+function encodeState(state: State, maxBytes: number): string {
+  const full = JSON.stringify(state);
+  if (Buffer.byteLength(full) <= maxBytes) return full;
+  // ponytail: strip message transcripts when combined state exceeds the frame cap; per-run fetch if timing-only still overflows
+  const compact = JSON.stringify({ type: "state", publishers: compactPublishers(state.publishers), updatedAt: state.updatedAt });
+  if (Buffer.byteLength(compact) <= maxBytes) return compact;
+  return JSON.stringify({ type: "state", publishers: [], updatedAt: state.updatedAt });
+}
 
 async function withDescribedRuns(runs: unknown): Promise<unknown[]> {
   if (!Array.isArray(runs)) return [];
@@ -25,21 +57,26 @@ async function withDescribedRuns(runs: unknown): Promise<unknown[]> {
   }));
 }
 
-function frame(payload: string): Buffer {
+function frame(payload: string, maxBytes: number): Buffer {
   const body = Buffer.from(payload);
-  if (body.length > MAX_FRAME_BYTES) throw new Error("Trajectory WebSocket frame is too large");
+  if (body.length > maxBytes) throw new Error("Trajectory WebSocket frame is too large");
   if (body.length < 126) return Buffer.concat([Buffer.from([0x81, body.length]), body]);
   if (body.length <= 0xffff) { const header = Buffer.alloc(4); header[0] = 0x81; header[1] = 126; header.writeUInt16BE(body.length, 2); return Buffer.concat([header, body]); }
   const header = Buffer.alloc(10); header[0] = 0x81; header[1] = 127; header.writeBigUInt64BE(BigInt(body.length), 2); return Buffer.concat([header, body]);
 }
 
-function send(client: Client, value: unknown): void {
-  try { client.socket.write(frame(JSON.stringify(value))); } catch { client.socket.destroy(); }
+function send(client: Client, value: unknown, maxBytes: number): void {
+  try {
+    const payload = value && typeof value === "object" && !Array.isArray(value) && (value as { type?: unknown }).type === "state"
+      ? encodeState(value as State, maxBytes)
+      : JSON.stringify(value);
+    client.socket.write(frame(payload, maxBytes));
+  } catch { client.socket.destroy(); }
 }
 
-function parseFrames(client: Client, chunk: Buffer): readonly string[] {
+function parseFrames(client: Client, chunk: Buffer, maxBytes: number): readonly string[] {
   client.buffer = Buffer.concat([client.buffer, chunk]);
-  if (client.buffer.length > MAX_FRAME_BYTES + 14) throw new Error("Trajectory WebSocket buffer is too large");
+  if (client.buffer.length > maxBytes + 14) throw new Error("Trajectory WebSocket buffer is too large");
   const messages: string[] = [];
   while (client.buffer.length >= 2) {
     const first = client.buffer[0] ?? 0;
@@ -50,7 +87,7 @@ function parseFrames(client: Client, chunk: Buffer): readonly string[] {
     let offset = 2;
     let length = second & 0x7f;
     if (length === 126) { if (client.buffer.length < 4) break; length = client.buffer.readUInt16BE(2); offset = 4; }
-    else if (length === 127) { if (client.buffer.length < 10) break; const longLength = client.buffer.readBigUInt64BE(2); if (longLength > BigInt(MAX_FRAME_BYTES)) throw new Error("Trajectory WebSocket frame is too large"); length = Number(longLength); offset = 10; }
+    else if (length === 127) { if (client.buffer.length < 10) break; const longLength = client.buffer.readBigUInt64BE(2); if (longLength > BigInt(maxBytes)) throw new Error("Trajectory WebSocket frame is too large"); length = Number(longLength); offset = 10; }
     if (opcode >= 0x8 && (length > 125 || (first & 0x80) === 0)) throw new Error("Invalid Trajectory WebSocket control frame");
     if (client.buffer.length < offset + 4 + length) break;
     const mask = client.buffer.subarray(offset, offset + 4); offset += 4;
@@ -77,12 +114,13 @@ function authorized(request: IncomingMessage, port: number): boolean {
   return origin === undefined || origin === `http://127.0.0.1:${String(port)}` || origin === `http://localhost:${String(port)}`;
 }
 
-export function createTrajectoryServer(port: number, lockPath: string): Server {
+export function createTrajectoryServer(port: number, lockPath: string, maxFrameBytes = MAX_FRAME_BYTES): Server {
   const clients = new Set<Client>();
   const publishers = new Map<string, { client: Client; value: Record<string, unknown> }>();
   let latest: State = { type: "state", publishers: [], updatedAt: Date.now() };
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
+  const emit = (client: Client, value: unknown) => send(client, value, maxFrameBytes);
   const scheduleIdleExit = () => {
     if (closed || [...publishers.values()].some(({ value }) => value.connected === true) || idleTimer !== undefined) return;
     idleTimer = setTimeout(() => {
@@ -95,7 +133,7 @@ export function createTrajectoryServer(port: number, lockPath: string): Server {
   const cancelIdleExit = () => {
     if (idleTimer !== undefined) { clearTimeout(idleTimer); idleTimer = undefined; }
   };
-  const broadcast = (value: unknown) => { for (const client of clients) if (client.kind === "browser") send(client, value); };
+  const broadcast = (value: unknown) => { for (const client of clients) if (client.kind === "browser") emit(client, value); };
   const publishState = () => {
     const values = [...publishers.values()].map(({ value }) => value);
     latest = { type: "state", publishers: values, updatedAt: Date.now() };
@@ -115,7 +153,7 @@ export function createTrajectoryServer(port: number, lockPath: string): Server {
     try { value = JSON.parse(raw); } catch { return; }
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     const message = value as Record<string, unknown>;
-    if (message.type === "ui:attach") { client.kind = "browser"; send(client, latest); return; }
+    if (message.type === "ui:attach") { client.kind = "browser"; emit(client, latest); return; }
     if (client.kind === "publisher" && message.type === "publisher:attach" && typeof message.publisherId === "string") {
       cancelIdleExit();
       client.publisherId = message.publisherId;
@@ -144,8 +182,8 @@ export function createTrajectoryServer(port: number, lockPath: string): Server {
     if (client.kind === "publisher" && message.type === "publisher:action-result" && typeof message.requestId === "string") { broadcast(message); return; }
     if (client.kind !== "browser" || message.type !== "ui:action" || typeof message.publisherId !== "string" || typeof message.runId !== "string" || typeof message.action !== "string") return;
     const target = publishers.get(message.publisherId);
-    if (!target || !target.value.connected) { send(client, { type: "action-result", requestId: message.requestId, ok: false, error: "Publisher is disconnected" }); return; }
-    send(target.client, { type: "publisher:action", requestId: typeof message.requestId === "string" ? message.requestId : randomUUID(), action: message.action, runId: message.runId, ...(typeof message.name === "string" ? { name: message.name } : {}) });
+    if (!target || !target.value.connected) { emit(client, { type: "action-result", requestId: message.requestId, ok: false, error: "Publisher is disconnected" }); return; }
+    emit(target.client, { type: "publisher:action", requestId: typeof message.requestId === "string" ? message.requestId : randomUUID(), action: message.action, runId: message.runId, ...(typeof message.name === "string" ? { name: message.name } : {}) });
   };
   const server = createServer((request, response) => {
     let url: URL;
@@ -182,7 +220,7 @@ export function createTrajectoryServer(port: number, lockPath: string): Server {
     clients.add(client);
     socket.on("data", (chunk: unknown) => {
       if (!Buffer.isBuffer(chunk)) return;
-      try { for (const message of parseFrames(client, chunk)) handleMessage(client, message); } catch { socket.destroy(); }
+      try { for (const message of parseFrames(client, chunk, maxFrameBytes)) handleMessage(client, message); } catch { socket.destroy(); }
     });
     socket.on("close", () => { disconnect(client); });
     socket.on("error", () => { disconnect(client); });

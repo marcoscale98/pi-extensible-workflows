@@ -25,14 +25,67 @@ async function listen(server: ReturnType<typeof createTrajectoryServer>, port: n
 
 function maskedFrame(value: string): Buffer {
   const data = Buffer.from(value);
-  assert.ok(data.length < 126);
   const mask = Buffer.from([1, 2, 3, 4]);
-  const frame = Buffer.alloc(data.length + 6);
-  frame[0] = 0x81;
-  frame[1] = 0x80 | data.length;
-  mask.copy(frame, 2);
-  for (let index = 0; index < data.length; index += 1) frame[index + 6] = (data[index] ?? 0) ^ (mask[index % 4] ?? 0);
-  return frame;
+  let header: Buffer;
+  if (data.length < 126) header = Buffer.from([0x81, 0x80 | data.length]);
+  else if (data.length <= 0xffff) {
+    header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(data.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(data.length), 2);
+  }
+  const body = Buffer.alloc(data.length);
+  for (let index = 0; index < data.length; index += 1) body[index] = (data[index] ?? 0) ^ (mask[index % 4] ?? 0);
+  return Buffer.concat([header, mask, body]);
+}
+
+function decodeTextFrame(buffer: Buffer): { payload: string } | undefined {
+  if (buffer.length < 2) return undefined;
+  const second = buffer[1] ?? 0;
+  assert.equal(second & 0x80, 0);
+  let offset = 2;
+  let length = second & 0x7f;
+  if (length === 126) {
+    if (buffer.length < 4) return undefined;
+    length = buffer.readUInt16BE(2);
+    offset = 4;
+  } else if (length === 127) {
+    if (buffer.length < 10) return undefined;
+    length = Number(buffer.readBigUInt64BE(2));
+    offset = 10;
+  }
+  if (buffer.length < offset + length) return undefined;
+  return { payload: buffer.subarray(offset, offset + length).toString("utf8") };
+}
+
+async function readJsonFrame(socket: Socket): Promise<unknown> {
+  let buffer = Buffer.alloc(0);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timed out waiting for Trajectory frame")), 2000);
+    const onData = (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      const decoded = decodeTextFrame(buffer);
+      if (!decoded) return;
+      clearTimeout(timer);
+      socket.off("data", onData);
+      resolve(JSON.parse(decoded.payload));
+    };
+    socket.on("data", onData);
+    socket.once("error", reject);
+  });
+}
+
+function publisherState(id: string, blob: string): string {
+  return JSON.stringify({
+    type: "publisher:state",
+    publisher: { id },
+    runs: [{ run: { id, workflowName: id, agents: [], state: "completed" }, transcripts: { agent: [{ type: "message", text: blob }] }, snapshot: {}, awaiting: [] }],
+  });
 }
 
 async function handshake(port: number, origin: string): Promise<{ socket: Socket; response: string }> {
@@ -82,6 +135,52 @@ void test("Trajectory HTTP and WebSocket boundaries require localhost and origin
     unmasked.socket.write(Buffer.from([0x81, 1, 0x78]));
     await closed;
   } finally {
+    server.closeAllConnections();
+    server.closeIdleConnections();
+    server.close();
+    server.unref();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("Trajectory keeps the browser socket when combined publisher state exceeds the frame cap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trajectory-server-cap-"));
+  const port = await availablePort();
+  const maxFrameBytes = 800;
+  const blob = "x".repeat(400);
+  const first = publisherState("one", blob);
+  const second = publisherState("two", blob);
+  assert.ok(Buffer.byteLength(first) < maxFrameBytes);
+  assert.ok(Buffer.byteLength(second) < maxFrameBytes);
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), maxFrameBytes);
+  await listen(server, port);
+  const sockets: Socket[] = [];
+  try {
+    const origin = `http://127.0.0.1:${String(port)}`;
+    const publisherOne = await handshake(port, origin);
+    const publisherTwo = await handshake(port, origin);
+    sockets.push(publisherOne.socket, publisherTwo.socket);
+    publisherOne.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "one" })));
+    publisherOne.socket.write(maskedFrame(first));
+    publisherTwo.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "two" })));
+    publisherTwo.socket.write(maskedFrame(second));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const browser = await handshake(port, origin);
+    sockets.push(browser.socket);
+    const closed = new Promise<string>((resolve) => browser.socket.once("close", () => { resolve("closed"); }));
+    const state = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:attach" })));
+    const message = await Promise.race([state, closed.then((value) => { throw new Error(value); })]);
+    assert.equal((message as { type?: unknown }).type, "state");
+    const publishers = (message as { publishers?: unknown[] }).publishers;
+    assert.ok(Array.isArray(publishers));
+    assert.equal(publishers.length, 2);
+    for (const publisher of publishers) {
+      const runs = (publisher as { runs?: { transcripts?: { agent?: unknown[] } }[] }).runs;
+      assert.deepEqual(runs?.[0]?.transcripts?.agent ?? [], []);
+    }
+  } finally {
+    for (const socket of sockets) socket.destroy();
     server.closeAllConnections();
     server.closeIdleConnections();
     server.close();
