@@ -115,6 +115,11 @@ function loadTrajectoryPreviewHelpers(source: string): TrajectoryPreviewHelpers 
 void test("Trajectory compacts canonical skill reads without losing event details", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   const helpers = loadTrajectoryPreviewHelpers(source);
+  assert.match(source, /\.pill\.skill/);
+  assert.match(source, /html\[data-theme="paper"\] \.pill\.skill/);
+  assert.match(source, /html\[data-theme="tty"\] \.pill\.skill/);
+  assert.match(source, /if \(detail\.kind === "tool" \|\| detail\.kind === "skill"\)/);
+  assert.match(source, /<span class="pill \$\{detail\.kind\}">\$\{eventLabel\(detail\.kind\)\}<\/span>/);
   const readCall = (id: string, args: Record<string, unknown>) => ({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id, name: "read", arguments: args }] } });
   const toolResult = (id: string, toolName = "read") => ({ type: "message", _toolTiming: { durationMs: 12, isError: false }, message: { role: "toolResult", toolCallId: id, toolName, content: [] } });
   const skillArgs = { path: "/home/andrea/.pi/agent/skills/tigerstyle/SKILL.md", offset: 1, limit: 400 };
@@ -144,9 +149,11 @@ void test("Trajectory compacts canonical skill reads without losing event detail
   assert.match(nestedHtml, /class="tool-timing"> · 12ms<\/span>/);
   const nestedResult = toolResult("nested-read");
   assert.equal(helpers.entryDetails(nestedResult, {}, [nestedCall, nestedResult]).kind, "tool");
+  assert.equal(helpers.eventLabel(helpers.entryDetails(nestedResult, {}, [nestedCall, nestedResult]).kind), "TOOL");
   const simpleBashCall = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "simple-bash-call", name: "bash", arguments: { command: "git status --short" } }] } };
   const simpleBashResult = toolResult("simple-bash-call", "bash");
   assert.equal(helpers.entryDetails(simpleBashResult, {}, [simpleBashCall, simpleBashResult]).kind, "tool");
+  assert.equal(helpers.eventLabel(helpers.entryDetails(simpleBashResult, {}, [simpleBashCall, simpleBashResult]).kind), "TOOL");
 
   const longCommand = "npm run build --workspace=packages/core && TEST_FILES='dist/test/agent-execution.test.js' npm run test:run --workspace=packages/core";
   const bashCall = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: longCommand, timeout: 180 } }] } };
