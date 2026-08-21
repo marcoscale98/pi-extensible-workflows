@@ -85,7 +85,13 @@ void test("Trajectory returns to an empty home when a publisher disappears", () 
   assert.match(source, /Select a run\./);
   assert.match(source, /function selectHome\(mode = "replace"\)/);
   assert.match(source, /let hasAcceptedState = false/);
-  assert.doesNotMatch(source, /if \(!selected\(\) && allRuns\(\)\[0\]\)/);
+  assert.match(source, /call\(history, \{ view: document\.body\.dataset\.view, run: state\.currentRun, agent: state\.currentAgent \}, "", next\)/);
+  assert.match(source, /value\.truncated === true/);
+  assert.match(source, /value\.initial === true && hasAcceptedState/);
+  assert.match(source, /setView\("run", mode\)/);
+  assert.doesNotMatch(source, /if \(!selected\(\) && allRuns\(\)\[0\]/);
+  assert.doesNotMatch(source, /state\.transcripts = \{\}; state\.transcriptPending = \{\};/);
+  assert.doesNotMatch(source, /localStorage\.removeItem\("traj-theme"\)/);
 });
 
 type TrajectoryPreview = { text: string; names: string[]; overflow: number };

@@ -10,7 +10,7 @@ const TRAJECTORY_IDLE_EXIT_MS = 5 * 60 * 1000;
 type Socket = import("node:stream").Duplex;
 type ClientKind = "publisher" | "browser";
 type Client = { socket: Socket; kind: ClientKind; publisherId?: string; buffer: Buffer };
-type State = { type: "state"; publishers: readonly unknown[]; updatedAt: number };
+type State = { type: "state"; publishers: readonly unknown[]; updatedAt: number; initial?: boolean; truncated?: boolean };
 const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const TIMING_ENTRY_TYPE = "pi-workflows:tool-timing";
 
@@ -42,7 +42,7 @@ function encodeState(state: State, maxBytes: number): string {
   // ponytail: strip message transcripts when combined state exceeds the frame cap; ui:transcript loads one agent
   const compact = JSON.stringify({ type: "state", publishers: compactPublishers(state.publishers), updatedAt: state.updatedAt });
   if (Buffer.byteLength(compact) <= maxBytes) return compact;
-  return JSON.stringify({ type: "state", publishers: [], updatedAt: state.updatedAt });
+  return JSON.stringify({ type: "state", publishers: [], updatedAt: state.updatedAt, truncated: true });
 }
 
 async function withDescribedRuns(runs: unknown): Promise<unknown[]> {
@@ -117,7 +117,7 @@ function authorized(request: IncomingMessage, port: number): boolean {
 export function createTrajectoryServer(port: number, lockPath: string, maxFrameBytes = MAX_FRAME_BYTES): Server {
   const clients = new Set<Client>();
   const publishers = new Map<string, { client: Client; value: Record<string, unknown> }>();
-  let latest: State = { type: "state", publishers: [], updatedAt: Date.now() };
+  let latest: State = { type: "state", publishers: [], updatedAt: Date.now(), initial: true };
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
   const emit = (client: Client, value: unknown) => send(client, value, maxFrameBytes);
