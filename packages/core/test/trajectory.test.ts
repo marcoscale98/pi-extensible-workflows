@@ -77,10 +77,12 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
   assert.doesNotMatch(source, /agent-path/);
 });
 
+type TrajectoryPreview = { text: string; names: string[]; overflow: number };
 type TrajectoryPreviewHelpers = {
   compactSkillReadPreview: (entry: unknown, entries?: readonly unknown[]) => string | undefined;
   eventPreview: (entry: unknown, entries?: readonly unknown[]) => string;
   toolPreviewHtml: (entry: unknown, entries?: readonly unknown[]) => string;
+  eventPreviewParts: (entry: unknown, entries?: readonly unknown[]) => TrajectoryPreview;
   eventSearchText: (entry: unknown, entries?: readonly unknown[]) => string;
   eventLabel: (kind: string) => string;
   entryDetails: (entry: unknown, agent: unknown, entries?: readonly unknown[]) => { kind: string; entry: unknown; agent: unknown };
@@ -90,7 +92,7 @@ function loadTrajectoryPreviewHelpers(source: string): TrajectoryPreviewHelpers 
   const helperStart = source.indexOf("    const esc");
   const helperEnd = source.indexOf("    function renderToolPane", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, toolPreviewHtml, eventSearchText, eventLabel, entryDetails }; })()`) as TrajectoryPreviewHelpers;
+  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, eventPreviewParts, toolPreviewHtml, eventSearchText, eventLabel, entryDetails }; })()`) as TrajectoryPreviewHelpers;
 }
 
 void test("Trajectory compacts canonical skill reads without losing event details", () => {
@@ -173,6 +175,48 @@ void test("Trajectory renders structured tool previews in event rows", () => {
   assert.match(source, /const compact = compactSkillReadPreview\(entry, entries\)/);
   assert.match(source, /toolPreviewHtml\(entry, entries\)/);
   assert.doesNotMatch(source, /<div class="preview">\$\{esc\(eventPreview\(entry, entries\)\)\}<\/div>/);
+});
+
+void test("Trajectory summarizes assistant tool calls without dropping searchable arguments", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helpers = loadTrajectoryPreviewHelpers(source);
+  const previewParts = (entry: unknown, entries: readonly unknown[] = []) => JSON.parse(JSON.stringify(helpers.eventPreviewParts(entry, entries))) as TrajectoryPreview;
+  const call = (name: string, id: string, args: Record<string, unknown>) => ({ type: "toolCall", name, id, arguments: args });
+  const assistant = (content: unknown[]) => ({ type: "message", message: { role: "assistant", content } });
+
+  const thinkingAndTools = assistant([
+    { type: "thinking", thinking: "Inspecting repo status and files" },
+    call("read", "read-1", { path: "a" }),
+    call("bash", "bash-1", { command: "git status" }),
+    call("grep", "grep-1", { pattern: "tigerstyle" }),
+    call("read", "read-2", { path: "b" }),
+    call("read", "read-3", { path: "c" }),
+  ]);
+  assert.deepEqual(previewParts(thinkingAndTools, [thinkingAndTools]), {
+    text: "",
+    names: ["read", "bash", "grep", "read", "read"],
+    overflow: 2,
+  });
+  assert.match(helpers.eventSearchText(thinkingAndTools, [thinkingAndTools]), /git status/);
+  assert.match(helpers.eventSearchText(thinkingAndTools, [thinkingAndTools]), /tigerstyle/);
+
+  const textAndTools = assistant([{ type: "text", text: "I'll inspect" }, call("read", "read-1", { path: "a" }), call("bash", "bash-1", { command: "ls" })]);
+  assert.deepEqual(previewParts(textAndTools, [textAndTools]), { text: "I'll inspect", names: ["read", "bash"], overflow: 0 });
+
+  const textOnly = assistant([{ type: "text", text: "Done" }]);
+  assert.deepEqual(previewParts(textOnly, [textOnly]), { text: "Done", names: [], overflow: 0 });
+
+  const thinkingAndText = assistant([{ type: "thinking", thinking: "hidden" }, { type: "text", text: "Visible" }]);
+  assert.deepEqual(previewParts(thinkingAndText, [thinkingAndText]), { text: "Visible", names: [], overflow: 0 });
+  const threeTools = assistant([call("read", "read-1", {}), call("bash", "bash-1", {}), call("grep", "grep-1", {})]);
+  assert.deepEqual(previewParts(threeTools, [threeTools]), { text: "", names: ["read", "bash", "grep"], overflow: 0 });
+
+  assert.match(source, /\.pill\.tool/);
+  assert.match(source, /renderAssistantToolCalls/);
+  assert.match(source, /toolCalls\.map\(\(call\)/);
+  assert.match(source, /toolArgsOf\(call, entries\)/);
+  assert.match(source, /esc\(preview\.text\)/);
+  assert.match(source, /renderAssistantPreview\(eventPreviewParts\(entry, entries\)\)/);
 });
 
 void test("trajectory transcript retention stays bounded with timing entries", async () => {

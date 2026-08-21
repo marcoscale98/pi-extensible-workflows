@@ -7,6 +7,7 @@
 - Trajectory records per-tool wall-clock execution timing in workflow-agent session JSONL and displays completed and failed tool durations across its event, agent, inspector, and Gantt views. Loaded transcripts retain up to 400 non-timing entries plus their matching timing entries ([#212](https://github.com/vekexasia/pi-extensible-workflows/issues/212)).
 - Trajectory renders canonical skill file reads as compact `[skill] name:start-end` event previews while retaining their full input in the inspector ([#215](https://github.com/vekexasia/pi-extensible-workflows/issues/215)).
 - Trajectory renders tool event arguments as colored key/value pairs with bounded row values while retaining full input for search and inspection ([#222](https://github.com/vekexasia/pi-extensible-workflows/issues/222)).
+- Trajectory summarizes assistant tool calls as separate event chips and inspector blocks with searchable arguments ([#220](https://github.com/vekexasia/pi-extensible-workflows/issues/220)).
 
 ### Fixes
 - Fetch one agent transcript on demand when combined Trajectory state exceeds the WebSocket frame cap, so agent views keep their events.
