@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { defineTool, getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 import { WorkflowError, loadingRegistry } from "../../src/index.js";
+import { clearSubagentManager, setSubagentManager } from "../../src/subagent-manager-handle.js";
 import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentStatus, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
 import { registerSubagentNavigator } from "./navigator.js";
@@ -154,7 +155,9 @@ function storageDirectory(options: SubagentsExtensionOptions): string {
 
 export function createSubagentsExtension(options: SubagentsExtensionOptions = {}, activeTools?: () => readonly string[], notify?: (notification: SubagentNotification) => void | Promise<void>, onStatus?: (status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>) => void): SubagentsExtension {
   const manager = options.manager ?? createSubagentManager(managerDependencies(options, activeTools, notify, onStatus));
-  return { manager, tools: createSubagentTools(manager) };
+  const extension = { manager, tools: createSubagentTools(manager) };
+  setSubagentManager(extension.manager);
+  return extension;
 }
 
 export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: SubagentsExtensionOptions = {}): SubagentsExtension {
@@ -171,8 +174,12 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
   if (pi.on !== undefined) {
     pi.on("session_start", (_event, context) => { widget.start(context); });
     pi.on("session_shutdown", async () => {
-      widget.dispose();
-      await extension.manager.dispose?.();
+      try {
+        widget.dispose();
+        await extension.manager.dispose?.();
+      } finally {
+        clearSubagentManager(extension.manager);
+      }
     });
   }
   return extension;

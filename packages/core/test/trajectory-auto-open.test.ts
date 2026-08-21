@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, RunStore, type PersistedRun, type TrajectoryPublisherInput } from "../src/index.js";
+import { registerSubagentsExtension } from "../subagents/src/index.js";
 import { testExtensionApi } from "./support.js";
 
 type TestTool = { name: string; execute?: (...args: unknown[]) => Promise<unknown> };
@@ -179,4 +180,47 @@ void test("manual Trajectory re-open uses the same path after auto-attach", asyn
   assert.equal(probe.inputs.length, 2);
   assert.deepEqual(probe.urls, ["http://127.0.0.1:9876/", "http://127.0.0.1:9876/"]);
   await host.shutdown();
+});
+void test("Trajectory routes subagent actions through the registered manager", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-subagent-actions-"));
+  const cwd = join(home, "project");
+  const probe = trajectoryProbe();
+  const host = install(home, probe);
+  const calls: Array<{ action: string; request: unknown; context: unknown }> = [];
+  let shutdown: (() => Promise<void>) | undefined;
+  const manager = {
+    async run() {},
+    async inspect() {},
+    async steer(request: unknown, context: unknown) { calls.push({ action: "steer", request, context }); return { id: "old", accepted: true }; },
+    async stop(request: unknown, context: unknown) { calls.push({ action: "stop", request, context }); return { id: "old", state: "stopped" }; },
+    async retry(request: unknown, context: unknown) { calls.push({ action: "retry", request, context }); return { id: "new", state: "running" }; },
+  };
+  registerSubagentsExtension({ registerTool() {}, on(name, handler) { if (name === "session_shutdown") shutdown = handler as () => Promise<void>; } }, { manager });
+  const ctx = context(cwd, true);
+  try {
+    await host.start({}, ctx);
+    await host.command("trajectory", ctx);
+    const input = probe.inputs.at(-1);
+    assert.ok(input);
+    await input.handleAction({ action: "steer", target: { kind: "subagent", id: "old" }, payload: { message: "continue" } });
+    await input.handleAction({ action: "stop", target: { kind: "subagent", id: "old" } });
+    const retry = await input.handleAction({ action: "retry", target: { kind: "subagent", id: "old" } });
+    assert.deepEqual(retry, { id: "new", state: "running" });
+    assert.deepEqual(calls.map(({ action, request }) => ({ action, request })), [
+      { action: "steer", request: { id: "old", message: "continue" } },
+      { action: "stop", request: { id: "old" } },
+      { action: "retry", request: { id: "old" } },
+    ]);
+    const routed = calls[0]?.context as { toolCallId?: unknown; signal?: unknown; onUpdate?: unknown; extensionContext?: unknown } | undefined;
+    assert.ok(routed);
+    assert.equal(routed.toolCallId, "trajectory");
+    assert.equal(routed.signal, undefined);
+    assert.equal(routed.onUpdate, undefined);
+    assert.equal(routed.extensionContext, ctx);
+    await shutdown?.();
+    await assert.rejects(input.handleAction({ action: "stop", target: { kind: "subagent", id: "old" } }), /subagents extension/);
+  } finally {
+    await host.shutdown();
+    await shutdown?.();
+  }
 });

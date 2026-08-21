@@ -18,9 +18,10 @@ import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIf
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
 import backgroundWidget, { type BackgroundWidgetAPI } from "./background-widget.js";
 import { showChangelogNotice } from "./changelog.js";
-import { createTrajectoryController, createTrajectoryRunLoader, createTrajectorySubagentLoader, openTrajectoryUrl, trajectoryUrl, type TrajectoryActionRequest, type TrajectoryController } from "./trajectory.js";
+import { createTrajectoryController, createTrajectoryRunLoader, createTrajectorySubagentLoader, openTrajectoryUrl, trajectoryUrl, type TrajectoryActionRequest, type TrajectoryActionResult, type TrajectoryController } from "./trajectory.js";
+import { getSubagentManager } from "./subagent-manager-handle.js";
 import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
-import type { SubagentRunRequest, SubagentStatus } from "../subagents/src/contracts.js";
+import type { SubagentManagerContext, SubagentRunRequest, SubagentStatus } from "../subagents/src/contracts.js";
 import {
   SETTLED_AGENT_STATES,
   catalogResultValue,
@@ -362,8 +363,27 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     if (!cwd || !sessionId) throw new WorkflowError("RUN_NOT_FOUND", "Trajectory requires the current project and Pi session");
     return { cwd, sessionId };
   };
-  const trajectoryAction = async (request: Readonly<TrajectoryActionRequest>, context: unknown): Promise<void> => {
-    if (request.target.kind !== "run") throw new WorkflowError("RUN_NOT_FOUND", "Trajectory subagent actions are not available");
+  const trajectoryAction = async (request: Readonly<TrajectoryActionRequest>, context: unknown): Promise<TrajectoryActionResult | undefined> => {
+    if (request.target.kind === "subagent") {
+      if (!request.target.id.trim()) throw new WorkflowError("RUN_NOT_FOUND", "Trajectory action requires a subagent ID");
+      const manager = getSubagentManager();
+      if (!manager) throw new WorkflowError("INTERNAL_ERROR", "Trajectory subagent actions require the subagents extension");
+      const managerContext: SubagentManagerContext = { toolCallId: "trajectory", signal: undefined, onUpdate: undefined, extensionContext: context as ExtensionContext };
+      if (request.action === "steer") {
+        const payload = object(request.payload) ? request.payload : undefined;
+        const message = typeof payload?.message === "string" ? payload.message : undefined;
+        if (message === undefined) throw new WorkflowError("INVALID_METADATA", "Trajectory steer requires a message");
+        await manager.steer({ id: request.target.id, message }, managerContext);
+        return;
+      }
+      if (request.action === "stop") { await manager.stop({ id: request.target.id }, managerContext); return; }
+      if (request.action === "retry") {
+        const result = await manager.retry({ id: request.target.id }, { ...managerContext, waitForForeground: false });
+        if (!object(result) || typeof result.id !== "string" || result.state !== "running") throw new WorkflowError("INTERNAL_ERROR", "Subagent retry returned an invalid result");
+        return { id: result.id, state: "running" };
+      }
+      throw new WorkflowError("INVALID_METADATA", `Trajectory action ${request.action} is not supported for subagent targets`);
+    }
     if (!request.target.id.trim()) throw new WorkflowError("RUN_NOT_FOUND", "Trajectory action requires a run ID");
     const runId = request.target.id;
     const run = runs.get(runId);

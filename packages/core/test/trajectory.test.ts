@@ -78,6 +78,25 @@ void test("trajectory loads first-class subagents with filtering, ordering, tran
     assert.equal(subagents.some((subagent) => subagent.id === "corrupt"), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+void test("Trajectory overlays live subagent status over stale persisted status", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-subagent-overlay-"));
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  writeSubagentFixture(agentDir, "live", "session", "completed", undefined, 4);
+  let live = false;
+  const loader = createTrajectorySubagentLoader(cwd, "session", agentDir, (subagent) => live ? { ...subagent, request: { ...subagent.request, prompt: "live" }, state: "running", progress: { accounting: { input: 9, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: "fresh" }, lastEventAt: 10 } } : subagent);
+  try {
+    const persisted = await loader();
+    assert.equal(persisted[0]?.state, "completed");
+    live = true;
+    const overlay = await loader();
+    assert.equal(overlay[0]?.state, "running");
+    const current = overlay[0];
+    assert.ok(current);
+    assert.equal(current.request.prompt, "live");
+    assert.equal(current.progress?.activity?.text, "fresh");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 void test("Trajectory preference storage failures preserve defaults", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");

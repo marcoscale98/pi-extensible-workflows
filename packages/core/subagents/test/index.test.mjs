@@ -19,6 +19,7 @@ import extension, {
   SUBAGENTS_STEER_PARAMETERS,
   SUBAGENTS_STOP_PARAMETERS,
 } from "../../dist/subagents/index.js";
+import { getSubagentManager } from "../../dist/src/subagent-manager-handle.js";
 
 const toolNames = [
   "subagents_run",
@@ -48,6 +49,14 @@ test("registers five namespaced subagent tools and delegates to an injected mana
   const result = await tools[0].execute("call-1", { prompt: "inspect" }, undefined, undefined, testContext());
   assert.deepEqual(result, { content: [{ type: "text", text: '{"id":"agent-1","state":"queued"}' }], details: { id: "agent-1", state: "queued" } });
   assert.deepEqual(calls[0], ["run", { prompt: "inspect", mode: "background" }]);
+});
+test("publishes the manager handle for a session and clears it on shutdown", async () => {
+  const manager = { async run() {}, async inspect() {}, async steer() {}, async stop() {}, async retry() {} };
+  let shutdown;
+  registerSubagentsExtension({ registerTool() {}, on(name, handler) { if (name === "session_shutdown") shutdown = handler; } }, { manager });
+  assert.equal(getSubagentManager(), manager);
+  await shutdown?.();
+  assert.equal(getSubagentManager(), undefined);
 });
 
 test("keeps top-level model as a call option with a role", () => {
