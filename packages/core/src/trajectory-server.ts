@@ -3,7 +3,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
-import { withPiToolDescriptions, withResolvedResources } from "./trajectory.js";
+import { isTrajectoryAction, isTrajectoryTarget, trajectoryActionError, withPiToolDescriptions, withPiToolDescriptionsForTools, withResolvedAttemptResources, withResolvedResources } from "./trajectory.js";
+import type { AgentAttemptSummary } from "./types.js";
 import type { PersistedRun } from "./persistence.js";
 const TRAJECTORY_IDLE_EXIT_MS = 5 * 60 * 1000;
 
@@ -26,13 +27,17 @@ function compactRun(run: unknown): unknown {
   for (const [id, entries] of Object.entries(record.transcripts as Record<string, unknown>)) transcripts[id] = Array.isArray(entries) ? entries.filter(isTimingEntry) : [];
   return { ...record, transcripts };
 }
+function compactSubagent(subagent: unknown): unknown {
+  if (!subagent || typeof subagent !== "object" || Array.isArray(subagent)) return subagent;
+  const record = subagent as { transcript?: unknown };
+  return { ...record, transcript: Array.isArray(record.transcript) ? record.transcript.filter(isTimingEntry) : [] };
+}
 
 function compactPublishers(publishers: readonly unknown[]): unknown[] {
   return publishers.map((publisher) => {
     if (!publisher || typeof publisher !== "object" || Array.isArray(publisher)) return publisher;
-    const value = publisher as { runs?: unknown };
-    if (!Array.isArray(value.runs)) return publisher;
-    return { ...value, runs: value.runs.map(compactRun) };
+    const value = publisher as { runs?: unknown; subagents?: unknown };
+    return { ...value, ...(Array.isArray(value.runs) ? { runs: value.runs.map(compactRun) } : {}), ...(Array.isArray(value.subagents) ? { subagents: value.subagents.map(compactSubagent) } : {}) };
   });
 }
 
@@ -56,7 +61,20 @@ async function withDescribedRuns(runs: unknown): Promise<unknown[]> {
     return { ...record, run: await withResolvedResources(withPiToolDescriptions(run), cwd) };
   }));
 }
-
+async function withDescribedSubagents(subagents: unknown): Promise<unknown[]> {
+  if (!Array.isArray(subagents)) return [];
+  const items: unknown[] = subagents;
+  return Promise.all(items.map(async (item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item) || !("attempt" in item)) return item;
+    const record = item as { attempt: AgentAttemptSummary; cwd?: unknown; tools?: unknown; toolDefinitions?: unknown };
+    const cwd = typeof record.cwd === "string" ? record.cwd : record.attempt.setup.cwd;
+    const attempt = await withResolvedAttemptResources(record.attempt, cwd);
+    const tools = Array.isArray(record.tools) ? record.tools.filter((tool): tool is string => typeof tool === "string") : attempt.setup.tools;
+    const toolDefinitions = withPiToolDescriptionsForTools(tools, cwd);
+    const hasToolDefinitions = Array.isArray(record.toolDefinitions) && record.toolDefinitions.length > 0;
+    return { ...record, attempt, ...(!hasToolDefinitions && toolDefinitions.length ? { toolDefinitions } : {}) };
+  }));
+}
 function frame(payload: string, maxBytes: number): Buffer {
   const body = Buffer.from(payload);
   if (body.length > maxBytes) throw new Error("Trajectory WebSocket frame is too large");
@@ -173,48 +191,70 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
       client.publisherId = id;
       cancelIdleExit();
       publishers.set(id, { client, value: { ...(publishers.get(id)?.value ?? { id }), ...publisher, connected: true } });
-      void withDescribedRuns(message.runs).then((runs) => {
+      void Promise.all([withDescribedRuns(message.runs), withDescribedSubagents(message.subagents)]).then(([runs, subagents]) => {
         if (client.publisherId !== id || publishers.get(id)?.client !== client) return;
-        publishers.set(id, { client, value: { ...publisher, connected: true, runs } });
+        publishers.set(id, { client, value: { ...publisher, connected: true, runs, subagents } });
         publishState();
       }, () => {
         if (client.publisherId !== id || publishers.get(id)?.client !== client) return;
-        publishers.set(id, { client, value: { ...publisher, connected: true, runs: Array.isArray(message.runs) ? message.runs : [] } });
+        publishers.set(id, { client, value: { ...publisher, connected: true, runs: Array.isArray(message.runs) ? message.runs : [], subagents: Array.isArray(message.subagents) ? message.subagents : [] } });
         publishState();
       });
       return;
     }
     if (client.kind === "publisher" && message.type === "publisher:action-result" && typeof message.requestId === "string") { broadcast(message); return; }
     if (client.kind === "browser" && message.type === "ui:transcript") {
-      if (typeof message.publisherId !== "string" || message.publisherId.length < 1 || message.publisherId.length > 200 || typeof message.runId !== "string" || message.runId.length < 1 || message.runId.length > 200 || typeof message.agentId !== "string" || message.agentId.length < 1 || message.agentId.length > 200) return;
+      const validId = (value: unknown): value is string => typeof value === "string" && value.length >= 1 && value.length <= 200;
+      if (!validId(message.publisherId)) return;
+      const runRequest = validId(message.runId) && validId(message.agentId) && message.subagentId === undefined;
+      const subagentRequest = validId(message.subagentId) && message.runId === undefined && message.agentId === undefined;
+      if (!runRequest && !subagentRequest) return;
       const target = publishers.get(message.publisherId);
       let entries: unknown[] = [];
-      const runs = target?.value.runs;
-      if (Array.isArray(runs)) {
-        for (const item of runs) {
-          if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-          const record = item as { run?: { id?: unknown }; transcripts?: unknown };
-          if (record.run?.id !== message.runId) continue;
-          const transcripts = record.transcripts;
-          if (transcripts && typeof transcripts === "object" && !Array.isArray(transcripts)) {
-            const found = (transcripts as Record<string, unknown>)[message.agentId];
-            entries = Array.isArray(found) ? found : [];
+      if (runRequest) {
+        const runs = target?.value.runs;
+        if (Array.isArray(runs)) {
+          for (const item of runs) {
+            if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+            const record = item as { run?: { id?: unknown }; transcripts?: unknown };
+            if (record.run?.id !== message.runId) continue;
+            const transcripts = record.transcripts;
+            if (transcripts && typeof transcripts === "object" && !Array.isArray(transcripts)) {
+              const found = (transcripts as Record<string, unknown>)[message.agentId as string];
+              entries = Array.isArray(found) ? found : [];
+            }
+            break;
           }
-          break;
+        }
+      } else {
+        const subagents = target?.value.subagents;
+        if (Array.isArray(subagents)) {
+          for (const item of subagents) {
+            if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+            const record = item as { id?: unknown; transcript?: unknown };
+            if (record.id !== message.subagentId) continue;
+            entries = Array.isArray(record.transcript) ? record.transcript : [];
+            break;
+          }
         }
       }
-      const reply = { type: "transcript", publisherId: message.publisherId, runId: message.runId, agentId: message.agentId, entries };
+      const reply = runRequest ? { type: "transcript", publisherId: message.publisherId, runId: message.runId, agentId: message.agentId, entries } : { type: "transcript", publisherId: message.publisherId, subagentId: message.subagentId, entries };
       if (Buffer.byteLength(JSON.stringify(reply)) > maxFrameBytes) {
-        emit(client, { type: "transcript", publisherId: message.publisherId, runId: message.runId, agentId: message.agentId, ok: false, error: "Transcript is too large" });
+        emit(client, runRequest ? { type: "transcript", publisherId: message.publisherId, runId: message.runId, agentId: message.agentId, ok: false, error: "Transcript is too large" } : { type: "transcript", publisherId: message.publisherId, subagentId: message.subagentId, ok: false, error: "Transcript is too large" });
         return;
       }
       emit(client, reply);
       return;
     }
-    if (client.kind !== "browser" || message.type !== "ui:action" || typeof message.publisherId !== "string" || typeof message.runId !== "string" || typeof message.action !== "string") return;
+    if (client.kind !== "browser" || message.type !== "ui:action" || typeof message.publisherId !== "string") return;
+    const requestId = typeof message.requestId === "string" ? message.requestId : randomUUID();
+    if (!isTrajectoryAction(message.action)) { emit(client, { type: "action-result", requestId, ok: false, error: "Unsupported Trajectory action" }); return; }
+    if (!isTrajectoryTarget(message.target)) { emit(client, { type: "action-result", requestId, ok: false, error: "Invalid Trajectory action target" }); return; }
+    const actionError = trajectoryActionError(message.action, message.target);
+    if (actionError !== undefined) { emit(client, { type: "action-result", requestId, ok: false, error: actionError }); return; }
     const target = publishers.get(message.publisherId);
-    if (!target || !target.value.connected) { emit(client, { type: "action-result", requestId: message.requestId, ok: false, error: "Publisher is disconnected" }); return; }
-    emit(target.client, { type: "publisher:action", requestId: typeof message.requestId === "string" ? message.requestId : randomUUID(), action: message.action, runId: message.runId, ...(typeof message.name === "string" ? { name: message.name } : {}) });
+    if (!target || !target.value.connected) { emit(client, { type: "action-result", requestId, ok: false, error: "Publisher is disconnected" }); return; }
+    emit(target.client, { type: "publisher:action", requestId, action: message.action, target: message.target, ...(typeof message.name === "string" ? { name: message.name } : {}), ...(message.payload === undefined ? {} : { payload: message.payload }) });
   };
   const server = createServer((request, response) => {
     let url: URL;

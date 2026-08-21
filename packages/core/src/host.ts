@@ -363,16 +363,18 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     return { cwd, sessionId };
   };
   const trajectoryAction = async (request: Readonly<TrajectoryActionRequest>, context: unknown): Promise<void> => {
-    if (!request.runId.trim()) throw new WorkflowError("RUN_NOT_FOUND", "Trajectory action requires a run ID");
-    const run = runs.get(request.runId);
+    if (request.target.kind !== "run") throw new WorkflowError("RUN_NOT_FOUND", "Trajectory subagent actions are not available");
+    if (!request.target.id.trim()) throw new WorkflowError("RUN_NOT_FOUND", "Trajectory action requires a run ID");
+    const runId = request.target.id;
+    const run = runs.get(runId);
     if (request.action === "checkpoint-approve" || request.action === "checkpoint-reject") {
-      if (!request.name || !await answerCheckpoint(request.runId, request.name, request.action === "checkpoint-approve", true)) throw new WorkflowError("RUN_NOT_FOUND", "Checkpoint is no longer awaiting a response");
+      if (!request.name || !await answerCheckpoint(runId, request.name, request.action === "checkpoint-approve", true)) throw new WorkflowError("RUN_NOT_FOUND", "Checkpoint is no longer awaiting a response");
       return;
     }
     if (request.action === "pause") { if (!run) throw new WorkflowError("RUN_NOT_FOUND", "Workflow run is not active"); await run.lifecycle.pause(); return; }
-    if (request.action === "stop") { const result = await stopWorkflowRun(request.runId); if (!result.stopped && result.reason !== "already_terminal") throw new WorkflowError("RUN_NOT_FOUND", "Workflow run is not active"); return; }
-    if (request.action === "resume") { await resumeSelectedWorkflow(request.runId, false, context); return; }
-    await recovery.retryWorkflowRun(request.runId, context);
+    if (request.action === "stop") { const result = await stopWorkflowRun(runId); if (!result.stopped && result.reason !== "already_terminal") throw new WorkflowError("RUN_NOT_FOUND", "Workflow run is not active"); return; }
+    if (request.action === "resume") { await resumeSelectedWorkflow(runId, false, context); return; }
+    await recovery.retryWorkflowRun(runId, context);
   };
   const openTrajectory = async (context: unknown): Promise<void> => {
     try {

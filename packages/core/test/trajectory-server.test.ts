@@ -85,11 +85,12 @@ async function readJsonFrame(socket: Socket): Promise<unknown> {
   });
 }
 
-function publisherState(id: string, blob: string): string {
+function publisherState(id: string, blob: string, subagents: readonly unknown[] = []): string {
   return JSON.stringify({
     type: "publisher:state",
     publisher: { id },
     runs: [{ run: { id, workflowName: id, agents: [], state: "completed" }, transcripts: { agent: [{ type: "message", text: blob }] }, snapshot: {}, awaiting: [] }],
+    subagents,
   });
 }
 
@@ -299,6 +300,92 @@ void test("Trajectory fetches one agent transcript after compacting combined sta
     assert.equal(transcript.type, "transcript");
     assert.equal(transcript.agentId, "agent");
     assert.deepEqual(transcript.entries, [{ type: "message", text: blob }]);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    server.closeAllConnections();
+    server.closeIdleConnections();
+    server.close();
+    server.unref();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("Trajectory relays subagents, enriches their attempt, and compacts only transcript bodies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trajectory-server-subagent-state-"));
+  const port = await availablePort();
+  const maxFrameBytes = 1800;
+  const timing = { type: "custom", customType: "pi-workflows:tool-timing", data: { toolCallId: "call", toolName: "bash", startedAt: 1, completedAt: 2, durationMs: 1, isError: false } };
+  const subagent = { id: "subagent", state: "running", cwd: process.cwd(), worktree: { path: "/tmp/worktree", branch: "subagent" }, tools: ["bash"], attempt: { attempt: 1, setup: { tools: ["bash"], cwd: process.cwd() } }, transcript: [{ type: "message", text: "x".repeat(500) }, timing] };
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), { maxFrameBytes });
+  await listen(server, port);
+  const sockets: Socket[] = [];
+  try {
+    const origin = `http://127.0.0.1:${String(port)}`;
+    const publisher = await handshake(port, origin);
+    sockets.push(publisher.socket);
+    publisher.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "one" })));
+    publisher.socket.write(maskedFrame(publisherState("one", "run", [subagent])));
+    const publisherTwo = await handshake(port, origin);
+    sockets.push(publisherTwo.socket);
+    publisherTwo.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "two" })));
+    publisherTwo.socket.write(maskedFrame(publisherState("two", "x".repeat(1100))));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const browser = await handshake(port, origin);
+    sockets.push(browser.socket);
+    const state = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:attach" })));
+    const value = await state as { publishers?: { subagents?: { id?: unknown; worktree?: unknown; transcript?: unknown[]; toolDefinitions?: { name?: unknown }[] }[] }[] };
+    const current = value.publishers?.[0]?.subagents?.[0];
+    assert.ok(current);
+    assert.equal(current.id, "subagent");
+    assert.deepEqual(current.worktree, { path: "/tmp/worktree", branch: "subagent" });
+    assert.deepEqual(current.transcript, [timing]);
+    assert.equal(current.toolDefinitions?.[0]?.name, "bash");
+    const reply = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:transcript", publisherId: "one", subagentId: "subagent" })));
+    const transcript = await reply as { subagentId?: unknown; entries?: { text?: unknown }[] };
+    assert.equal(transcript.subagentId, "subagent");
+    assert.equal(transcript.entries?.[0]?.text, "x".repeat(500));
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    server.closeAllConnections();
+    server.closeIdleConnections();
+    server.close();
+    server.unref();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("Trajectory relays target-addressed actions and rejects run-only subagent actions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trajectory-server-actions-"));
+  const port = await availablePort();
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"));
+  await listen(server, port);
+  const sockets: Socket[] = [];
+  try {
+    const origin = `http://127.0.0.1:${String(port)}`;
+    const publisher = await handshake(port, origin);
+    sockets.push(publisher.socket);
+    publisher.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "one" })));
+    publisher.socket.write(maskedFrame(publisherState("one", "run")));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const browser = await handshake(port, origin);
+    sockets.push(browser.socket);
+    const state = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:attach" })));
+    await state;
+    const runAction = readJsonFrame(publisher.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:action", requestId: "run-request", publisherId: "one", action: "retry", target: { kind: "run", id: "run-id" } })));
+    assert.deepEqual(await runAction, { type: "publisher:action", requestId: "run-request", action: "retry", target: { kind: "run", id: "run-id" } });
+    const subagentAction = readJsonFrame(publisher.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:action", requestId: "subagent-request", publisherId: "one", action: "steer", target: { kind: "subagent", id: "subagent" }, payload: { message: "continue" } })));
+    assert.deepEqual(await subagentAction, { type: "publisher:action", requestId: "subagent-request", action: "steer", target: { kind: "subagent", id: "subagent" }, payload: { message: "continue" } });
+    const rejection = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:action", requestId: "rejection", publisherId: "one", action: "pause", target: { kind: "subagent", id: "subagent" } })));
+    const value = await rejection as { requestId?: unknown; ok?: unknown; error?: unknown };
+    assert.equal(value.requestId, "rejection");
+    assert.equal(value.ok, false);
+    assert.equal(value.error, "Trajectory action pause is not supported for subagent targets");
   } finally {
     for (const socket of sockets) socket.destroy();
     server.closeAllConnections();

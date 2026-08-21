@@ -52,10 +52,13 @@ export type TrajectorySubagent = {
 };
 export type TrajectorySubagentLoader = () => Promise<readonly TrajectorySubagent[]>;
 
-export type TrajectoryAction = "checkpoint-approve" | "checkpoint-reject" | "pause" | "resume" | "stop" | "retry";
-export type TrajectoryActionRequest = { action: TrajectoryAction; runId: string; name?: string };
-const TRAJECTORY_ACTIONS: readonly TrajectoryAction[] = ["checkpoint-approve", "checkpoint-reject", "pause", "resume", "stop", "retry"];
-function isTrajectoryAction(value: unknown): value is TrajectoryAction { return typeof value === "string" && TRAJECTORY_ACTIONS.includes(value as TrajectoryAction); }
+export type TrajectoryTarget = { kind: "run" | "subagent"; id: string };
+export type TrajectoryAction = "checkpoint-approve" | "checkpoint-reject" | "pause" | "resume" | "steer" | "stop" | "retry";
+export type TrajectoryActionRequest = { action: TrajectoryAction; target: TrajectoryTarget; name?: string; payload?: unknown };
+const TRAJECTORY_ACTIONS: readonly TrajectoryAction[] = ["checkpoint-approve", "checkpoint-reject", "pause", "resume", "steer", "stop", "retry"];
+export function isTrajectoryAction(value: unknown): value is TrajectoryAction { return typeof value === "string" && TRAJECTORY_ACTIONS.includes(value as TrajectoryAction); }
+export function isTrajectoryTarget(value: unknown): value is TrajectoryTarget { return object(value) && (value.kind === "run" || value.kind === "subagent") && typeof value.id === "string" && value.id.length >= 1 && value.id.length <= 200; }
+export function trajectoryActionError(action: TrajectoryAction, target: TrajectoryTarget): string | undefined { return target.kind === "subagent" && (action === "checkpoint-approve" || action === "checkpoint-reject" || action === "pause" || action === "resume") ? `Trajectory action ${action} is not supported for subagent targets` : target.kind === "run" && action === "steer" ? "Trajectory action steer is not supported for run targets" : undefined; }
 export type TrajectoryActionHandler = (request: Readonly<TrajectoryActionRequest>) => Promise<void>;
 export type TrajectoryRunLoader = () => Promise<readonly TrajectoryRun[]>;
 
@@ -337,6 +340,9 @@ function piToolCatalog(cwd = process.cwd()): ReadonlyMap<string, string> {
 }
 export function withPiToolDescriptions(run: PersistedRun): PersistedRun {
   return applyToolDescriptions(run, piToolCatalog());
+}
+export function withPiToolDescriptionsForTools(tools: readonly string[], cwd: string): readonly { readonly name: string; readonly description: string }[] {
+  return toolDefinitionsFor(tools, piToolCatalog(cwd));
 }
 
 function canonicalSourcePath(path: string): string { try { return realpathSync(path); } catch { return resolve(path); } }
@@ -624,7 +630,11 @@ export function createTrajectoryController(agentDir: string): TrajectoryControll
         const message: unknown = JSON.parse(typeof event === "object" && event !== null && "data" in event ? String(event.data) : "");
         if (!object(message) || message.type !== "publisher:action" || typeof message.requestId !== "string") return;
         if (!isTrajectoryAction(message.action)) { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: false, error: "Unsupported Trajectory action" })); return; }
-        void input.handleAction({ action: message.action, runId: typeof message.runId === "string" ? message.runId : "", ...(typeof message.name === "string" ? { name: message.name } : {}) }).then(() => { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: true })); }, (error: unknown) => { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: false, error: errorText(error) })); }).catch(() => undefined);
+        if (!isTrajectoryTarget(message.target)) { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: false, error: "Invalid Trajectory action target" })); return; }
+        const target = message.target;
+        const actionError = trajectoryActionError(message.action, target);
+        if (actionError !== undefined) { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: false, error: actionError })); return; }
+        void input.handleAction({ action: message.action, target, ...(typeof message.name === "string" ? { name: message.name } : {}), ...(message.payload === undefined ? {} : { payload: message.payload }) }).then(() => { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: true })); }, (error: unknown) => { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: false, error: errorText(error) })); }).catch(() => undefined);
       } catch { /* Ignore malformed local browser messages. */ }
     });
     next.send(JSON.stringify({ type: "publisher:attach", publisherId: publisherId(input.cwd, input.sessionId) }));
