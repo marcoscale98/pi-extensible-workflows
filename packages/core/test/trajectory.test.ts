@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -109,10 +109,45 @@ void test("Trajectory run layout supports bounded Gantt resizing and persisted s
   assert.match(source, /\.timeline \.axis \{ grid-template-columns: 44px 1fr; gap: 8px; margin-bottom: 2px; \}/);
 });
 
+void test("Trajectory sidebar groups live publishers by full project folder", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const trajectorySourceUrl = [new URL("../src/trajectory.ts", import.meta.url), new URL("../src/trajectory.js", import.meta.url), new URL("../../src/trajectory.ts", import.meta.url)].find((url) => existsSync(url));
+  assert.ok(trajectorySourceUrl);
+  const trajectorySource = readFileSync(trajectorySourceUrl, "utf8");
+  const helpers = loadTrajectorySidebarHelpers(source);
+  const publisher = (id: string, cwd?: string) => cwd === undefined ? { id } : { id, cwd };
+  const sameFolder = helpers.sidebarGroups([publisher("a", "/work/pi-workflows"), publisher("b", "/work/pi-workflows")]);
+  assert.equal(sameFolder.length, 1);
+  assert.deepEqual(Array.from(sameFolder[0]?.publishers || [], (value) => value.id), ["a", "b"]);
+  const sharedBasename = helpers.sidebarGroups([publisher("a", "/tmp/pi-workflows"), publisher("b", "/work/pi-workflows")]);
+  assert.equal(sharedBasename.length, 2);
+  assert.deepEqual(Array.from(sharedBasename, (group) => group.key), ["/tmp/pi-workflows", "/work/pi-workflows"]);
+  const unknown = helpers.sidebarGroups([publisher("a"), publisher("b", "")]);
+  assert.equal(unknown.length, 1);
+  assert.equal(unknown[0]?.label, "unknown");
+  assert.deepEqual(Array.from(unknown[0].publishers, (value) => value.id), ["a", "b"]);
+  assert.match(trajectorySource, /cwd: input\.cwd/);
+  assert.doesNotMatch(trajectorySource, /cwd: basename\(input\.cwd\)/);
+  const sidebarStart = source.indexOf("    function renderSidebar");
+  const sidebarEnd = source.indexOf("    function renderGantt", sidebarStart);
+  assert.ok(sidebarStart >= 0 && sidebarEnd > sidebarStart);
+  const sidebarSource = source.slice(sidebarStart, sidebarEnd);
+  assert.match(sidebarSource, /sidebarGroups\(livePublishers\(\)\)/);
+  assert.doesNotMatch(sidebarSource, /livePublishers\(\)\.map/);
+  assert.match(source, /data-sidebar-group/);
+  assert.match(source, /localStorage\.getItem\("traj-sidebar-collapsed"\)/);
+  assert.match(source, /localStorage\.setItem\("traj-sidebar-collapsed"/);
+  assert.match(source, /type="button" class="folder/);
+  assert.match(source, /\.run-item \{[^}]*display: flex/);
+  assert.doesNotMatch(source, /\.run-item \{[^}]*display: grid/);
+  assert.doesNotMatch(sidebarSource, /publisher\.cwd|connected|offline|class="meta"/);
+});
+
 void test("Trajectory returns to an empty home when a publisher disappears", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   assert.match(source, /const livePublishers = \(\) => state\.publishers\.filter\(\(publisher\) => publisher\.connected === true\)/);
-  assert.match(source, /function renderSidebar\(\).*livePublishers\(\)\.map/);
+  assert.match(source, /function renderSidebar\(\)/);
+  assert.match(source, /sidebarGroups\(livePublishers\(\)\)/);
   assert.match(source, /function renderHome\(\)/);
   assert.match(source, /Select a run\./);
   assert.match(source, /function selectHome\(mode = "replace"\)/);
@@ -125,6 +160,21 @@ void test("Trajectory returns to an empty home when a publisher disappears", () 
   assert.doesNotMatch(source, /state\.transcripts = \{\}; state\.transcriptPending = \{\};/);
   assert.doesNotMatch(source, /localStorage\.removeItem\("traj-theme"\)/);
 });
+
+type TrajectorySidebarPublisher = { id: string; cwd?: string };
+type TrajectorySidebarGroup = { key: string; label: string; publishers: readonly TrajectorySidebarPublisher[] };
+type TrajectorySidebarHelpers = {
+  sidebarGroupKey: (publisher: TrajectorySidebarPublisher) => string;
+  sidebarGroupLabel: (key: string) => string;
+  sidebarGroups: (publishers: readonly TrajectorySidebarPublisher[]) => readonly TrajectorySidebarGroup[];
+};
+
+function loadTrajectorySidebarHelpers(source: string): TrajectorySidebarHelpers {
+  const helperStart = source.indexOf("    const sidebarGroupKey");
+  const helperEnd = source.indexOf("    function renderSidebar", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { sidebarGroupKey, sidebarGroupLabel, sidebarGroups }; })()`) as TrajectorySidebarHelpers;
+}
 
 type TrajectoryPreview = { text: string; names: string[]; overflow: number };
 type TrajectoryPreviewHelpers = {

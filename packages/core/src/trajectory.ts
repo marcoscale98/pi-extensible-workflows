@@ -436,7 +436,7 @@ export function createTrajectoryController(agentDir: string): TrajectoryControll
       if (!activeSocket || !input || activeSocket.readyState !== 1) return;
       const runs = await input.loadRuns();
       if (closing || socket !== activeSocket) return;
-      const state = { type: "publisher:state", publisher: { id: publisherId(input.cwd, input.sessionId), title: `session ${input.sessionId.slice(0, 8)}`, cwd: basename(input.cwd), sessionId: input.sessionId, themes: input.themes }, runs };
+      const state = { type: "publisher:state", publisher: { id: publisherId(input.cwd, input.sessionId), title: `session ${input.sessionId.slice(0, 8)}`, cwd: input.cwd, sessionId: input.sessionId, themes: input.themes }, runs };
       const serialized = JSON.stringify(state);
       if (serialized === lastState) return;
       lastState = serialized;
