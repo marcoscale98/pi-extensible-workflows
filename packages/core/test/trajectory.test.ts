@@ -605,3 +605,72 @@ void test("Trajectory restores home, run, and agent views from the query on refr
   assert.match(source, /state\.currentRun = next\.run \|\| null; state\.currentAgent = next\.agent \|\| null;/);
   assert.doesNotMatch(source, /if \(next\.run\) state\.currentRun = next\.run; if \(next\.agent\) state\.currentAgent = next\.agent;/);
 });
+
+void test("Trajectory target refs round-trip subagent selections", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helperStart = source.indexOf("    const targetRef");
+  const helperEnd = source.indexOf("    const livePublishers", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helpers = runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { targetKey, targetFromRef, transcriptKey }; })()`) as {
+    targetKey: (target: { kind: string; publisherId: string; id: string }) => string;
+    targetFromRef: (kind: string, ref: string) => { kind: string; publisherId: string; id: string } | undefined;
+    transcriptKey: (publisherId: string, targetId: string, agentId?: string) => string;
+  };
+  const target = helpers.targetFromRef("subagent", "publisher:agent");
+  assert.equal(JSON.stringify(target), JSON.stringify({ kind: "subagent", publisherId: "publisher", id: "agent" }));
+  assert.equal(helpers.targetKey(target as { kind: string; publisherId: string; id: string }), "subagent:publisher:agent");
+  assert.equal(helpers.transcriptKey("publisher", "agent"), "publisher\tsubagent\tagent");
+  assert.match(source, /searchParams\.set\("subagent", state\.currentRun\)/);
+  assert.match(source, /view === "subagent" \? next\.subagent \|\| next\.agent/);
+});
+
+void test("Trajectory renders a publisher subagent sidebar section", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const sidebarStart = source.indexOf("    function renderSidebar");
+  const sidebarEnd = source.indexOf("    function renderGantt", sidebarStart);
+  assert.ok(sidebarStart >= 0 && sidebarEnd > sidebarStart);
+  const sidebar = source.slice(sidebarStart, sidebarEnd);
+  assert.match(sidebar, /SUBAGENTS/);
+  assert.match(sidebar, /data-subagent/);
+  assert.match(sidebar, /subagents:\$\{publisher\.id\}/);
+  assert.match(sidebar, /subagentModel\(subagent\)/);
+  assert.match(sidebar, /subagentCost\(subagent\)/);
+  assert.match(sidebar, /subagentRuntime\(subagent\)/);
+});
+
+void test("Trajectory subagent dossier only exposes valid controls", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helperStart = source.indexOf("    const subagentAccounting");
+  const helperEnd = source.indexOf("    function renderDossier", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helpers = runInNewContext(`(() => { const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); const json = (value) => JSON.stringify(value); const fmtClock = (value) => String(value); const fmtRuntime = (value) => String(value); const fmtCost = (value) => String(value); const fmtTokens = (value) => String(value); const stateClass = (value) => value === "running" ? "spin" : value === "completed" ? "ok" : "fail"; const glyph = (value) => value; ${source.slice(helperStart, helperEnd)}; return { renderSubagentDossier }; })()`, { Date }) as {
+    renderSubagentDossier: (publisher: { connected: boolean }, subagent: Record<string, unknown>) => string;
+  };
+  const base = { mode: "background", role: "reviewer", attempts: 1, request: { prompt: "inspect" }, tools: ["read"], progress: { accounting: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.1 } }, startedAt: 1, model: { provider: "fixture", model: "model" } };
+  const running = helpers.renderSubagentDossier({ connected: true }, { ...base, id: "running", state: "running" });
+  const failed = helpers.renderSubagentDossier({ connected: true }, { ...base, id: "failed", state: "failed", failure: { code: "FAILED", message: "no" } });
+  const completed = helpers.renderSubagentDossier({ connected: true }, { ...base, id: "completed", state: "completed", result: { ok: true } });
+  assert.match(running, />Stop</);
+  assert.match(running, /Send/);
+  assert.doesNotMatch(running, /Pause|Resume|Checkpoint/);
+  assert.match(failed, />Retry</);
+  assert.doesNotMatch(failed, /Send/);
+  assert.doesNotMatch(completed, /Stop|Retry|Pause|Resume/);
+});
+
+void test("Trajectory subagent Gantt gives running and finished lanes tool geometry", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helperStart = source.indexOf("    const timingEntryType");
+  const helperEnd = source.indexOf("    function phases", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helpers = runInNewContext(`(() => { const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); const fmtClock = (value) => String(value); const fmtRuntime = (value) => String(value); const stateClass = (value) => value === "running" ? "spin" : value === "completed" ? "ok" : "fail"; const glyph = (value) => value; ${source.slice(helperStart, helperEnd)}; return { renderSubagentGantt }; })()`) as { renderSubagentGantt: (publisher: { subagents: readonly Record<string, unknown>[] }) => string };
+  const html = helpers.renderSubagentGantt({ subagents: [
+    { id: "running", label: "live", state: "running", startedAt: 1000, transcript: [{ type: "custom", customType: "pi-workflows:tool-timing", data: { toolCallId: "tool", toolName: "bash", startedAt: 1100, completedAt: 1300, durationMs: 200, isError: false } }] },
+    { id: "finished", label: "done", state: "completed", startedAt: 2000, finishedAt: 3000, transcript: [] },
+  ] });
+  assert.match(html, /data-subagent="running"/);
+  assert.match(html, /data-subagent="finished"/);
+  assert.match(html, /class="bar tool ok"/);
+  const widths = [...html.matchAll(/class="bar(?: tool)? [^"]+" style="left:[^;]+%;width:([^%]+)%/g)].map((match) => Number(match[1]));
+  assert.ok(widths.length >= 3 && widths.every((width) => width > 0));
+});
