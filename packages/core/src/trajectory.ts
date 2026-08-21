@@ -132,8 +132,15 @@ async function resolveExistingServer(lockPath: string, existing: TrajectoryLock,
     return undefined;
   }
   if (processAlive(existing.pid)) {
-    await waitForServer(existing.port);
-    return existing;
+    try {
+      await waitForServer(existing.port);
+      return existing;
+    } catch {
+      // A live lock can still name the attaching process during startup; after the bounded wait, replace the unrecoverable startup owner and retry normally.
+      await stopStaleServer(existing);
+      await rm(lockPath, { force: true });
+      return undefined;
+    }
   }
   await rm(lockPath, { force: true });
   return undefined;

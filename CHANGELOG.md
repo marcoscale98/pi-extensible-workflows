@@ -14,6 +14,9 @@
 - Trajectory summarizes assistant tool calls as separate event chips and inspector blocks with searchable arguments ([#220](https://github.com/vekexasia/pi-extensible-workflows/issues/220)).
 
 ### Fixes
+- Ensure idle Trajectory servers destroy connected client sockets before closing, remove their lock, and exit.
+- Recover from live but unhealthy Trajectory server locks by replacing the stale process after the startup budget expires.
+- Give Trajectory server frame-size and fingerprint configuration separate, unambiguous options.
 - Restore Trajectory home, run, and agent views from `?view=&run=&agent=` on refresh and Back ([#228](https://github.com/vekexasia/pi-extensible-workflows/issues/228)).
 - Fetch one agent transcript on demand when combined Trajectory state exceeds the WebSocket frame cap, so agent views keep their events.
 - Label canonical Trajectory skill reads as `SKILL` in event and inspector views while retaining the tool inspector panes ([#219](https://github.com/vekexasia/pi-extensible-workflows/issues/219)).

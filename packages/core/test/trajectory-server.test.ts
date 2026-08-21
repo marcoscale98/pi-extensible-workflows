@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createConnection, createServer as createNetServer, type Socket } from "node:net";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -108,11 +109,28 @@ async function handshake(port: number, origin: string): Promise<{ socket: Socket
   });
 }
 
+async function waitForHealth(port: number): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${String(port)}/health`, { signal: AbortSignal.timeout(300) })).ok) return;
+    } catch { /* The child is still starting. */ }
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining)));
+  }
+  throw new Error("Trajectory server did not become healthy");
+}
+
+async function handshakeWhenReady(port: number, origin: string): Promise<{ socket: Socket; response: string }> {
+  await waitForHealth(port);
+  return handshake(port, origin);
+}
+
 void test("Trajectory persists the server fingerprint in its listening lock", async () => {
   const root = await mkdtemp(join(tmpdir(), "trajectory-server-lock-"));
   const port = await availablePort();
   const fingerprint = "server-hash:html-hash";
-  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), fingerprint);
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), { fingerprint });
   await listen(server, port);
   try {
     assert.deepEqual(JSON.parse(await readFile(join(root, "trajectory.lock"), "utf8")), { pid: process.pid, port, fingerprint });
@@ -173,7 +191,7 @@ void test("Trajectory keeps the browser socket when combined publisher state exc
   const second = publisherState("two", blob);
   assert.ok(Buffer.byteLength(first) < maxFrameBytes);
   assert.ok(Buffer.byteLength(second) < maxFrameBytes);
-  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), maxFrameBytes);
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), { maxFrameBytes });
   await listen(server, port);
   const sockets: Socket[] = [];
   try {
@@ -256,7 +274,7 @@ void test("Trajectory fetches one agent transcript after compacting combined sta
   const blob = "x".repeat(400);
   const first = publisherState("one", blob);
   const second = publisherState("two", blob);
-  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), maxFrameBytes);
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), { maxFrameBytes });
   await listen(server, port);
   const sockets: Socket[] = [];
   try {
@@ -287,6 +305,38 @@ void test("Trajectory fetches one agent transcript after compacting combined sta
     server.closeIdleConnections();
     server.close();
     server.unref();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function waitForExit(child: ReturnType<typeof spawn>, timeoutMs: number): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("Trajectory server did not exit")); }, timeoutMs);
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("exit", (code) => { clearTimeout(timer); resolve(code); });
+  });
+}
+
+void test("Trajectory idle exit closes open clients and removes its lock", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trajectory-server-idle-exit-"));
+  const port = await availablePort();
+  const lockPath = join(root, "trajectory.lock");
+  const moduleUrl = new URL("../src/trajectory-server.js", import.meta.url).href;
+  const childScript = `const realSetTimeout = globalThis.setTimeout; globalThis.setTimeout = (callback, delay, ...args) => realSetTimeout(callback, delay === 300000 ? 10000 : delay, ...args); const { createTrajectoryServer } = await import(${JSON.stringify(moduleUrl)}); const server = createTrajectoryServer(${String(port)}, ${JSON.stringify(lockPath)}, { maxFrameBytes: 33554432, fingerprint: "test-fingerprint" }); server.listen(${String(port)}, "127.0.0.1");`;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], { stdio: "ignore" });
+  let socket: Socket | undefined;
+  try {
+    const connected = await handshakeWhenReady(port, `http://127.0.0.1:${String(port)}`);
+    socket = connected.socket;
+    const socketClosed = new Promise<void>((resolve) => socket?.once("close", () => { resolve(); }));
+    assert.match(connected.response, /^HTTP\/1\.1 101 Switching Protocols/);
+    assert.equal(await waitForExit(child, 15000), 0);
+    await socketClosed;
+    await assert.rejects(readFile(lockPath), { code: "ENOENT" });
+    await assert.rejects(fetch(`http://127.0.0.1:${String(port)}/health`));
+  } finally {
+    socket?.destroy();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -114,9 +114,10 @@ function authorized(request: IncomingMessage, port: number): boolean {
   return origin === undefined || origin === `http://127.0.0.1:${String(port)}` || origin === `http://localhost:${String(port)}`;
 }
 
-export function createTrajectoryServer(port: number, lockPath: string, maxFrameBytesOrFingerprint: number | string = MAX_FRAME_BYTES, fingerprint?: string): Server {
-  const maxFrameBytes = typeof maxFrameBytesOrFingerprint === "number" ? maxFrameBytesOrFingerprint : MAX_FRAME_BYTES;
-  const serverFingerprint = typeof maxFrameBytesOrFingerprint === "string" ? maxFrameBytesOrFingerprint : fingerprint ?? "";
+type TrajectoryServerOptions = { maxFrameBytes?: number; fingerprint?: string };
+export function createTrajectoryServer(port: number, lockPath: string, options: TrajectoryServerOptions = {}): Server {
+  const maxFrameBytes = options.maxFrameBytes ?? MAX_FRAME_BYTES;
+  const serverFingerprint = options.fingerprint ?? "";
   const clients = new Set<Client>();
   const publishers = new Map<string, { client: Client; value: Record<string, unknown> }>();
   let latest: State = { type: "state", publishers: [], updatedAt: Date.now(), initial: true };
@@ -126,6 +127,8 @@ export function createTrajectoryServer(port: number, lockPath: string, maxFrameB
   const scheduleIdleExit = () => {
     if (closed || [...publishers.values()].some(({ value }) => value.connected === true) || idleTimer !== undefined) return;
     idleTimer = setTimeout(() => {
+      server.closeAllConnections();
+      for (const client of clients) client.socket.destroy();
       server.close(() => {
         void rm(lockPath, { force: true }).then(() => { process.exit(0); }).catch(() => { process.exit(1); });
       });
@@ -254,7 +257,7 @@ export function createTrajectoryServer(port: number, lockPath: string, maxFrameB
     socket.on("error", () => { disconnect(client); });
   });
   server.once("listening", () => { void writeFile(lockPath, `${JSON.stringify({ pid: process.pid, port, fingerprint: serverFingerprint })}\n`, { mode: 0o600 }).catch(() => { process.exitCode = 1; }); scheduleIdleExit(); });
-  server.on("close", () => { closed = true; if (idleTimer !== undefined) { clearTimeout(idleTimer); idleTimer = undefined; } for (const client of clients) client.socket.destroy(); });
+  server.on("close", () => { closed = true; if (idleTimer !== undefined) { clearTimeout(idleTimer); idleTimer = undefined; } });
   return server;
 }
 
@@ -265,7 +268,7 @@ async function main(): Promise<void> {
   const lockPath = args.get("--lock");
   const fingerprint = args.get("--fingerprint");
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535 || !lockPath || !fingerprint) throw new Error("Invalid Trajectory server arguments");
-  const server = createTrajectoryServer(port, lockPath, fingerprint);
+  const server = createTrajectoryServer(port, lockPath, { fingerprint });
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", () => { resolve(); }); });
 }
 

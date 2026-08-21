@@ -116,7 +116,7 @@ void test("unhealthy live Trajectory lock waits without killing the startup proc
   const pids: number[] = [];
   try {
     const fingerprint = await currentFingerprint();
-    const childScript = `const { createTrajectoryServer } = await import(${JSON.stringify(new URL("../src/trajectory-server.js", import.meta.url).href)}); setTimeout(() => { const server = createTrajectoryServer(${String(port)}, ${JSON.stringify(lockPath(home))}, ${JSON.stringify(fingerprint)}); server.listen(${String(port)}, "127.0.0.1"); }, 100); setInterval(() => {}, 1000);`;
+    const childScript = `const { createTrajectoryServer } = await import(${JSON.stringify(new URL("../src/trajectory-server.js", import.meta.url).href)}); setTimeout(() => { const server = createTrajectoryServer(${String(port)}, ${JSON.stringify(lockPath(home))}, { fingerprint: ${JSON.stringify(fingerprint)} }); server.listen(${String(port)}, "127.0.0.1"); }, 100); setInterval(() => {}, 1000);`;
     const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], { stdio: "ignore" });
     assert.ok(child.pid);
     pids.push(child.pid);
@@ -132,6 +132,35 @@ void test("unhealthy live Trajectory lock waits without killing the startup proc
     assert.equal(lock.pid, child.pid);
     assert.equal(lock.port, port);
     assert.equal(lock.fingerprint, fingerprint);
+  } finally {
+    await cleanup(home, controllers, pids);
+  }
+});
+
+void test("unhealthy live Trajectory lock is replaced after the startup budget expires", async () => {
+  const home = await mkdtemp(join(tmpdir(), "trajectory-lock-timeout-"));
+  const port = await availablePort();
+  const controllers: TrajectoryController[] = [];
+  const pids: number[] = [];
+  try {
+    const fingerprint = await currentFingerprint();
+    const child = spawn(process.execPath, ["--input-type=module", "-e", "setInterval(() => {}, 1000);"], { stdio: "ignore" });
+    assert.ok(child.pid);
+    pids.push(child.pid);
+    await mkdir(dirname(lockPath(home)), { recursive: true, mode: 0o700 });
+    await writeFile(lockPath(home), `${JSON.stringify({ pid: child.pid, port, fingerprint })}\n`, "utf8");
+
+    const controller = createTrajectoryController(home);
+    controllers.push(controller);
+    await controller.open(input(home, port));
+    await controller.close();
+    const lock = await readLock(home);
+    pids.push(lock.pid);
+
+    assert.notEqual(lock.pid, child.pid);
+    assert.equal(lock.port, port);
+    assert.equal(lock.fingerprint, fingerprint);
+    assert.equal((await fetch(`http://127.0.0.1:${String(port)}/health`)).ok, true);
   } finally {
     await cleanup(home, controllers, pids);
   }
