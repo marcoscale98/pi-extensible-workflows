@@ -156,7 +156,6 @@ function storageDirectory(options: SubagentsExtensionOptions): string {
 export function createSubagentsExtension(options: SubagentsExtensionOptions = {}, activeTools?: () => readonly string[], notify?: (notification: SubagentNotification) => void | Promise<void>, onStatus?: (status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>) => void): SubagentsExtension {
   const manager = options.manager ?? createSubagentManager(managerDependencies(options, activeTools, notify, onStatus));
   const extension = { manager, tools: createSubagentTools(manager) };
-  setSubagentManager(extension.manager);
   return extension;
 }
 
@@ -172,6 +171,7 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
   for (const tool of extension.tools) pi.registerTool(tool);
   if (pi.registerCommand !== undefined) registerSubagentNavigator(pi.registerCommand.bind(pi), extension.manager, storageDirectory(options), options.clipboard);
   if (pi.on !== undefined) {
+    setSubagentManager(extension.manager);
     pi.on("session_start", (_event, context) => { widget.start(context); });
     pi.on("session_shutdown", async () => {
       try {

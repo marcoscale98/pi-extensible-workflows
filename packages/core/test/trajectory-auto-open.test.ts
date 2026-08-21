@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, RunStore, type PersistedRun, type TrajectoryPublisherInput } from "../src/index.js";
+import { loadingRegistry } from "../src/registry.js";
 import { registerSubagentsExtension } from "../subagents/src/index.js";
 import { testExtensionApi } from "./support.js";
 
@@ -41,7 +42,7 @@ function trajectoryProbe(): TrajectoryProbe {
   };
 }
 
-function install(home: string, probe: TrajectoryProbe): { workflow: TestTool; command: WorkflowHandler; start: SessionStartHandler; shutdown: () => Promise<void> } {
+function install(home: string, probe: TrajectoryProbe, agentDir?: string): { workflow: TestTool; command: WorkflowHandler; start: SessionStartHandler; shutdown: () => Promise<void> } {
   const tools: TestTool[] = [];
   let command: WorkflowHandler | undefined;
   let start: SessionStartHandler | undefined;
@@ -56,7 +57,7 @@ function install(home: string, probe: TrajectoryProbe): { workflow: TestTool; co
     getThinkingLevel: () => "medium",
     getActiveTools: () => ["workflow"],
     trajectory: { controller: probe.controller, openUrl: (url) => { probe.urls.push(url); } },
-  }), home);
+  }), home, undefined, undefined, agentDir);
   assert.ok(tools.find(({ name }) => name === "workflow"));
   assert.ok(command && start && shutdown);
   return { workflow: tools.find(({ name }) => name === "workflow") as TestTool, command, start, shutdown };
@@ -181,6 +182,42 @@ void test("manual Trajectory re-open uses the same path after auto-attach", asyn
   assert.deepEqual(probe.urls, ["http://127.0.0.1:9876/", "http://127.0.0.1:9876/"]);
   await host.shutdown();
 });
+void test("Trajectory overlays live subagent status observed by the workflow registry", async () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-subagent-overlay-"));
+  const cwd = join(home, "project");
+  const agentDir = join(home, "agent");
+  const directory = join(agentDir, "subagents", "live");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "request.json"), JSON.stringify({ prompt: "stale", mode: "background", model: "old/model:medium", tools: ["old"] }));
+  writeFileSync(join(directory, "status.json"), JSON.stringify({ id: "live", sessionId: SESSION_ID, state: "completed", startedAt: 1, finishedAt: 4, attempts: 1, progress: { accounting: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], state: { model: { provider: "old", model: "model" }, tools: ["old"] }, lastEventAt: 2 } }));
+  const probe = trajectoryProbe();
+  const host = install(home, probe, agentDir);
+  let shutdown: (() => Promise<void>) | undefined;
+  const manager = { async run() {}, async inspect() {}, async steer() {}, async stop() {}, async retry() {} };
+  const ctx = context(cwd, true);
+  try {
+    await host.start({}, ctx);
+    registerSubagentsExtension({ registerTool() {}, on(name, handler) { if (name === "session_shutdown") shutdown = handler as () => Promise<void>; } }, { manager });
+    await host.command("trajectory", ctx);
+    const input = probe.inputs.at(-1);
+    assert.ok(input);
+    const persisted = await input.loadSubagents();
+    assert.equal(persisted[0]?.state, "completed");
+    loadingRegistry().observeSubagentStatus({ id: "live", sessionId: SESSION_ID, state: "running", startedAt: 1, attempts: 2, progress: { accounting: { input: 9, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], state: { model: { provider: "fresh", model: "model" }, tools: ["fresh"] }, activity: { kind: "tool", text: "fresh" }, lastEventAt: 10 } }, { prompt: "fresh", mode: "background", model: "fresh/request:medium", tools: ["request"] });
+    const overlay = await input.loadSubagents();
+    const current = overlay[0];
+    assert.ok(current);
+    assert.equal(current.state, "running");
+    assert.equal(current.request.prompt, "fresh");
+    assert.deepEqual(current.tools, ["fresh"]);
+    assert.deepEqual(current.model, { provider: "fresh", model: "model" });
+    assert.equal(current.progress?.activity?.text, "fresh");
+  } finally {
+    await host.shutdown();
+    await shutdown?.();
+  }
+});
+
 void test("Trajectory routes subagent actions through the registered manager", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-trajectory-subagent-actions-"));
   const cwd = join(home, "project");

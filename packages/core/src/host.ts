@@ -372,7 +372,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       if (request.action === "steer") {
         const payload = object(request.payload) ? request.payload : undefined;
         const message = typeof payload?.message === "string" ? payload.message : undefined;
-        if (message === undefined) throw new WorkflowError("INVALID_METADATA", "Trajectory steer requires a message");
+        if (message === undefined || !message.trim()) throw new WorkflowError("INVALID_METADATA", "Trajectory steer requires a message");
         await manager.steer({ id: request.target.id, message }, managerContext);
         return;
       }
