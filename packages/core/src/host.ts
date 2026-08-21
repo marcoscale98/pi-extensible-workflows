@@ -18,8 +18,9 @@ import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIf
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
 import backgroundWidget, { type BackgroundWidgetAPI } from "./background-widget.js";
 import { showChangelogNotice } from "./changelog.js";
-import { createTrajectoryController, createTrajectoryRunLoader, openTrajectoryUrl, trajectoryUrl, type TrajectoryActionRequest, type TrajectoryController } from "./trajectory.js";
+import { createTrajectoryController, createTrajectoryRunLoader, createTrajectorySubagentLoader, openTrajectoryUrl, trajectoryUrl, type TrajectoryActionRequest, type TrajectoryController } from "./trajectory.js";
 import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
+import type { SubagentRunRequest, SubagentStatus } from "../subagents/src/contracts.js";
 import {
   SETTLED_AGENT_STATES,
   catalogResultValue,
@@ -347,6 +348,9 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     });
   };
   const liveAgents = new LiveAgentRegistry();
+  const liveSubagents = new Map<string, { readonly status: Readonly<SubagentStatus>; readonly request: Readonly<SubagentRunRequest> }>();
+  const clearSubagentStatusObserver = (): void => { liveSubagents.clear(); registry.setSubagentStatusObserver(undefined); };
+  registry.setSubagentStatusObserver((status, request) => { liveSubagents.set(status.id, { status, request }); });
   const trajectoryController = pi.trajectory?.controller ?? createTrajectoryController(extensionAgentDir);
   const openTrajectoryUrlFn = pi.trajectory?.openUrl ?? openTrajectoryUrl;
   let trajectoryAutoOpened = false;
@@ -383,7 +387,17 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         const live = withLiveActivities(run);
         return active ? { ...live, state: active.lifecycle.state, usage: active.budget.usage } : live;
       });
-      const input = { cwd, sessionId, ...(port === undefined ? {} : { port }), themes, loadRuns, handleAction: (request: Readonly<TrajectoryActionRequest>) => trajectoryAction(request, context) };
+      const loadSubagents = createTrajectorySubagentLoader(cwd, sessionId, extensionAgentDir, (subagent) => {
+        const live = liveSubagents.get(subagent.id);
+        if (!live) return subagent;
+        if (live.status.sessionId !== subagent.sessionId) return subagent;
+        if (live.status.state !== "running" && live.status.finishedAt === subagent.finishedAt) { liveSubagents.delete(subagent.id); return subagent; }
+        const attempt = live.status.attemptDetails?.at(-1) ?? subagent.attempt;
+        const tools = live.status.progress?.state?.tools ?? attempt?.setup.tools ?? subagent.tools;
+        const model = live.status.progress?.state?.model ?? attempt?.setup.model ?? subagent.model;
+        return { ...subagent, request: live.request, mode: live.request.mode ?? subagent.mode, state: live.status.state, tools, ...(live.status.startedAt === undefined ? {} : { startedAt: live.status.startedAt }), ...(live.status.finishedAt === undefined ? {} : { finishedAt: live.status.finishedAt }), ...(live.status.attempts === undefined ? {} : { attempts: live.status.attempts }), ...(live.status.error === undefined ? {} : { error: live.status.error }), ...(live.status.worktree === undefined ? {} : { worktree: live.status.worktree }), ...(model === undefined ? {} : { model }), ...(live.status.progress === undefined ? {} : { progress: live.status.progress }), ...(attempt === undefined ? {} : { attempt }) };
+      });
+      const input = { cwd, sessionId, ...(port === undefined ? {} : { port }), themes, loadRuns, loadSubagents, handleAction: (request: Readonly<TrajectoryActionRequest>) => trajectoryAction(request, context) };
       const server = await trajectoryController.open(input);
       const url = trajectoryUrl(server.port);
       openTrajectoryUrlFn(url);
@@ -1043,6 +1057,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       }
     }
     } catch (error) {
+      clearSubagentStatusObserver();
       try { await releaseSessionLease(); } finally {
         if (releaseWorkflowRegistry) {
           releaseWorkflowRegistry();
@@ -1307,6 +1322,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       await scheduler.flush();
       await trajectoryController.close();
     } finally {
+      clearSubagentStatusObserver();
       try { await releaseSessionLease(); } finally {
         if (releaseWorkflowRegistry) {
           releaseWorkflowRegistry();

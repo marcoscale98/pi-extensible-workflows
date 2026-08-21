@@ -2,12 +2,14 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Value } from "typebox/value";
 import type { AgentAttemptAction, JsonSchema, JsonValue, RegisteredAgentSetupHook, WorkflowCatalog, WorkflowCatalogContext, WorkflowCatalogError, WorkflowCatalogFunction, WorkflowCatalogIndex, WorkflowCatalogModelAlias, WorkflowExtension, WorkflowFunction, WorkflowFunctionContext, WorkflowJournal, WorkflowModelAlias, WorkflowModelAliasResolverContext, WorkflowRoleDirectoryRegistration } from "./types.js";
+import type { SubagentRunRequest, SubagentStatus } from "../subagents/src/contracts.js";
 import { deepFreeze, errorCode, errorText, fail, jsonValue, object } from "./utils.js";
 import { loadSettings, resolveWorkflowSettings, validateSchema } from "./validation.js";
 
 const RESERVED_GLOBALS = new Set(["agent", "shell", "prompt", "checkpoint", "parallel", "pipeline", "phase", "withWorktree", "log", "args", "Promise", "JSON", "Math", "Date", "eval", "Function", "WebAssembly", "process", "require", "module", "exports", "console", "fetch", "XMLHttpRequest", "WebSocket", "performance", "crypto", "setTimeout", "setInterval", "setImmediate", "queueMicrotask", "Intl", "SharedArrayBuffer", "Atomics", "globalThis", "global", "undefined", "NaN", "Infinity", "extensions", "workflow_catalog"]);
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+export type SubagentStatusObserver = (status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>) => void;
 
 function normalizeRoleDirectory(value: unknown): string {
   try {
@@ -36,9 +38,12 @@ export class WorkflowRegistry {
   readonly #roleDirectories = new Map<string, WorkflowRoleDirectoryRegistration>();
   readonly #modelAliases = new Map<string, { name: string; version: string; headline: string; resolve: WorkflowModelAlias["resolve"] }>();
   #frozen = false;
+  #subagentStatusObserver: SubagentStatusObserver | undefined;
 
   get frozen(): boolean { return this.#frozen; }
   freeze(): void { this.#frozen = true; }
+  setSubagentStatusObserver(observer: SubagentStatusObserver | undefined): void { this.#subagentStatusObserver = observer; }
+  observeSubagentStatus(status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>): void { this.#subagentStatusObserver?.(status, request); }
 
   register(extension: WorkflowExtension): void {
     if (this.#frozen) fail("REGISTRY_FROZEN", "Workflow extension registration is closed after session_start");
@@ -198,7 +203,7 @@ export class WorkflowRegistry {
     return Object.freeze(resolved);
   }
 }
-export type WorkflowRegistryApi = Pick<WorkflowRegistry, "frozen" | "freeze" | "register" | "function" | "functions" | "catalog" | "catalogIndex" | "catalogDetail" | "globals" | "invokeFunction" | "modelAliases" | "resolveModelAliases" | "agentSetupHooks" | "agentAttemptActions" | "roleDirectories" | "roleDirectoryRegistrations">;
+export type WorkflowRegistryApi = Pick<WorkflowRegistry, "frozen" | "freeze" | "register" | "function" | "functions" | "catalog" | "catalogIndex" | "catalogDetail" | "globals" | "invokeFunction" | "modelAliases" | "resolveModelAliases" | "agentSetupHooks" | "agentAttemptActions" | "roleDirectories" | "roleDirectoryRegistrations" | "setSubagentStatusObserver" | "observeSubagentStatus">;
 interface WorkflowRegistryHost { api: WorkflowRegistryApi; activeHosts: number }
 const WORKFLOW_REGISTRY_KEY = Symbol.for("pi-extensible-workflows.workflow-registry");
 const globalRegistry = globalThis as typeof globalThis & Record<symbol, WorkflowRegistryHost | undefined>;
@@ -206,6 +211,8 @@ function createWorkflowRegistryApi(registry: WorkflowRegistry): WorkflowRegistry
   return {
     get frozen() { return registry.frozen; },
     freeze: () => { registry.freeze(); },
+    setSubagentStatusObserver: (observer) => { registry.setSubagentStatusObserver(observer); },
+    observeSubagentStatus: (status, request) => { registry.observeSubagentStatus(status, request); },
     register: (extension) => { registry.register(extension); },
     function: (name) => registry.function(name),
     functions: () => registry.functions(),

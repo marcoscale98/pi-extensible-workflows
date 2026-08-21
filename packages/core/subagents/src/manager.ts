@@ -686,9 +686,10 @@ function publicStatus(status: SubagentStatus, includeAttemptMetadata = false): S
   };
 }
 function emitUpdate(run: LiveRun): void {
-  const status = publicStatus(persistedStatus(run));
+  const persisted = persistedStatus(run);
+  const status = publicStatus(persisted);
   try { run.update?.(status); } catch { /* Rendering must not affect execution. */ }
-  try { run.observe?.(status); } catch { /* A widget failure is display-only. */ }
+  try { run.observe?.(publicStatus(persisted, true)); } catch { /* A widget failure is display-only. */ }
 }
 
 async function createRunStorage(root: string, id: string, request: Readonly<SubagentRunRequest>, status: PersistedSubagentStatus): Promise<string> {

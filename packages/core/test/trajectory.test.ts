@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createTrajectoryRunLoader, applySystemPrompts, applyToolDescriptions, trajectoryUrl } from "../src/trajectory.js";
+import { createTrajectoryRunLoader, createTrajectorySubagentLoader, applySystemPrompts, applyToolDescriptions, trajectoryUrl } from "../src/trajectory.js";
 import { RunStore } from "../src/persistence.js";
 import { createLaunchSnapshot } from "../src/utils.js";
 import type { PersistedRun } from "../src/persistence.js";
@@ -25,6 +25,58 @@ void test("applyToolDescriptions fills missing Pi tool descriptions", () => {
 
 void test("trajectoryUrl does not include an auth token", () => {
   assert.equal(trajectoryUrl(7432), "http://127.0.0.1:7432/");
+});
+function writeSubagentFixture(agentDir: string, id: string, sessionId: string, state: "running" | "failed" | "stopped" | "completed", sessionFile?: string, finishedAt?: number): void {
+  const directory = join(agentDir, "subagents", id);
+  mkdirSync(directory, { recursive: true });
+  const request = { prompt: `prompt-${id}`, mode: "background", label: `label-${id}`, role: "reviewer", model: "fixture/model:medium", tools: ["read"], skills: [], extensions: [], contextFiles: ["cwd"], retries: 1, timeoutMs: 1000 };
+  const status = { id, sessionId, state, startedAt: 1, ...(finishedAt === undefined ? {} : { finishedAt }), attempts: 1, ...(sessionFile === undefined ? {} : { attemptDetails: [{ attempt: 1, transport: "local", session: { transport: "local", sessionId: `${id}-session`, locator: { sessionFile } }, setup: { hookNames: [], model: { provider: "fixture", model: "model" }, tools: ["read"], cwd: "/project" }, accounting: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 } }] }), progress: { accounting: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 }, toolCalls: [], activity: { kind: "tool", text: "read" }, lastEventAt: 2 } };
+  writeFileSync(join(directory, "request.json"), JSON.stringify(request));
+  writeFileSync(join(directory, "status.json"), JSON.stringify(status));
+  if (state === "completed") writeFileSync(join(directory, "result.json"), JSON.stringify({ id }));
+  if (state === "failed") writeFileSync(join(directory, "failure.json"), JSON.stringify({ code: "AGENT_FAILED", message: `failure-${id}` }));
+}
+void test("trajectory loads first-class subagents with filtering, ordering, transcripts, and corrupt-entry isolation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-subagents-"));
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  const transcriptPath = join(root, "subagent.jsonl");
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(transcriptPath, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "hello" }] } })}\n`);
+  writeSubagentFixture(agentDir, "running", "session", "running");
+  writeSubagentFixture(agentDir, "failed", "session", "failed", undefined, 4);
+  writeSubagentFixture(agentDir, "stopped", "session", "stopped", undefined, 3);
+  writeSubagentFixture(agentDir, "completed", "session", "completed", undefined, 2);
+  writeSubagentFixture(agentDir, "with-transcript", "session", "completed", transcriptPath, 5);
+  writeSubagentFixture(agentDir, "oversized-result", "session", "completed", undefined, 6);
+  writeFileSync(join(agentDir, "subagents", "oversized-result", "result.json"), JSON.stringify("x".repeat(2 * 1024 * 1024)));
+  writeSubagentFixture(agentDir, "oversized-failure", "session", "failed", undefined, 7);
+  writeFileSync(join(agentDir, "subagents", "oversized-failure", "failure.json"), JSON.stringify({ code: "AGENT_FAILED", message: "x".repeat(2 * 1024 * 1024) }));
+  writeSubagentFixture(agentDir, "other-session", "other", "running");
+  mkdirSync(join(agentDir, "subagents", "corrupt"), { recursive: true });
+  writeFileSync(join(agentDir, "subagents", "corrupt", "status.json"), "{");
+  try {
+    const subagents = await createTrajectorySubagentLoader(cwd, "session", agentDir)();
+    assert.deepEqual(subagents.map((subagent) => subagent.id), ["running", "oversized-failure", "failed", "stopped", "oversized-result", "with-transcript", "completed"]);
+    const current = subagents.find((subagent) => subagent.id === "with-transcript");
+    assert.ok(current);
+    assert.equal(current.sessionId, "session");
+    assert.equal(current.request.prompt, "prompt-with-transcript");
+    assert.deepEqual(current.tools, ["read"]);
+    assert.deepEqual(current.toolDefinitions?.map((tool) => tool.name), ["read"]);
+    const locator = current.attempt?.session?.locator;
+    assert.equal(typeof locator === "object" && locator !== null && !Array.isArray(locator) && "sessionFile" in locator ? locator.sessionFile : undefined, transcriptPath);
+    assert.equal(current.transcript.length, 1);
+    assert.deepEqual(current.result, { id: "with-transcript" });
+    const failed = subagents.find((subagent) => subagent.id === "failed");
+    assert.deepEqual(failed?.failure, { code: "AGENT_FAILED", message: "failure-failed" });
+    const oversizedResult = subagents.find((subagent) => subagent.id === "oversized-result");
+    assert.deepEqual(oversizedResult?.result, { truncated: true, path: join(agentDir, "subagents", "oversized-result", "result.json"), bytes: 2 * 1024 * 1024 + 2 });
+    const oversizedFailure = subagents.find((subagent) => subagent.id === "oversized-failure");
+    assert.deepEqual(oversizedFailure?.failure, { truncated: true, path: join(agentDir, "subagents", "oversized-failure", "failure.json"), bytes: 2 * 1024 * 1024 + 36 });
+    assert.equal(subagents.some((subagent) => subagent.id === "other-session"), false);
+    assert.equal(subagents.some((subagent) => subagent.id === "corrupt"), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 void test("Trajectory preference storage failures preserve defaults", () => {

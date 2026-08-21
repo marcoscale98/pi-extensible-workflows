@@ -2,6 +2,7 @@
 ## Unreleased
 
 ### New capabilities
+- Trajectory now publishes current-session durable subagents as first-class publisher state, including live progress, attempts, transcripts, results, failures, worktrees, and resolved tools.
 
 - Registered-function `context.invoke(name, input, label?)` now supports presentation-only nested breadcrumbs without changing journal identity ([#223](https://github.com/vekexasia/pi-extensible-workflows/issues/223)).
 - Trajectory adds a resizable, scrollable workflow Gantt with sticky time axis and independently collapsible Gantt, agent, and log sections, with layout state persisted in local storage ([#224](https://github.com/vekexasia/pi-extensible-workflows/issues/224)).
