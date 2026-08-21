@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -56,14 +57,47 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
   assert.doesNotMatch(source, /agent-path/);
 });
 
-void test("Trajectory compacts canonical skill reads in event previews", () => {
+type TrajectoryPreviewHelpers = {
+  compactSkillReadPreview: (entry: unknown, entries?: readonly unknown[]) => string | undefined;
+  eventPreview: (entry: unknown, entries?: readonly unknown[]) => string;
+  eventSearchText: (entry: unknown, entries?: readonly unknown[]) => string;
+};
+
+function loadTrajectoryPreviewHelpers(source: string): TrajectoryPreviewHelpers {
+  const helperStart = source.indexOf("    const contentText");
+  const helperEnd = source.indexOf("    const eventLabel", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, eventSearchText }; })()`) as TrajectoryPreviewHelpers;
+}
+
+void test("Trajectory compacts canonical skill reads without losing event details", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
-  assert.match(source, /const compactSkillReadPreview = \(entry, entries = \[\]\) =>/);
-  assert.match(source, /args\.file_path \?\? args\.path/);
-  assert.match(source, /pathParts\.at\(-1\) !== "SKILL\.md"/);
-  assert.match(source, /return `\[skill\] \$\{pathParts\.at\(-2\) \|\| "SKILL\.md"\}/);
-  assert.match(source, /compactSkillReadPreview\(entry, entries\) \|\|/);
-  assert.ok(source.includes('payload: () => `<div class="code">${highlight(json(args))}</div>`'));
+  const helpers = loadTrajectoryPreviewHelpers(source);
+  const readCall = (id: string, args: Record<string, unknown>) => ({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id, name: "read", arguments: args }] } });
+  const toolResult = (id: string) => ({ type: "message", _toolTiming: { durationMs: 12, isError: false }, message: { role: "toolResult", toolCallId: id, toolName: "read", content: [] } });
+  const skillArgs = { path: "/home/andrea/.pi/agent/skills/tigerstyle/SKILL.md", offset: 1, limit: 400 };
+  const call = readCall("skill-read", skillArgs);
+  const result = toolResult("skill-read");
+  const entries = [call, result];
+  assert.equal(helpers.compactSkillReadPreview(call, entries), "[skill] tigerstyle:1-400");
+  assert.equal(helpers.compactSkillReadPreview(result, entries), undefined);
+  assert.equal(helpers.eventPreview(call, entries), "[skill] tigerstyle:1-400");
+  assert.equal(helpers.eventPreview(result, entries), `read: ${JSON.stringify(skillArgs)} · 12ms`);
+  assert.match(helpers.eventSearchText(call, entries), /read/);
+  assert.match(helpers.eventSearchText(call, entries), /tigerstyle\/SKILL\.md/);
+
+  const nestedArgs = { path: "/home/andrea/.pi/agent/skills/tigerstyle/scripts/check.ts", offset: 2, limit: 3 };
+  const nestedCall = readCall("nested-read", nestedArgs);
+  assert.equal(helpers.compactSkillReadPreview(nestedCall, [nestedCall]), undefined);
+  assert.equal(helpers.eventPreview(nestedCall, [nestedCall]), "read");
+  assert.equal(helpers.eventPreview(toolResult("nested-read"), [nestedCall, toolResult("nested-read")]), `read: ${JSON.stringify(nestedArgs)} · 12ms`);
+
+  const textCall = { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Loading the skill now" }, { type: "toolCall", id: "text-read", name: "read", arguments: skillArgs }] } };
+  assert.equal(helpers.eventPreview(textCall, [textCall]), "Loading the skill now read");
+
+  const filePathArgs = { file_path: "/tmp/other-skill/SKILL.md", offset: 2, limit: 1 };
+  const filePathCall = readCall("file-path-read", filePathArgs);
+  assert.equal(helpers.compactSkillReadPreview(filePathCall, [filePathCall]), "[skill] other-skill:2-2");
 });
 
 void test("trajectory transcript retention stays bounded with timing entries", async () => {

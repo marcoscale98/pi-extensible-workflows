@@ -4,6 +4,8 @@
 ### New capabilities
 
 - Trajectory records per-tool wall-clock execution timing in workflow-agent session JSONL and displays completed and failed tool durations across its event, agent, inspector, and Gantt views. Loaded transcripts retain up to 400 non-timing entries plus their matching timing entries ([#212](https://github.com/vekexasia/pi-extensible-workflows/issues/212)).
+- Trajectory renders canonical skill file reads as compact `[skill] name:start-end` event previews while retaining their full input in the inspector ([#215](https://github.com/vekexasia/pi-extensible-workflows/issues/215)).
+
 
 ## [5.7.0] - 2026-08-20
 
