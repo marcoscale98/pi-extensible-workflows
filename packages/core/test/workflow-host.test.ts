@@ -166,6 +166,19 @@ void test("catalogs dynamic aliases without executing them and honors settings s
   controller.abort();
   await assert.rejects(registry.resolveModelAliases({ ...context, signal: controller.signal }), (error: unknown) => error instanceof WorkflowError && error.code === "CANCELLED" && error.message.includes("Policy extension"));
 });
+void test("collapses shadowed aliases in the catalog index while retaining full provenance", () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-catalog-aliases-"));
+  const settingsPath = join(home, "settings.json");
+  writeFileSync(settingsPath, JSON.stringify({ modelAliases: { "reviewer-model": "static/model" } }));
+  const registry = new WorkflowRegistry();
+  registry.register({ version: "1.0.0", headline: "Dynamic policy", modelAliases: { "reviewer-model": { resolve: () => "dynamic/model" } } });
+  const context = { cwd: home, projectTrusted: false, globalSettingsPath: settingsPath };
+  assert.deepEqual(registry.catalog(context).modelAliasEntries, [
+    { name: "reviewer-model", kind: "dynamic", provenance: "extension: Dynamic policy", version: "1.0.0", headline: "Dynamic policy" },
+    { name: "reviewer-model", kind: "static", provenance: "global settings" },
+  ]);
+  assert.deepEqual(registry.catalogIndex(context).modelAliasEntries, [{ name: "reviewer-model", kind: "static", provenance: "global settings" }]);
+});
 void test("rejects duplicate and invalid dynamic alias registrations with extension provenance", async () => {
   const duplicate = new WorkflowRegistry();
   duplicate.register({ version: "1.0.0", headline: "First policy", modelAliases: { reviewer: { resolve: () => "openai/gpt" } } });

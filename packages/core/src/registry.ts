@@ -123,9 +123,13 @@ export class WorkflowRegistry {
   }
   catalogIndex(context?: WorkflowCatalogContext): WorkflowCatalogIndex {
     const catalog = this.catalog(context);
+    const modelAliasEntries = catalog.modelAliasEntries === undefined ? undefined : [...catalog.modelAliasEntries.reduce((entries, entry) => {
+      if (!entries.has(entry.name) || entry.kind === "static") entries.set(entry.name, entry);
+      return entries;
+    }, new Map<string, WorkflowCatalogModelAlias>()).values()];
     const index: WorkflowCatalogIndex = {
       functions: catalog.functions.map(({ name, description, input }) => ({ name, description, input: structuredClone(input) })),
-      ...(catalog.modelAliasEntries ? { modelAliasEntries: structuredClone(catalog.modelAliasEntries) } : {}),
+      ...(modelAliasEntries ? { modelAliasEntries: structuredClone(modelAliasEntries) } : {}),
     };
     if (catalog.modelAliases) Object.defineProperty(index, "modelAliases", { value: Object.freeze(structuredClone(catalog.modelAliases)), enumerable: false });
     if (catalog.settings) Object.defineProperty(index, "settings", { value: deepFreeze(structuredClone(catalog.settings)), enumerable: true });

@@ -247,7 +247,7 @@
         <p>Dynamic aliases are package defaults. Static aliases from global settings override them, and trusted project settings override the global map; a same-named shadowed resolver is not called. Duplicate registrations fail with <code>DUPLICATE_NAME</code>. Invalid resolver results, cycles, and unavailable targets fail before a run starts with an existing typed error and include the alias and registering extension headline. Resolver cancellation remains <code>CANCELLED</code>.</p>
         <h3>Launch, resume, and retry</h3>
         <p>Resume resolves dynamic aliases again against the current inventory and snapshots the new map. Completed journal operations retain their results; pending, retried, and new calls use the newly resolved map. A changed target produces one persisted alias-drift warning. <code>workflow_retry</code> creates a child run with the same rules and snapshot behavior. If an alias present in the prior snapshot is removed, pending or retried references are blocked as <code>UNKNOWN_MODEL</code> instead of falling through to a native model with the same bare ID.</p>
-        <p>Use settings files for static aliases and extension registration for dynamic policy. <code>workflow_catalog</code>, <code>workflowCatalog()</code>, and <code>workflowCatalogIndex()</code> expose alias names, <code>static</code>/<code>dynamic</code> kind, and provenance without executing resolvers or exposing dynamic targets to agents; trusted settings, <code>doctor</code>, snapshots, and the inspector retain concrete static or resolved targets.</p>
+        <p>Use settings files for static aliases and extension registration for dynamic policy. <code>workflowCatalog()</code>, <code>doctor</code>, and the navigator retain both same-named rows with their static or dynamic provenance; <code>workflow_catalog</code> and <code>workflowCatalogIndex()</code> expose one row per alias name, using the static settings entry when it shadows a dynamic resolver. Catalog discovery never executes resolvers or exposes dynamic targets to agents; trusted settings, snapshots, and the inspector retain concrete static or resolved targets.</p>
       </section>
       <section id="hooks">
         <h2>Agent setup hooks</h2>
@@ -305,8 +305,8 @@
         <div class="table-wrap"><table>
           <thead><tr><th>API</th><th>Result</th></tr></thead>
           <tbody>
-            <tr><td><code>workflowCatalog()</code></td><td>Full trusted catalog of function and alias metadata, including extension provenance and schemas. Trusted callers can inspect effective static targets; dynamic resolver targets are not executed by catalog discovery.</td></tr>
-            <tr><td><code>workflowCatalogIndex()</code></td><td>Compact metadata: function names, descriptions, input schemas, and static or dynamic alias names with kind and provenance.</td></tr>
+            <tr><td><code>workflowCatalog()</code></td><td>Full trusted catalog of function and alias metadata, including both same-named static and dynamic entries with extension provenance and schemas. Trusted callers can inspect effective static targets; dynamic resolver targets are not executed by catalog discovery.</td></tr>
+            <tr><td><code>workflowCatalogIndex()</code></td><td>Compact metadata: function names, descriptions, input schemas, and one winning static or dynamic alias entry per name. A static settings alias wins over a same-named dynamic resolver.</td></tr>
             <tr><td><code>workflowCatalogDetail(name)</code></td><td>One full function or alias definition. Missing names return a <code>NOT_FOUND</code> result object instead of throwing a workflow error.</td></tr>
             <tr><td><code>registeredWorkflowFunctions()</code></td><td>Trusted host access to registered function implementations keyed by name. This is not agent-facing metadata and must not be exposed to untrusted code.</td></tr>
           </tbody>
