@@ -170,6 +170,9 @@ void test("Trajectory compacts canonical skill reads without losing event detail
   const emptyResult = { type: "message", message: { role: "toolResult", toolCallId: "empty", toolName: "bash", content: [] } };
   assert.equal(helpers.eventPreview(emptyResult, [emptyCall, emptyResult]), "bash");
 
+  const nullResult = { type: "message", message: { role: "toolResult", toolName: "bash", arguments: null, content: [] } };
+  assert.equal(helpers.eventPreview(nullResult, [nullResult]), "bash: null");
+  assert.match(helpers.toolPreviewHtml(nullResult, [nullResult]), /class="tool-value" title="null">null<\/span>/);
   const scalarResult = { type: "message", message: { role: "toolResult", toolName: "bash", arguments: "echo hello", content: [] } };
   assert.doesNotThrow(() => helpers.toolPreviewHtml(scalarResult, [scalarResult]));
   assert.match(helpers.toolPreviewHtml(scalarResult, [scalarResult]), /bash.*echo hello/);
