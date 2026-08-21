@@ -186,6 +186,9 @@
     .pill.skill { background: #164e63; color: #a5f3fc; }
     .pill.issue { background: #5a1818; color: #ffb0b0; }
     .preview { color: var(--dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+    .preview .tool-preview-name, .preview .tool-value { color: var(--text); }
+    .preview .tool-key, .preview .tool-gap, .preview .tool-timing { color: var(--dim); }
+    .preview .tool-value { font-weight: 400; }
     .preview b { color: var(--text); font-weight: 400; }
     .ins-head { padding: 10px 12px 6px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); }
     .ins-sub { color: var(--dim); font-size: 12px; }
@@ -414,7 +417,47 @@
       return `[skill] ${pathParts.at(-2) || "SKILL.md"}${lineRange}`;
     };
 
-    const eventPreview = (entry, entries = []) => compactSkillReadPreview(entry, entries) || (entry.type === "system_prompt" ? "Initial System Prompt" : eventKind(entry) === "tool" ? `${toolNameOf(entry)}: ${JSON.stringify(toolArgsOf(entry, entries))}${toolTimingOf(entry) ? ` · ${formatToolTiming(toolTimingOf(entry))}` : ""}` : entry.type === "message" ? contentText(entry.message?.content) : entry.type === "session" || entry.type === "session_info" ? "Session started" : entry.type);
+    const isPlainObject = (value) => {
+      if (!value || Object.prototype.toString.call(value) !== "[object Object]") return false;
+      const prototype = Object.getPrototypeOf(value);
+      return prototype === null || Object.getPrototypeOf(prototype) === null;
+    };
+    const toolPreviewValue = (value) => {
+      let full;
+      if (typeof value === "string") full = value;
+      else if (value && typeof value === "object") {
+        try { full = JSON.stringify(value); } catch { full = String(value); }
+      } else full = String(value);
+      full = String(full ?? value);
+      const row = full.replace(/[\r\n\t]/g, " ");
+      return { full, row: row.length > 80 ? `${row.slice(0, 80)}…` : row };
+    };
+    const toolPreviewData = (entry, entries = []) => {
+      const args = toolArgsOf(entry, entries);
+      const fields = isPlainObject(args) ? Object.keys(args).map((key) => ({ key, value: toolPreviewValue(args[key]) })) : undefined;
+      return { name: toolNameOf(entry), fields, fallback: fields ? undefined : toolPreviewValue(args), timing: toolTimingOf(entry) };
+    };
+    const toolPreviewText = (entry, entries = []) => {
+      const { name, fields, fallback, timing } = toolPreviewData(entry, entries);
+      const args = fields ? fields.map(({ key, value }) => `${key} ${value.row}`).join(" · ") : `${fallback.row}`;
+      return `${name}${fields ? (args ? `  ${args}` : "") : `: ${args}`}${timing ? ` · ${formatToolTiming(timing)}` : ""}`;
+    };
+    const toolPreviewHtml = (entry, entries = []) => {
+      const { name, fields, fallback, timing } = toolPreviewData(entry, entries);
+      const timingHtml = timing ? `<span class="tool-timing"> · ${esc(formatToolTiming(timing))}</span>` : "";
+      if (!fields) return `<span class="tool-preview-name">${esc(name)}</span><span class="tool-gap">: </span><span class="tool-value" title="${esc(fallback.full)}">${esc(fallback.row)}</span>${timingHtml}`;
+      const fieldsHtml = fields.map(({ key, value }, index) => `${index ? '<span class="tool-gap"> · </span>' : '<span class="tool-gap"> </span>'}<span class="tool-pair"><span class="tool-key">${esc(key)}</span><span class="tool-gap"> </span><span class="tool-value" title="${esc(value.full)}">${esc(value.row)}</span></span>`).join("");
+      return `<span class="tool-preview-name">${esc(name)}</span>${fieldsHtml}${timingHtml}`;
+    };
+    const eventPreview = (entry, entries = []) => {
+      const compact = compactSkillReadPreview(entry, entries);
+      if (compact !== undefined) return compact;
+      if (entry.type === "system_prompt") return "Initial System Prompt";
+      if (eventKind(entry) === "tool") return toolPreviewText(entry, entries);
+      if (entry.type === "message") return contentText(entry.message?.content);
+      if (entry.type === "session" || entry.type === "session_info") return "Session started";
+      return entry.type;
+    };
     const eventSearchText = (entry, entries = []) => toolCallPartOf(entry) || eventKind(entry) === "tool" ? `${toolNameOf(entry)} ${JSON.stringify(toolArgsOf(entry, entries))}` : "";
     const eventLabel = (kind) => kind === "toolResult" ? "TOOL" : String(kind || "EVENT").toUpperCase();
     function renderThemeButtons() { const enabled = state.publishers.some((publisher) => publisher.themes === true); const themes = enabled ? ["harness", "tty", "paper"] : []; if (!enabled) { document.documentElement.dataset.theme = "tty"; localStorage.removeItem("traj-theme"); } else if (!["harness", "tty", "paper"].includes(document.documentElement.dataset.theme || "")) document.documentElement.dataset.theme = localStorage.getItem("traj-theme") || "tty"; $("theme-buttons").innerHTML = themes.map((theme) => `<button class="tab theme" data-theme="${theme}">${theme.toUpperCase()}</button>`).join(""); $("theme-buttons").classList.toggle("hidden", !enabled); $("theme-buttons").querySelectorAll("[data-theme]").forEach((button) => button.addEventListener("click", () => { document.documentElement.dataset.theme = button.dataset.theme; localStorage.setItem("traj-theme", button.dataset.theme); renderThemeButtons(); })); const current = document.documentElement.dataset.theme || "tty"; $("theme-buttons").querySelectorAll("[data-theme]").forEach((button) => button.classList.toggle("on", button.dataset.theme === current)); }
@@ -465,7 +508,40 @@
       state.transcriptPending[key] = true;
       state.socket.send(JSON.stringify({ type: "ui:transcript", publisherId: found.publisher.id, runId: found.record.run.id, agentId }));
     }
-    function renderAgent() { const scroller = $("insp")?.querySelector(".code:not(.script)"); const scroll = scroller ? scroller.scrollTop : 0; const found = selected(); if (!found) return; const agent = found.record.run.agents.find((candidate) => candidate.id === state.currentAgent) || found.record.run.agents[0]; if (!agent) { $("events").innerHTML = '<div class="hint">No agent selected.</div>'; return; } state.currentAgent = agent.id; requestTranscript(found, agent.id); if (state.agentRangeAgent !== agent.id) { state.agentRangeAgent = agent.id; state.agentRange = null; } $("run-crumb").textContent = found.record.run.workflowName; $("agent-crumb").textContent = agent.label || agent.name; const entries = agentEntries(found.record, agent); const { times, start, span, hasTime } = timelineScale(entries); if (!hasTime) state.agentRange = null; const timeline = $("agent-timeline"); timeline.dataset.timelineStart = String(start); timeline.dataset.timelineSpan = String(span); timeline.dataset.timelineHasTime = String(hasTime); $("agent-ticks").innerHTML = renderAgentTimeline(entries); $("events").innerHTML = entries.length ? entries.map((entry, index) => { const detail = entryDetails(entry, agent, entries); const t = (times[index] - start) / span * 100; return `<div class="evt${index === state.selectedEvent ? " on" : ""}" data-event="${index}" data-t="${t}" data-search="${esc(eventSearchText(entry, entries))}"><div class="gutter">${esc(entry.timestamp || `#${index + 1}`)}</div><span class="pill ${detail.kind}">${eventLabel(detail.kind)}</span><div class="preview">${esc(eventPreview(entry, entries))}</div></div>`; }).join("") : '<div class="hint">No transcript events recorded.</div>'; const detail = entries[state.selectedEvent || 0] ? entryDetails(entries[state.selectedEvent || 0], agent, entries) : undefined; const sig = `${agent.id}:${state.selectedEvent ?? 0}:${state.sysPane}:${state.toolPane}:${detail?.kind || ""}`; if (state.inspSig !== sig) { renderInspector(detail, agent, entries); state.inspSig = sig; } paintBrush(timeline, ".axis .ticks", state.agentRange); $("reset-agent-range").classList.toggle("hidden", !state.agentRange); applyEventSearch(); }
+    function renderAgent() {
+      const scroller = $("insp")?.querySelector(".code:not(.script)");
+      const scroll = scroller ? scroller.scrollTop : 0;
+      const found = selected();
+      if (!found) return;
+      const agent = found.record.run.agents.find((candidate) => candidate.id === state.currentAgent) || found.record.run.agents[0];
+      if (!agent) { $("events").innerHTML = '<div class="hint">No agent selected.</div>'; return; }
+      state.currentAgent = agent.id;
+      requestTranscript(found, agent.id);
+      if (state.agentRangeAgent !== agent.id) { state.agentRangeAgent = agent.id; state.agentRange = null; }
+      $("run-crumb").textContent = found.record.run.workflowName;
+      $("agent-crumb").textContent = agent.label || agent.name;
+      const entries = agentEntries(found.record, agent);
+      const { times, start, span, hasTime } = timelineScale(entries);
+      if (!hasTime) state.agentRange = null;
+      const timeline = $("agent-timeline");
+      timeline.dataset.timelineStart = String(start);
+      timeline.dataset.timelineSpan = String(span);
+      timeline.dataset.timelineHasTime = String(hasTime);
+      $("agent-ticks").innerHTML = renderAgentTimeline(entries);
+      $("events").innerHTML = entries.length ? entries.map((entry, index) => {
+        const detail = entryDetails(entry, agent, entries);
+        const t = (times[index] - start) / span * 100;
+        const compact = compactSkillReadPreview(entry, entries);
+        const preview = compact !== undefined ? esc(compact) : eventKind(entry) === "tool" ? toolPreviewHtml(entry, entries) : esc(eventPreview(entry, entries));
+        return `<div class="evt${index === state.selectedEvent ? " on" : ""}" data-event="${index}" data-t="${t}" data-search="${esc(eventSearchText(entry, entries))}"><div class="gutter">${esc(entry.timestamp || `#${index + 1}`)}</div><span class="pill ${detail.kind}">${eventLabel(detail.kind)}</span><div class="preview">${preview}</div></div>`;
+      }).join("") : '<div class="hint">No transcript events recorded.</div>';
+      const detail = entries[state.selectedEvent || 0] ? entryDetails(entries[state.selectedEvent || 0], agent, entries) : undefined;
+      const sig = `${agent.id}:${state.selectedEvent ?? 0}:${state.sysPane}:${state.toolPane}:${detail?.kind || ""}`;
+      if (state.inspSig !== sig) { renderInspector(detail, agent, entries); state.inspSig = sig; }
+      paintBrush(timeline, ".axis .ticks", state.agentRange);
+      $("reset-agent-range").classList.toggle("hidden", !state.agentRange);
+      applyEventSearch();
+    }
     function applyEventSearch() { const query = ($("q")?.value || "").toLowerCase(); const range = state.agentRange; document.querySelectorAll("#events .evt").forEach((event) => { const t = Number(event.dataset.t); const inRange = !range || (Number.isFinite(t) && t >= range.from && t <= range.to); const searchText = `${event.textContent} ${event.dataset.search || ""}`.toLowerCase(); const inQuery = !query || searchText.includes(query); event.style.display = inRange && inQuery ? "" : "none"; }); }
     function setView(view, mode = "push") { document.body.dataset.view = view; $("view-run").classList.toggle("hidden", view !== "run"); $("view-agent").classList.toggle("hidden", view === "run"); if (view === "run") renderRun(); else renderAgent(); syncUrl(mode); }
     function syncUrl(mode) { const url = new URL(location.href); url.searchParams.set("view", document.body.dataset.view); if (state.currentRun) url.searchParams.set("run", state.currentRun); else url.searchParams.delete("run"); if (document.body.dataset.view === "agent" && state.currentAgent) url.searchParams.set("agent", state.currentAgent); else url.searchParams.delete("agent"); const next = url.pathname + url.search; if (mode !== "pop" && next !== location.pathname + location.search) (mode === "replace" ? history.replaceState : history.pushState).call(history, { view: document.body.dataset.view, run: state.currentRun, agent: state.currentAgent }, next); }

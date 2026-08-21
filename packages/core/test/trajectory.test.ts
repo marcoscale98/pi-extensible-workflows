@@ -80,16 +80,17 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
 type TrajectoryPreviewHelpers = {
   compactSkillReadPreview: (entry: unknown, entries?: readonly unknown[]) => string | undefined;
   eventPreview: (entry: unknown, entries?: readonly unknown[]) => string;
+  toolPreviewHtml: (entry: unknown, entries?: readonly unknown[]) => string;
   eventSearchText: (entry: unknown, entries?: readonly unknown[]) => string;
   eventLabel: (kind: string) => string;
   entryDetails: (entry: unknown, agent: unknown, entries?: readonly unknown[]) => { kind: string; entry: unknown; agent: unknown };
 };
 
 function loadTrajectoryPreviewHelpers(source: string): TrajectoryPreviewHelpers {
-  const helperStart = source.indexOf("    const contentText");
+  const helperStart = source.indexOf("    const esc");
   const helperEnd = source.indexOf("    function renderToolPane", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, eventSearchText, eventLabel, entryDetails }; })()`) as TrajectoryPreviewHelpers;
+  return runInNewContext(`(() => { ${source.slice(helperStart, helperEnd)}; return { compactSkillReadPreview, eventPreview, toolPreviewHtml, eventSearchText, eventLabel, entryDetails }; })()`) as TrajectoryPreviewHelpers;
 }
 
 void test("Trajectory compacts canonical skill reads without losing event details", () => {
@@ -116,13 +117,36 @@ void test("Trajectory compacts canonical skill reads without losing event detail
   const nestedCall = readCall("nested-read", nestedArgs);
   assert.equal(helpers.compactSkillReadPreview(nestedCall, [nestedCall]), undefined);
   assert.equal(helpers.eventPreview(nestedCall, [nestedCall]), "read");
-  assert.equal(helpers.eventPreview(toolResult("nested-read"), [nestedCall, toolResult("nested-read")]), `read: ${JSON.stringify(nestedArgs)} · 12ms`);
+  assert.equal(helpers.eventPreview(toolResult("nested-read"), [nestedCall, toolResult("nested-read")]), `read  path ${nestedArgs.path} · offset 2 · limit 3 · 12ms`);
+  const nestedHtml = helpers.toolPreviewHtml(toolResult("nested-read"), [nestedCall, toolResult("nested-read")]);
+  assert.match(nestedHtml, /class="tool-key">path<\/span>/);
+  assert.match(nestedHtml, /class="tool-key">offset<\/span>/);
+  assert.match(nestedHtml, /class="tool-key">limit<\/span>/);
+  assert.match(nestedHtml, /class="tool-timing"> · 12ms<\/span>/);
   const nestedResult = toolResult("nested-read");
   assert.equal(helpers.entryDetails(nestedResult, {}, [nestedCall, nestedResult]).kind, "tool");
-  const bashCall = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: "git status --short" } }] } };
-  const bashResult = toolResult("bash-call", "bash");
-  assert.equal(helpers.entryDetails(bashResult, {}, [bashCall, bashResult]).kind, "tool");
+  const simpleBashCall = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "simple-bash-call", name: "bash", arguments: { command: "git status --short" } }] } };
+  const simpleBashResult = toolResult("simple-bash-call", "bash");
+  assert.equal(helpers.entryDetails(simpleBashResult, {}, [simpleBashCall, simpleBashResult]).kind, "tool");
 
+  const longCommand = "npm run build --workspace=packages/core && TEST_FILES='dist/test/agent-execution.test.js' npm run test:run --workspace=packages/core";
+  const bashCall = { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "bash-call", name: "bash", arguments: { command: longCommand, timeout: 180 } }] } };
+  const bashResult = { type: "message", message: { role: "toolResult", toolCallId: "bash-call", toolName: "bash", content: [] } };
+  const bashHtml = helpers.toolPreviewHtml(bashResult, [bashCall, bashResult]);
+  assert.match(bashHtml, /class="tool-key">command<\/span>/);
+  assert.match(bashHtml, /class="tool-key">timeout<\/span>/);
+  assert.match(bashHtml, new RegExp(`class="tool-value" title="${longCommand.replaceAll("&", "&amp;")}"[^>]*>${longCommand.slice(0, 80).replaceAll("&", "&amp;")}…<\\/span>`));
+  assert.match(bashHtml, /class="tool-value" title="180">180<\/span>/);
+  assert.match(helpers.eventSearchText(bashResult, [bashCall, bashResult]), /agent-execution\.test\.js/);
+  assert.match(helpers.eventSearchText(bashResult, [bashCall, bashResult]), /timeout/);
+
+  const emptyCall = readCall("empty", {});
+  const emptyResult = { type: "message", message: { role: "toolResult", toolCallId: "empty", toolName: "bash", content: [] } };
+  assert.equal(helpers.eventPreview(emptyResult, [emptyCall, emptyResult]), "bash");
+
+  const scalarResult = { type: "message", message: { role: "toolResult", toolName: "bash", arguments: "echo hello", content: [] } };
+  assert.doesNotThrow(() => helpers.toolPreviewHtml(scalarResult, [scalarResult]));
+  assert.match(helpers.toolPreviewHtml(scalarResult, [scalarResult]), /bash.*echo hello/);
   const textCall = { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Loading the skill now" }, { type: "toolCall", id: "text-read", name: "read", arguments: skillArgs }] } };
   assert.equal(helpers.compactSkillReadPreview(textCall, [textCall]), "[skill] tigerstyle:1-400");
   assert.equal(helpers.eventPreview(textCall, [textCall]), "[skill] tigerstyle:1-400");
@@ -139,6 +163,16 @@ void test("Trajectory compacts canonical skill reads without losing event detail
   const filePathArgs = { file_path: "/tmp/other-skill/SKILL.md", offset: 2, limit: 1 };
   const filePathCall = readCall("file-path-read", filePathArgs);
   assert.equal(helpers.compactSkillReadPreview(filePathCall, [filePathCall]), "[skill] other-skill:2-2");
+});
+
+void test("Trajectory renders structured tool previews in event rows", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /const toolPreviewHtml =/);
+  assert.match(source, /class="tool-key"/);
+  assert.match(source, /class="tool-value"/);
+  assert.match(source, /const compact = compactSkillReadPreview\(entry, entries\)/);
+  assert.match(source, /toolPreviewHtml\(entry, entries\)/);
+  assert.doesNotMatch(source, /<div class="preview">\$\{esc\(eventPreview\(entry, entries\)\)\}<\/div>/);
 });
 
 void test("trajectory transcript retention stays bounded with timing entries", async () => {
