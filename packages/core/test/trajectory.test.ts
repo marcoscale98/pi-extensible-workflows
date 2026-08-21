@@ -37,6 +37,18 @@ void test("Trajectory agent grid groups persisted agent scopes", () => {
   assert.doesNotMatch(source, /const path = \[\.\.\.\(agent\.parentBreadcrumb/);
 });
 
+void test("Trajectory run view renders the complete persisted log stream", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /function renderLogs\(record\)/);
+  assert.match(source, /filter\(\(event\) => event\.type === "log"\)/);
+  assert.match(source, /fmtClock\(event\.timestamp\)/);
+  assert.match(source, /class="logs-list"/);
+  assert.match(source, /renderLogs\(record\)/);
+  assert.match(source, /\.logs-list \{[^}]*overflow: auto/);
+  assert.match(source, /\.log-message \{[^}]*white-space: pre-wrap/);
+  assert.doesNotMatch(source, /slice\(-5\)/);
+});
+
 void test("Trajectory timelines keep cursors and agent-only range selection", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   assert.match(source, /bindTimeCursor\(\$\("swim"\), "\.axis \.ticks"\)/);

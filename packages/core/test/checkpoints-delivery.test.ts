@@ -508,7 +508,7 @@ void test("foreground workflow failure keeps logs in the workflow item", async (
   const result = await toolResultHandler({ toolName: "workflow", toolCallId: "failure", isError: true }) as FailureResult;
   assert.deepEqual(result.details?.run?.events?.filter((event) => event.type === "log").map((event) => event.message), ["before failure"]);
 });
-void test("background workflow logs append capped TUI-only transcript entries", async () => {
+void test("background workflow logs persist and append capped TUI transcript entries", async () => {
   type LogData = { workflowName: string; message: string };
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-log-"));
   const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
@@ -525,6 +525,15 @@ void test("background workflow logs append capped TUI-only transcript entries", 
   await execute("id", { name: "logger", script: `await log("working"); await log("😀".repeat(2000)); return true;`, foreground: false }, new AbortController().signal, undefined, { cwd: home, model: { provider: "openai", id: "gpt" }, sessionManager: { getSessionId: () => "session" } });
   await waitForIssue105(() => entries.length >= 2);
   assert.equal(entries.length, 2);
+  const runId = (await listRunIds(home, "session", home))[0];
+  assert.ok(runId);
+  const persisted = await new RunStore(home, "session", runId, home).loadStatus();
+  const logs = persisted.events?.filter((event) => event.type === "log") ?? [];
+  const firstLog = logs[0];
+  assert.ok(firstLog);
+  assert.equal(firstLog.message, "working");
+  assert.equal(typeof firstLog.timestamp, "number");
+  assert.equal(logs.length, 2);
   assert.deepEqual(entries[0], { type: "workflow-log", data: { workflowName: "logger", message: "working" } });
   const truncated = entries[1];
   assert.ok(truncated);

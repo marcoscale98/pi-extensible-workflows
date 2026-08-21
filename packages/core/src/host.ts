@@ -275,11 +275,9 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     try {
       const active = runs.get(store.runId);
       const update = active?.foreground ? active.update : undefined;
-      if (update) {
-        const event = { type: "log", message: bounded, timestamp };
-        const persisted = await store.updateState((current) => current.delivery?.mode === "foreground" && current.delivery.state === "attached" ? { ...current, events: [...(current.events ?? []), event] } : current);
-        if (persisted.events?.at(-1) === event) { update(workflowToolUpdate(persisted)); return; }
-      }
+      const event = { type: "log", message: bounded, timestamp };
+      const persisted = await store.updateState((current) => ({ ...current, events: [...(current.events ?? []), event] }));
+      if (update && persisted.delivery?.mode === "foreground" && persisted.delivery.state === "attached") { update(workflowToolUpdate(persisted)); return; }
       pi.appendEntry<WorkflowLogEntry>(WORKFLOW_LOG_ENTRY, { workflowName, message: bounded });
     } finally { await lifecycle.leave(); }
   };

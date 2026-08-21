@@ -172,7 +172,7 @@
             <tr><td><code>parallel(name, tasks)</code></td><td>Run keyed independent tasks concurrently.</td></tr>
             <tr><td><code>pipeline(name, items, stages)</code></td><td>Apply ordered stages to keyed items.</td></tr>
             <tr><td><code>phase(name)</code></td><td>Record progress telemetry. In a sequential loop, use <code>phase(slice.name)</code> for semantic labels such as <code>backend-safety</code>.</td></tr>
-            <tr><td><code>log(message)</code></td><td>Renders attached foreground logs in the live workflow item and appends background or detached logs as bounded TUI-only transcript entries, capped at 4 KB.</td></tr>
+            <tr><td><code>log(message)</code></td><td>Persists each bounded message with a timestamp in the run events. Attached foreground logs render in the live workflow item; background or detached logs append as bounded TUI transcript entries and are shown in Trajectory, capped at 4 KB.</td></tr>
             <tr><td><code>checkpoint(input)</code></td><td>Wait for an approval or rejection.</td></tr>
             <tr><td><code>withWorktree(name, callback)</code></td><td>Materialize one explicitly named worktree scope before invoking the callback; pass the callback a frozen <code>{ path, branch }</code> reference.</td></tr>
           </tbody>
