@@ -49,6 +49,14 @@ void test("Trajectory run view renders the complete persisted log stream", () =>
   assert.doesNotMatch(source, /slice\(-5\)/);
 });
 
+void test("Trajectory agent view requests a compacted transcript on demand", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /function requestTranscript\(/);
+  assert.match(source, /type: "ui:transcript"/);
+  assert.match(source, /message\.type === "transcript"/);
+  assert.match(source, /requestTranscript\(found, agent\.id\)/);
+});
+
 void test("Trajectory timelines keep cursors and agent-only range selection", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   assert.match(source, /bindTimeCursor\(\$\("swim"\), "\.axis \.ticks"\)/);

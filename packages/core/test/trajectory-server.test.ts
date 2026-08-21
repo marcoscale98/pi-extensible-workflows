@@ -188,3 +188,45 @@ void test("Trajectory keeps the browser socket when combined publisher state exc
     await rm(root, { recursive: true, force: true });
   }
 });
+
+void test("Trajectory fetches one agent transcript after compacting combined state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trajectory-server-transcript-"));
+  const port = await availablePort();
+  const maxFrameBytes = 800;
+  const blob = "x".repeat(400);
+  const first = publisherState("one", blob);
+  const second = publisherState("two", blob);
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"), maxFrameBytes);
+  await listen(server, port);
+  const sockets: Socket[] = [];
+  try {
+    const origin = `http://127.0.0.1:${String(port)}`;
+    const publisherOne = await handshake(port, origin);
+    const publisherTwo = await handshake(port, origin);
+    sockets.push(publisherOne.socket, publisherTwo.socket);
+    publisherOne.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "one" })));
+    publisherOne.socket.write(maskedFrame(first));
+    publisherTwo.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "two" })));
+    publisherTwo.socket.write(maskedFrame(second));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const browser = await handshake(port, origin);
+    sockets.push(browser.socket);
+    const state = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:attach" })));
+    const compact = await state as { publishers?: { runs?: { transcripts?: { agent?: unknown[] } }[] }[] };
+    assert.deepEqual(compact.publishers?.[0]?.runs?.[0]?.transcripts?.agent ?? [], []);
+    const reply = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:transcript", publisherId: "one", runId: "one", agentId: "agent" })));
+    const transcript = await reply as { type?: unknown; agentId?: unknown; entries?: unknown };
+    assert.equal(transcript.type, "transcript");
+    assert.equal(transcript.agentId, "agent");
+    assert.deepEqual(transcript.entries, [{ type: "message", text: blob }]);
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    server.closeAllConnections();
+    server.closeIdleConnections();
+    server.close();
+    server.unref();
+    await rm(root, { recursive: true, force: true });
+  }
+});

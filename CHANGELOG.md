@@ -8,7 +8,7 @@
 - Trajectory renders canonical skill file reads as compact `[skill] name:start-end` event previews while retaining their full input in the inspector ([#215](https://github.com/vekexasia/pi-extensible-workflows/issues/215)).
 
 ### Fixes
-
+- Fetch one agent transcript on demand when combined Trajectory state exceeds the WebSocket frame cap, so agent views keep their events.
 - Collapse shadowed model aliases to the static settings winner in the LLM-facing workflow catalog index and detail results while preserving full provenance for trusted catalogs ([#210](https://github.com/vekexasia/pi-extensible-workflows/issues/210)).
 
 ## [5.7.0] - 2026-08-20

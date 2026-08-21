@@ -39,7 +39,7 @@ function compactPublishers(publishers: readonly unknown[]): unknown[] {
 function encodeState(state: State, maxBytes: number): string {
   const full = JSON.stringify(state);
   if (Buffer.byteLength(full) <= maxBytes) return full;
-  // ponytail: strip message transcripts when combined state exceeds the frame cap; per-run fetch if timing-only still overflows
+  // ponytail: strip message transcripts when combined state exceeds the frame cap; ui:transcript loads one agent
   const compact = JSON.stringify({ type: "state", publishers: compactPublishers(state.publishers), updatedAt: state.updatedAt });
   if (Buffer.byteLength(compact) <= maxBytes) return compact;
   return JSON.stringify({ type: "state", publishers: [], updatedAt: state.updatedAt });
@@ -180,6 +180,32 @@ export function createTrajectoryServer(port: number, lockPath: string, maxFrameB
       return;
     }
     if (client.kind === "publisher" && message.type === "publisher:action-result" && typeof message.requestId === "string") { broadcast(message); return; }
+    if (client.kind === "browser" && message.type === "ui:transcript") {
+      if (typeof message.publisherId !== "string" || message.publisherId.length < 1 || message.publisherId.length > 200 || typeof message.runId !== "string" || message.runId.length < 1 || message.runId.length > 200 || typeof message.agentId !== "string" || message.agentId.length < 1 || message.agentId.length > 200) return;
+      const target = publishers.get(message.publisherId);
+      let entries: unknown[] = [];
+      const runs = target?.value.runs;
+      if (Array.isArray(runs)) {
+        for (const item of runs) {
+          if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+          const record = item as { run?: { id?: unknown }; transcripts?: unknown };
+          if (record.run?.id !== message.runId) continue;
+          const transcripts = record.transcripts;
+          if (transcripts && typeof transcripts === "object" && !Array.isArray(transcripts)) {
+            const found = (transcripts as Record<string, unknown>)[message.agentId];
+            entries = Array.isArray(found) ? found : [];
+          }
+          break;
+        }
+      }
+      const reply = { type: "transcript", publisherId: message.publisherId, runId: message.runId, agentId: message.agentId, entries };
+      if (Buffer.byteLength(JSON.stringify(reply)) > maxFrameBytes) {
+        emit(client, { type: "transcript", publisherId: message.publisherId, runId: message.runId, agentId: message.agentId, ok: false, error: "Transcript is too large" });
+        return;
+      }
+      emit(client, reply);
+      return;
+    }
     if (client.kind !== "browser" || message.type !== "ui:action" || typeof message.publisherId !== "string" || typeof message.runId !== "string" || typeof message.action !== "string") return;
     const target = publishers.get(message.publisherId);
     if (!target || !target.value.connected) { emit(client, { type: "action-result", requestId: message.requestId, ok: false, error: "Publisher is disconnected" }); return; }
