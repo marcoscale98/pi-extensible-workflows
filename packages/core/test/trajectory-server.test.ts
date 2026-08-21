@@ -44,6 +44,10 @@ function maskedFrame(value: string): Buffer {
   return Buffer.concat([header, mask, body]);
 }
 
+function maskedCloseFrame(): Buffer {
+  return Buffer.from([0x88, 0x80, 1, 2, 3, 4]);
+}
+
 function decodeTextFrame(buffer: Buffer): { payload: string } | undefined {
   if (buffer.length < 2) return undefined;
   const second = buffer[1] ?? 0;
@@ -179,6 +183,45 @@ void test("Trajectory keeps the browser socket when combined publisher state exc
       const runs = (publisher as { runs?: { transcripts?: { agent?: unknown[] } }[] }).runs;
       assert.deepEqual(runs?.[0]?.transcripts?.agent ?? [], []);
     }
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    server.closeAllConnections();
+    server.closeIdleConnections();
+    server.close();
+    server.unref();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+void test("Trajectory removes disconnected publishers from browser state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "trajectory-server-disconnect-"));
+  const port = await availablePort();
+  const server = createTrajectoryServer(port, join(root, "trajectory.lock"));
+  await listen(server, port);
+  const sockets: Socket[] = [];
+  try {
+    const origin = `http://127.0.0.1:${String(port)}`;
+    const publisherOne = await handshake(port, origin);
+    const publisherTwo = await handshake(port, origin);
+    sockets.push(publisherOne.socket, publisherTwo.socket);
+    publisherOne.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "one" })));
+    publisherOne.socket.write(maskedFrame(publisherState("one", "one")));
+    publisherTwo.socket.write(maskedFrame(JSON.stringify({ type: "publisher:attach", publisherId: "two" })));
+    publisherTwo.socket.write(maskedFrame(publisherState("two", "two")));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const browser = await handshake(port, origin);
+    sockets.push(browser.socket);
+    const initial = readJsonFrame(browser.socket);
+    browser.socket.write(maskedFrame(JSON.stringify({ type: "ui:attach" })));
+    const firstState = await initial as { publishers?: { id?: unknown }[] };
+    assert.deepEqual(firstState.publishers?.map((publisher) => publisher.id), ["one", "two"]);
+
+    const nextState = readJsonFrame(browser.socket);
+    publisherOne.socket.write(maskedCloseFrame());
+    const afterDisconnect = await nextState as { publishers: { id?: unknown; connected?: unknown }[] };
+    assert.deepEqual(afterDisconnect.publishers.map((publisher) => publisher.id), ["two"]);
+    assert.equal(afterDisconnect.publishers.some((publisher) => publisher.connected === false), false);
   } finally {
     for (const socket of sockets) socket.destroy();
     server.closeAllConnections();

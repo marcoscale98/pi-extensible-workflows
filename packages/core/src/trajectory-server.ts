@@ -142,8 +142,7 @@ export function createTrajectoryServer(port: number, lockPath: string, maxFrameB
   const disconnect = (client: Client) => {
     clients.delete(client);
     if (client.kind === "publisher" && client.publisherId && publishers.get(client.publisherId)?.client === client) {
-      const current = publishers.get(client.publisherId);
-      if (current) publishers.set(client.publisherId, { client, value: { ...current.value, connected: false, lastSeen: new Date().toISOString() } });
+      publishers.delete(client.publisherId);
       publishState();
       scheduleIdleExit();
     }
@@ -170,10 +169,11 @@ export function createTrajectoryServer(port: number, lockPath: string, maxFrameB
       cancelIdleExit();
       publishers.set(id, { client, value: { ...(publishers.get(id)?.value ?? { id }), ...publisher, connected: true } });
       void withDescribedRuns(message.runs).then((runs) => {
-        if (client.publisherId !== id) return;
+        if (client.publisherId !== id || publishers.get(id)?.client !== client) return;
         publishers.set(id, { client, value: { ...publisher, connected: true, runs } });
         publishState();
       }, () => {
+        if (client.publisherId !== id || publishers.get(id)?.client !== client) return;
         publishers.set(id, { client, value: { ...publisher, connected: true, runs: Array.isArray(message.runs) ? message.runs : [] } });
         publishState();
       });

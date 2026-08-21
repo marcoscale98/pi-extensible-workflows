@@ -12,6 +12,7 @@
 ### Fixes
 - Fetch one agent transcript on demand when combined Trajectory state exceeds the WebSocket frame cap, so agent views keep their events.
 - Label canonical Trajectory skill reads as `SKILL` in event and inspector views while retaining the tool inspector panes ([#219](https://github.com/vekexasia/pi-extensible-workflows/issues/219)).
+- Drop disconnected Trajectory publishers and their runs, returning an open session to the empty home view ([#218](https://github.com/vekexasia/pi-extensible-workflows/issues/218)).
 - Collapse shadowed model aliases to the static settings winner in the LLM-facing workflow catalog index and detail results while preserving full provenance for trusted catalogs ([#210](https://github.com/vekexasia/pi-extensible-workflows/issues/210)).
 - Clarify Trajectory message token usage as per-call provider input/output (with optional reasoning and cache rows) or a displayed-text estimate, without duplicating it in the header ([#221](https://github.com/vekexasia/pi-extensible-workflows/issues/221)).
 

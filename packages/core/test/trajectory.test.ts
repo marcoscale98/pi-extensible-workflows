@@ -77,6 +77,17 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
   assert.doesNotMatch(source, /agent-path/);
 });
 
+void test("Trajectory returns to an empty home when a publisher disappears", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /const livePublishers = \(\) => state\.publishers\.filter\(\(publisher\) => publisher\.connected === true\)/);
+  assert.match(source, /function renderSidebar\(\).*livePublishers\(\)\.map/);
+  assert.match(source, /function renderHome\(\)/);
+  assert.match(source, /Select a run\./);
+  assert.match(source, /function selectHome\(mode = "replace"\)/);
+  assert.match(source, /let hasAcceptedState = false/);
+  assert.doesNotMatch(source, /if \(!selected\(\) && allRuns\(\)\[0\]\)/);
+});
+
 type TrajectoryPreview = { text: string; names: string[]; overflow: number };
 type TrajectoryPreviewHelpers = {
   compactSkillReadPreview: (entry: unknown, entries?: readonly unknown[]) => string | undefined;
