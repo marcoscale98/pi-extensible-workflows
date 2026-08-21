@@ -259,7 +259,7 @@ void test("Trajectory returns to an empty home when a publisher disappears", () 
   assert.match(source, /Select a run\./);
   assert.match(source, /function selectHome\(mode = "replace"\)/);
   assert.match(source, /let hasAcceptedState = false/);
-  assert.match(source, /call\(history, \{ view: document\.body\.dataset\.view, run: state\.currentRun, agent: state\.currentAgent \}, "", next\)/);
+  assert.match(source, /call\(history, \{ view: document\.body\.dataset\.view, run: target\?\.kind === "run" \? state\.currentRun : null, subagent:/);
   assert.match(source, /value\.truncated === true/);
   assert.match(source, /value\.initial === true && hasAcceptedState/);
   assert.match(source, /setView\("run", mode\)/);
@@ -602,7 +602,8 @@ void test("Trajectory restores home, run, and agent views from the query on refr
   assert.match(source, /\$\("view-run"\)\.classList\.toggle\("hidden", document\.body\.dataset\.view !== "run"\)/);
   assert.match(source, /\$\("view-agent"\)\.classList\.toggle\("hidden", document\.body\.dataset\.view === "run"\)/);
   assert.match(source, /shouldAutoSelect = !hasAcceptedState && !state\.currentRun && !new URLSearchParams\(location\.search\)\.has\("view"\)/);
-  assert.match(source, /state\.currentRun = next\.run \|\| null; state\.currentAgent = next\.agent \|\| null;/);
+  assert.match(source, /const ref = view === "subagent" \? next\.subagent \|\| next\.run : next\.run; state\.currentRun = ref \|\| null; state\.currentAgent = next\.agent \|\| null;/);
+  assert.match(source, /const initialRef = initialView === "subagent" \? query\.get\("subagent"\) \|\| query\.get\("run"\)/);
   assert.doesNotMatch(source, /if \(next\.run\) state\.currentRun = next\.run; if \(next\.agent\) state\.currentAgent = next\.agent;/);
 });
 
@@ -621,7 +622,9 @@ void test("Trajectory target refs round-trip subagent selections", () => {
   assert.equal(helpers.targetKey(target as { kind: string; publisherId: string; id: string }), "subagent:publisher:agent");
   assert.equal(helpers.transcriptKey("publisher", "agent"), "publisher\tsubagent\tagent");
   assert.match(source, /searchParams\.set\("subagent", state\.currentRun\)/);
-  assert.match(source, /view === "subagent" \? next\.subagent \|\| next\.agent/);
+  assert.match(source, /subagent: target\?\.kind === "subagent" \? state\.currentRun : null/);
+  assert.match(source, /view === "subagent" \? next\.subagent \|\| next\.run : next\.run/);
+  assert.doesNotMatch(source, /view === "subagent" \? next\.subagent \|\| next\.agent/);
 });
 
 void test("Trajectory renders a publisher subagent sidebar section", () => {
@@ -658,16 +661,26 @@ void test("Trajectory subagent dossier only exposes valid controls", () => {
   assert.doesNotMatch(completed, /Stop|Retry|Pause|Resume/);
 });
 
+void test("Trajectory keeps subagent controls and event scroll stable during updates", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  assert.match(source, /if \(state\.inspSig !== dossierSig\)/);
+  assert.match(source, /const eventPanel = \$\("subagent-event-inspector"\)/);
+  assert.match(source, /if \(state\.eventsSig !== eventsSig\)/);
+  assert.match(source, /events\.scrollTop = eventsScroll/);
+  assert.match(source, /setInterval\(\(\) => \{ if \(document\.body\.dataset\.view === "run"\) renderRun\(\); \}, 1000\)/);
+});
 void test("Trajectory subagent Gantt gives running and finished lanes tool geometry", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    const timingEntryType");
   const helperEnd = source.indexOf("    function phases", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  const helpers = runInNewContext(`(() => { const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); const fmtClock = (value) => String(value); const fmtRuntime = (value) => String(value); const stateClass = (value) => value === "running" ? "spin" : value === "completed" ? "ok" : "fail"; const glyph = (value) => value; ${source.slice(helperStart, helperEnd)}; return { renderSubagentGantt }; })()`) as { renderSubagentGantt: (publisher: { subagents: readonly Record<string, unknown>[] }) => string };
-  const html = helpers.renderSubagentGantt({ subagents: [
-    { id: "running", label: "live", state: "running", startedAt: 1000, transcript: [{ type: "custom", customType: "pi-workflows:tool-timing", data: { toolCallId: "tool", toolName: "bash", startedAt: 1100, completedAt: 1300, durationMs: 200, isError: false } }] },
-    { id: "finished", label: "done", state: "completed", startedAt: 2000, finishedAt: 3000, transcript: [] },
-  ] });
+  const helpers = runInNewContext(`(() => { const state = { publishers: [], transcripts: {} }; const transcriptKey = (publisherId, targetId) => publisherId + "\tsubagent\t" + targetId; const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); const fmtClock = (value) => String(value); const fmtRuntime = (value) => String(value); const stateClass = (value) => value === "running" ? "spin" : value === "completed" ? "ok" : "fail"; const glyph = (value) => value; ${source.slice(helperStart, helperEnd)}; return { renderSubagentGantt, state }; })()`) as { renderSubagentGantt: (publisher: { subagents: readonly Record<string, unknown>[] }) => string; state: { publishers: { subagents: readonly Record<string, unknown>[] }[]; transcripts: Record<string, readonly Record<string, unknown>[]> } };
+  const running = { id: "running", label: "live", state: "running", startedAt: 1000, transcript: [] };
+  const finished = { id: "finished", label: "done", state: "completed", startedAt: 2000, finishedAt: 3000, transcript: [] };
+  const publisher = { id: "publisher", subagents: [running, finished] };
+  helpers.state.publishers.push(publisher);
+  helpers.state.transcripts["publisher\tsubagent\trunning"] = [{ type: "custom", customType: "pi-workflows:tool-timing", data: { toolCallId: "tool", toolName: "bash", startedAt: 1100, completedAt: 1300, durationMs: 200, isError: false } }];
+  const html = helpers.renderSubagentGantt(publisher);
   assert.match(html, /data-subagent="running"/);
   assert.match(html, /data-subagent="finished"/);
   assert.match(html, /class="bar tool ok"/);
