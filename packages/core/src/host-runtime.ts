@@ -270,6 +270,7 @@ export function withWorkflowFunctions(bridge: WorkflowBridge, store: RunStore, r
   const functionAgentOccurrences = new Map<string, number>();
   const functionShellOccurrences = new Map<string, number>();
   const functionInvokeOccurrences = new Map<string, number>();
+  const functionInvokeBreadcrumbOccurrences = new Map<string, number>();
   const invokeFunction = async (name: string, input: Readonly<Record<string, JsonValue>>, signal: AbortSignal, identity: FunctionIdentity, breadcrumb?: string): Promise<JsonValue> => {
     const path = identity.path;
     const structuralPath = identity.structuralPath;
@@ -280,15 +281,20 @@ export function withWorkflowFunctions(bridge: WorkflowBridge, store: RunStore, r
     const parentBreadcrumb = breadcrumb ?? functionBreadcrumb(name, identity.occurrence);
     const context: WorkflowFunctionContext = {
       run: runContext,
-      invoke: async (targetName, targetInput) => {
+      invoke: async (targetName, targetInput, label) => {
+        if (label !== undefined && (typeof label !== "string" || !label.trim())) fail("INVALID_METADATA", "invoke label must be a non-empty string");
         const inherited = inheritedHostAgentPath.getStore() ?? structuralPath;
         const scopedWorktreeOwner = inheritedHostWorktreeOwner.getStore() ?? worktreeOwner;
         const key = JSON.stringify([path, inherited, targetName]);
         const occurrence = (functionInvokeOccurrences.get(key) ?? 0) + 1;
         functionInvokeOccurrences.set(key, occurrence);
+        const breadcrumbName = label === undefined ? targetName : label;
+        const breadcrumbKey = JSON.stringify([path, inherited, breadcrumbName]);
+        const breadcrumbOccurrence = (functionInvokeBreadcrumbOccurrences.get(breadcrumbKey) ?? 0) + 1;
+        functionInvokeBreadcrumbOccurrences.set(breadcrumbKey, breadcrumbOccurrence);
         const nestedPath = operationPath("function", "nested", path, ...inherited, targetName, `occurrence:${String(occurrence)}`);
         const nestedIdentity: FunctionIdentity = { path: nestedPath, structuralPath: [...inherited], occurrence, ...(scopedWorktreeOwner ? { worktreeOwner: scopedWorktreeOwner } : {}) };
-        return invokeFunction(targetName, targetInput, signal, nestedIdentity, `${parentBreadcrumb} > ${functionBreadcrumb(targetName, occurrence)}`);
+        return invokeFunction(targetName, targetInput, signal, nestedIdentity, `${parentBreadcrumb} > ${functionBreadcrumb(breadcrumbName, breadcrumbOccurrence)}`);
       },
       agent: async (prompt: string, options?: Readonly<AgentOptions>) => {
         if (!bridge.agent || typeof prompt !== "string") fail("AGENT_FAILED", "No agent bridge is available");

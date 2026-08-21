@@ -152,7 +152,7 @@
             <tr><td><code>checkpoint(input)</code></td><td>Waits for a decision described by <code>{ name, prompt, context }</code> and returns a boolean. The prompt and context have the same size limits as the workflow primitive.</td></tr>
             <tr><td><code>phase(name)</code></td><td>Records a progress phase. It returns no workflow value. In a sequential loop, use <code>phase(slice.name)</code> for semantic labels such as <code>backend-safety</code>.</td></tr>
             <tr><td><code>log(message)</code></td><td>Persists each bounded message with a timestamp in the run events. Attached foreground logs render in the live workflow item; background or detached logs append as bounded TUI transcript entries and are shown in Trajectory, capped at 4 KB.</td></tr>
-            <tr><td><code>invoke(name, input)</code></td><td>Calls another registered function by unqualified name, with input and output schema validation. Use this for composition instead of importing an implementation.</td></tr>
+            <tr><td><code>invoke(name, input, label?)</code></td><td>Calls another registered function by unqualified name, with input and output schema validation. An optional non-empty <code>label</code> replaces the function name in presentation breadcrumbs; journal identity remains the function name and occurrence. Use this for composition instead of importing an implementation.</td></tr>
           </tbody>
         </table></div>
         <h3><code>WorkflowRunContext</code></h3>

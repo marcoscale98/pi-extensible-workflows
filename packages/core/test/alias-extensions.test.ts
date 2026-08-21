@@ -302,6 +302,36 @@ void test("host composes occurrence-aware nested function breadcrumbs", async ()
   await wrapped.function("outer", {}, controller.signal, { path: "function/outer/2", structuralPath: [], occurrence: 2 });
   assert.deepEqual(breadcrumbs, ["outer > inner", "outer > inner #2", "outer #2 > inner", "outer #2 > inner #2"]);
 });
+void test("host uses optional labels for nested function breadcrumbs", async () => {
+  const registry = new WorkflowRegistry();
+  registry.register({
+    version: "1.0.0", headline: "Nested explicit labels",
+    functions: {
+      inner: { description: "Inner", input: { type: "object", additionalProperties: false }, output: { type: "object", additionalProperties: false }, async run(_input, context) { await context.agent("inner"); return {}; } },
+      parent: { description: "Parent", input: { type: "object", additionalProperties: false }, output: { type: "object", additionalProperties: false }, async run(_input, context) {
+        await context.invoke("inner", {}, "alpha");
+        await context.invoke("inner", {}, "beta");
+        await context.invoke("inner", {}, "alpha");
+        await context.invoke("inner", {});
+        await assert.rejects(context.invoke("inner", {}, " "), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
+        return {};
+      } },
+    },
+  });
+  const completed = new Map<string, JsonValue>();
+  const store = {
+    replay: async (path: string) => { const value = completed.get(path); return value === undefined ? undefined : { path, value }; },
+    complete: async (path: string, value: JsonValue) => { completed.set(path, value); },
+  } as unknown as RunStore;
+  const breadcrumbs: string[] = [];
+  const controller = new AbortController();
+  const bridge = { agent: async (_prompt: string, _options: Readonly<Record<string, JsonValue>>, _signal: AbortSignal, identity: import("../src/types.js").AgentIdentity) => { breadcrumbs.push(identity.parentBreadcrumb ?? ""); return null; } };
+  const wrapped = withWorkflowFunctions(bridge, store, workflowRunContext("/repo", "session", "run", { name: "nested-labels" }, null, controller.signal), registry);
+  if (!wrapped.function) throw new Error("Missing function bridge");
+  await wrapped.function("parent", {}, controller.signal, { path: "function/parent/1", structuralPath: [], occurrence: 1 });
+  assert.deepEqual(breadcrumbs, ["parent > alpha", "parent > beta", "parent > alpha #2", "parent > inner"]);
+  assert.equal(completed.has("function/nested/function%2Fparent%2F1/inner/occurrence%3A5"), false);
+});
 void test("registered function resume keeps occurrence breadcrumbs deterministic", async () => {
   const registry = new WorkflowRegistry();
   let interrupt = true;

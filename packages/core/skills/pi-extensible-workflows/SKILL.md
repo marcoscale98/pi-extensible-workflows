@@ -133,7 +133,7 @@ const results = await parallel("implementation", {
 });
 ```
 
-Registered extension functions receive `withWorktree` in context and can compose other registered functions with `context.invoke("reviewRepository", { focus: "security" })`. Their public inputs and outputs remain JSON; callbacks cannot cross the extension boundary.
+Registered extension functions receive `withWorktree` in context and can compose other registered functions with `context.invoke("reviewRepository", { focus: "security" }, "security-review")`. The optional label is presentation-only; journal identity remains the function name and occurrence. Their public inputs and outputs remain JSON; callbacks cannot cross the extension boundary.
 
 ## Rules
 
