@@ -606,6 +606,42 @@ void test("Trajectory restores home, run, and agent views from the query on refr
   assert.match(source, /const initialRef = initialView === "subagent" \? query\.get\("subagent"\) \|\| query\.get\("run"\)/);
   assert.doesNotMatch(source, /if \(next\.run\) state\.currentRun = next\.run; if \(next\.agent\) state\.currentAgent = next\.agent;/);
 });
+void test("Trajectory subagent crumb returns home with a cleared target and URL", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const navigationStart = source.indexOf("    function setView");
+  const navigationEnd = source.indexOf("    function selectRun", navigationStart);
+  const handlerStart = source.indexOf('    $("q").addEventListener');
+  const handlerEnd = source.indexOf('    $("events").addEventListener', handlerStart);
+  assert.ok(navigationStart >= 0 && navigationEnd > navigationStart && handlerStart >= 0 && handlerEnd > handlerStart);
+  const result = runInNewContext(`(() => {
+    const state = { currentRun: "publisher:agent", currentTarget: { kind: "subagent", publisherId: "publisher", id: "agent" }, pendingTarget: { kind: "subagent" }, currentPub: "publisher", currentAgent: "agent", agentRange: {}, agentRangeAgent: "agent", selectedEvent: 1, eventsSig: "events", subagentEventSig: "events" };
+    const elements = {
+      q: { addEventListener: () => {} },
+      events: { addEventListener: () => {} },
+      "run-crumb": { addEventListener: (_type, handler) => { elements["run-crumb"].handler = handler; } },
+      "view-run": { classList: { toggle: () => {} } },
+      "view-agent": { classList: { toggle: () => {} } },
+    };
+    const $ = (id) => elements[id];
+    const document = { body: { dataset: { view: "subagent" } } };
+    const location = { href: "http://trajectory.test/?view=subagent&subagent=publisher%3Aagent", pathname: "/", search: "?view=subagent&subagent=publisher%3Aagent" };
+    const history = { calls: [], pushState: (value, _title, url) => history.calls.push({ value, url }) };
+    const currentTarget = () => state.currentTarget;
+    const renderRun = () => {};
+    const renderAgent = () => {};
+    const closeScript = () => {};
+    const renderSidebar = () => {};
+    const applyEventSearch = () => {};
+    ${source.slice(navigationStart, navigationEnd)}
+    ${source.slice(handlerStart, handlerEnd)}
+    elements["run-crumb"].handler();
+    return { view: document.body.dataset.view, currentRun: state.currentRun, currentTarget: state.currentTarget, history: history.calls };
+  })()`, { URL }) as { view: string; currentRun: string | null; currentTarget: unknown; history: Array<{ value: { view: string; target: unknown }; url: string }> };
+  assert.equal(result.view, "run");
+  assert.equal(result.currentRun, null);
+  assert.equal(result.currentTarget, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.history)), [{ value: { view: "run", run: null, subagent: null, agent: null, target: null }, url: "/?view=run" }]);
+});
 
 void test("Trajectory target refs round-trip subagent selections", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
@@ -639,6 +675,45 @@ void test("Trajectory renders a publisher subagent sidebar section", () => {
   assert.match(sidebar, /subagentModel\(subagent\)/);
   assert.match(sidebar, /subagentCost\(subagent\)/);
   assert.match(sidebar, /subagentRuntime\(subagent\)/);
+});
+void test("Trajectory sidebar subagent rows keep telemetry compact and model discoverable", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const helperStart = source.indexOf("    function renderSidebar");
+  const helperEnd = source.indexOf("    function renderGantt", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const result = runInNewContext(`(() => {
+    const subagent = { id: "11111111-1111-4111-8111-111111111111", label: "publisher audit", state: "running", model: { provider: "anthropic", model: "claude-sonnet-4-5" }, progress: { accounting: { cost: 0.24 } }, startedAt: Date.now() - 120000 };
+    const state = { publishers: [{ id: "publisher", title: "publisher", connected: true, runs: [], subagents: [subagent] }], currentPub: null, currentTarget: null, sidebarCollapsed: new Set() };
+    const sidebar = { innerHTML: "" };
+    const $ = () => sidebar;
+    const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const livePublishers = () => state.publishers;
+    const sidebarGroups = () => [{ key: "publisher", label: "publisher", publishers: state.publishers }];
+    const currentTarget = () => state.currentTarget;
+    const targetKey = (target) => String(target.kind || "") + ":" + String(target.publisherId || "") + ":" + String(target.id || "");
+    const runKey = () => "publisher:run";
+    const subagentKey = (_publisher, value) => "publisher:" + value.id;
+    const attention = () => 0;
+    const runCost = () => 0;
+    const runState = () => "completed";
+    const glyph = () => "*";
+    const subagentAttention = () => 0;
+    const fmtCost = (value) => "$" + Number(value || 0).toFixed(2);
+    const fmtRuntime = () => "2m";
+    const startOf = () => new Date();
+    const age = () => "0m ago";
+    const subagentModel = (value) => value.model.provider + "/" + value.model.model;
+    const subagentLabel = (value) => value.label;
+    const subagentCost = (value) => value.progress.accounting.cost;
+    const subagentRuntime = () => 120000;
+    const renderThemeButtons = () => {};
+    ${source.slice(helperStart, helperEnd)}
+    renderSidebar();
+    return sidebar.innerHTML;
+  })()`, { Date }) as string;
+  assert.match(result, /class="run-item subagent/);
+  assert.match(result, /title="running · anthropic\/claude-sonnet-4-5 · \$0\.24 · 2m"/);
+  assert.match(result, />\*<span class="n"[^>]*>publisher audit<\/span>.*running · \$0\.24 · 2m/);
 });
 
 void test("Trajectory subagent dossier only exposes valid controls", () => {
