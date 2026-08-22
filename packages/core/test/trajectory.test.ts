@@ -713,7 +713,9 @@ void test("Trajectory sidebar subagent rows keep telemetry compact and model dis
   })()`, { Date }) as string;
   assert.match(result, /class="run-item subagent/);
   assert.match(result, /title="running · anthropic\/claude-sonnet-4-5 · \$0\.24 · 2m"/);
-  assert.match(result, />\*<span class="n"[^>]*>publisher audit<\/span>.*running · \$0\.24 · 2m/);
+  // The glyph carries the state, so the visible telemetry stays as short as a workflow run row's.
+  assert.match(result, />\*<span class="n"[^>]*>publisher audit<\/span><span class="tel"[^>]*>\$0\.24 · 2m<\/span>/);
+  assert.doesNotMatch(result, /<span class="tel"[^>]*>running/);
 });
 
 void test("Trajectory subagent dossier only exposes valid controls", () => {
