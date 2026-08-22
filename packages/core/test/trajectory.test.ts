@@ -764,3 +764,36 @@ void test("Trajectory subagent Gantt gives running and finished lanes tool geome
   const widths = [...html.matchAll(/class="bar(?: tool)? [^"]+" style="left:[^;]+%;width:([^%]+)%/g)].map((match) => Number(match[1]));
   assert.ok(widths.length >= 3 && widths.every((width) => width > 0));
 });
+
+void test("Trajectory tool pane clicks record the selected pane", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const handlerStart = source.indexOf('if (target.dataset.pane)');
+  const handlerEnd = source.indexOf('if (target.dataset.run)', handlerStart);
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
+  const handler = source.slice(handlerStart, handlerEnd);
+  const calls: string[] = [];
+  const state = { toolPane: "summary", sysPane: "prompt", selectedEvent: 0 };
+  const target = { dataset: { pane: "result" }, closest: (selector: string) => selector === "#tool-tabs" ? { id: "tool-tabs" } : undefined };
+  runInNewContext(`(() => { ${handler} })()`, {
+    target, state,
+    selected: () => ({ target: { kind: "run" }, record: { run: { agents: [{ id: "agent-1" }] } } }),
+    subagentAgent: () => ({ id: "agent-1" }),
+    agentEntries: () => [{ type: "message" }],
+    entryDetails: () => ({ kind: "tool" }),
+    renderInspector: () => { calls.push("inspector"); },
+    renderSystemPane: () => { calls.push("system"); },
+  });
+  assert.equal(state.toolPane, "result");
+  assert.deepEqual(calls, ["inspector"]);
+});
+
+void test("Trajectory run rendering preserves the dossier scroll across re-renders", () => {
+  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const start = source.indexOf("    function renderRun()");
+  const end = source.indexOf("    function renderAgent()", start);
+  assert.ok(start >= 0 && end > start);
+  const body = source.slice(start, end);
+  // The dossier is rewritten by the one-second interval and by every state frame, so the scroll must be restored.
+  assert.match(body, /const dossierBody = \$\("insp"\)\.querySelector\("\.ins-body"\); const dossierScroll = dossierBody \? dossierBody\.scrollTop : 0;/);
+  assert.match(body, /\$\("insp"\)\.innerHTML = renderDossier\(publisher, record\); const nextDossierBody = \$\("insp"\)\.querySelector\("\.ins-body"\); if \(nextDossierBody && dossierScroll\) nextDossierBody\.scrollTop = dossierScroll;/);
+});
