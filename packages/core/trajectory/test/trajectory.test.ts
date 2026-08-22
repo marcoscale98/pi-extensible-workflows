@@ -4,10 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createTrajectoryRunLoader, createTrajectorySubagentLoader, applySystemPrompts, applyToolDescriptions, trajectoryUrl } from "../src/trajectory.js";
-import { RunStore } from "../src/persistence.js";
-import { createLaunchSnapshot } from "../src/utils.js";
-import type { PersistedRun } from "../src/persistence.js";
+import { createTrajectoryRunLoader, createTrajectorySubagentLoader, applySystemPrompts, applyToolDescriptions } from "../../src/trajectory.js";
+import { trajectoryUrl } from "../src/index.js";
+import { RunStore } from "../../src/persistence.js";
+import { createLaunchSnapshot } from "../../src/utils.js";
+import type { PersistedRun } from "../../src/persistence.js";
 
 void test("applySystemPrompts fills missing prompts from session records", () => {
   const run = { agents: [{ id: "a", attemptDetails: [{ session: { transport: "local", sessionId: "s1" } }] }, { id: "b", systemPrompt: "keep", attemptDetails: [{ session: { transport: "local", sessionId: "s2" } }] }] } as unknown as PersistedRun;
@@ -99,7 +100,7 @@ void test("Trajectory overlays live subagent status over stale persisted status"
 });
 
 void test("Trajectory preference storage failures preserve defaults", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    const defaultRunLayout");
   const helperEnd = source.indexOf("    const state", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
@@ -120,7 +121,7 @@ void test("Trajectory preference storage failures preserve defaults", () => {
 });
 
 void test("Trajectory theme preference storage failures preserve the default", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    function renderThemeButtons");
   const helperEnd = source.indexOf("    function renderSidebar", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
@@ -135,7 +136,7 @@ void test("Trajectory theme preference storage failures preserve the default", (
 });
 
 void test("Trajectory agent grid groups persisted agent scopes", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   assert.match(source, /function agentGridGroups\(agents\)/);
   assert.match(source, /JSON\.stringify\(\[agent\.structuralPath \?\? \[\], agent\.parentBreadcrumb \?\? null\]\)/);
   assert.match(source, /agentGridGroups\(phaseAgents\)/);
@@ -145,7 +146,7 @@ void test("Trajectory agent grid groups persisted agent scopes", () => {
 });
 
 void test("Trajectory run view renders the complete persisted log stream", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   assert.match(source, /function renderLogs\(record\)/);
   assert.match(source, /filter\(\(event\) => event\.type === "log"\)/);
   assert.match(source, /fmtClock\(event\.timestamp\)/);
@@ -157,7 +158,7 @@ void test("Trajectory run view renders the complete persisted log stream", () =>
 });
 
 void test("Trajectory agent view requests a compacted transcript on demand", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   assert.match(source, /function requestTranscript\(/);
   assert.match(source, /type: "ui:transcript"/);
   assert.match(source, /message\.type === "transcript"/);
@@ -165,7 +166,7 @@ void test("Trajectory agent view requests a compacted transcript on demand", () 
 });
 
 void test("Trajectory timelines keep cursors and agent-only range selection", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   assert.match(source, /bindTimeCursor\(\$\("swim"\), "\.axis \.ticks"\)/);
   assert.match(source, /bindTimeCursor\(\$\("agent-timeline"\), "\.axis \.ticks"\)/);
   assert.match(source, /bindBrush\(\$\("agent-timeline"\), "\.axis \.ticks", setAgentRange\)/);
@@ -185,7 +186,7 @@ void test("Trajectory timelines keep cursors and agent-only range selection", ()
 });
 
 void test("Trajectory run layout supports bounded Gantt resizing and persisted section toggles", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   assert.match(source, /--swim: 220px/);
   assert.match(source, /\.swim \{[^}]*height: var\(--swim\)[^}]*overflow-y: auto/);
   assert.match(source, /\.swim \.axis \{ position: sticky; top: 0; z-index: 4; background: var\(--bg-2\); \}/);
@@ -217,8 +218,8 @@ void test("Trajectory run layout supports bounded Gantt resizing and persisted s
 });
 
 void test("Trajectory sidebar groups live publishers by full project folder", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
-  const trajectorySourceUrl = [new URL("../src/trajectory.ts", import.meta.url), new URL("../src/trajectory.js", import.meta.url), new URL("../../src/trajectory.ts", import.meta.url)].find((url) => existsSync(url));
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
+  const trajectorySourceUrl = [new URL("../src/index.ts", import.meta.url), new URL("../src/index.js", import.meta.url), new URL("../../src/trajectory.ts", import.meta.url), new URL("../../src/trajectory.js", import.meta.url)].find((url) => existsSync(url));
   assert.ok(trajectorySourceUrl);
   const trajectorySource = readFileSync(trajectorySourceUrl, "utf8");
   const helpers = loadTrajectorySidebarHelpers(source);
@@ -251,7 +252,7 @@ void test("Trajectory sidebar groups live publishers by full project folder", ()
 });
 
 void test("Trajectory returns to an empty home when a publisher disappears", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   assert.match(source, /const livePublishers = \(\) => state\.publishers\.filter\(\(publisher\) => publisher\.connected === true\)/);
   assert.match(source, /function renderSidebar\(\)/);
   assert.match(source, /sidebarGroups\(livePublishers\(\)\)/);
@@ -370,7 +371,7 @@ function loadTrajectoryMarkdownHelpers(source: string): TrajectoryMarkdownHelper
 }
 
 void test("Trajectory sanitizes markdown before rendering transcript and system prompt content", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helpers = loadTrajectoryMarkdownHelpers(source);
   const markdown = '<p onclick="alert(1)"><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre><script>alert(1)</script><a href="javascript:alert(1)">blocked</a><a href="java&#9;script:alert(1)">tab</a><img src="data:text/html,alert(1)" alt="image"><ul><li>done <input checked="" disabled="" type="checkbox"></li></ul>';
   assert.equal(helpers.sanitizeMarkdown(markdown), '<p><strong>Normal</strong><a href="https://example.com">link</a></p><pre><code class="language-js">code</code></pre><a>blocked</a><a>tab</a><img alt="image"><ul><li>done <input checked="" disabled="" type="checkbox"></li></ul>');
@@ -380,7 +381,7 @@ void test("Trajectory sanitizes markdown before rendering transcript and system 
 
 
 void test("Trajectory excludes non-message session records from agent events", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helpers = loadTrajectoryPreviewHelpers(source);
   assert.equal(helpers.isDisplayableTranscriptEntry({ type: "message" }), true);
   assert.equal(helpers.isDisplayableTranscriptEntry({ type: "tool_result" }), true);
@@ -392,7 +393,7 @@ void test("Trajectory excludes non-message session records from agent events", (
 });
 
 void test("Trajectory compacts canonical skill reads without losing event details", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helpers = loadTrajectoryPreviewHelpers(source);
   assert.match(source, /\.pill\.skill/);
   assert.match(source, /html\[data-theme="paper"\] \.pill\.skill/);
@@ -474,7 +475,7 @@ void test("Trajectory compacts canonical skill reads without losing event detail
 });
 
 void test("Trajectory renders structured tool previews in event rows", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   assert.match(source, /const toolPreviewHtml =/);
   assert.match(source, /class="tool-key"/);
   assert.match(source, /class="tool-value"/);
@@ -484,7 +485,7 @@ void test("Trajectory renders structured tool previews in event rows", () => {
 });
 
 void test("Trajectory summarizes assistant tool calls without dropping searchable arguments", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helpers = loadTrajectoryPreviewHelpers(source);
   const previewParts = (entry: unknown, entries: readonly unknown[] = []) => JSON.parse(JSON.stringify(helpers.eventPreviewParts(entry, entries))) as TrajectoryPreview;
   const call = (name: string, id: string, args: Record<string, unknown>) => ({ type: "toolCall", name, id, arguments: args });
@@ -574,7 +575,7 @@ function loadTrajectoryInspectorHelpers(source: string): TrajectoryInspectorHelp
 }
 
 void test("Trajectory message inspector distinguishes provider usage from estimates", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helpers = loadTrajectoryInspectorHelpers(source);
   const renderStart = source.indexOf("    function renderInspector");
   const messageStart = source.indexOf("const message =", renderStart);
@@ -598,7 +599,7 @@ void test("Trajectory message inspector distinguishes provider usage from estima
 });
 
 void test("Trajectory restores home, run, and agent views from the query on refresh", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   assert.match(source, /\$\("view-run"\)\.classList\.toggle\("hidden", document\.body\.dataset\.view !== "run"\)/);
   assert.match(source, /\$\("view-agent"\)\.classList\.toggle\("hidden", document\.body\.dataset\.view === "run"\)/);
   assert.match(source, /shouldAutoSelect = !hasAcceptedState && !state\.currentRun && !new URLSearchParams\(location\.search\)\.has\("view"\)/);
@@ -607,7 +608,7 @@ void test("Trajectory restores home, run, and agent views from the query on refr
   assert.doesNotMatch(source, /if \(next\.run\) state\.currentRun = next\.run; if \(next\.agent\) state\.currentAgent = next\.agent;/);
 });
 void test("Trajectory subagent crumb returns home with a cleared target and URL", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const navigationStart = source.indexOf("    function setView");
   const navigationEnd = source.indexOf("    function selectRun", navigationStart);
   const handlerStart = source.indexOf('    $("q").addEventListener');
@@ -644,7 +645,7 @@ void test("Trajectory subagent crumb returns home with a cleared target and URL"
 });
 
 void test("Trajectory target refs round-trip subagent selections", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    const targetRef");
   const helperEnd = source.indexOf("    const livePublishers", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
@@ -664,7 +665,7 @@ void test("Trajectory target refs round-trip subagent selections", () => {
 });
 
 void test("Trajectory renders a publisher subagent sidebar section", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const sidebarStart = source.indexOf("    function renderSidebar");
   const sidebarEnd = source.indexOf("    function renderGantt", sidebarStart);
   assert.ok(sidebarStart >= 0 && sidebarEnd > sidebarStart);
@@ -677,7 +678,7 @@ void test("Trajectory renders a publisher subagent sidebar section", () => {
   assert.match(sidebar, /subagentRuntime\(subagent\)/);
 });
 void test("Trajectory sidebar subagent rows match the workflow run row shape", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    function renderSidebar");
   const helperEnd = source.indexOf("    function renderGantt", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
@@ -720,7 +721,7 @@ void test("Trajectory sidebar subagent rows match the workflow run row shape", (
 });
 
 void test("Trajectory subagent stats bar only exposes valid controls", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    const subagentAccounting");
   const helperEnd = source.indexOf("    function renderAgent()", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
@@ -745,7 +746,7 @@ void test("Trajectory subagent stats bar only exposes valid controls", () => {
 });
 
 void test("Trajectory renders subagents through the same agent view as workflow agents", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   // One inspector path for both kinds: no dossier stacked above the event inspector, no nested panel.
   assert.doesNotMatch(source, /subagent-event-inspector/);
   assert.doesNotMatch(source, /renderSubagentDossier/);
@@ -756,7 +757,7 @@ void test("Trajectory renders subagents through the same agent view as workflow 
   assert.doesNotMatch(source, /setInterval\(\(\) => \{ if \(document\.body\.dataset\.view === "run"\) renderRun\(\); \}, 1000\)/);
 });
 void test("Trajectory subagent Gantt gives running and finished lanes tool geometry", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    const timingEntryType");
   const helperEnd = source.indexOf("    function phases", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
@@ -775,7 +776,7 @@ void test("Trajectory subagent Gantt gives running and finished lanes tool geome
 });
 
 void test("Trajectory tool pane clicks record the selected pane", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const handlerStart = source.indexOf('if (target.dataset.pane)');
   const handlerEnd = source.indexOf('if (target.dataset.run)', handlerStart);
   assert.ok(handlerStart >= 0 && handlerEnd > handlerStart);
@@ -797,7 +798,7 @@ void test("Trajectory tool pane clicks record the selected pane", () => {
 });
 
 void test("Trajectory run rendering preserves the dossier scroll across re-renders", () => {
-  const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../src/assets/index.html", import.meta.url), "utf8");
   const start = source.indexOf("    function renderRun()");
   const end = source.indexOf("    function renderAgent()", start);
   assert.ok(start >= 0 && end > start);

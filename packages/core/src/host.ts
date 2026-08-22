@@ -18,7 +18,8 @@ import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIf
 import { agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
 import backgroundWidget, { type BackgroundWidgetAPI } from "./background-widget.js";
 import { showChangelogNotice } from "./changelog.js";
-import { createTrajectoryController, createTrajectoryRunLoader, createTrajectorySubagentLoader, openTrajectoryUrl, trajectoryUrl, type TrajectoryActionRequest, type TrajectoryActionResult, type TrajectoryController } from "./trajectory.js";
+import { createTrajectoryRunLoader, createTrajectorySubagentLoader, type TrajectoryActionRequest, type TrajectoryActionResult } from "./trajectory.js";
+import { getTrajectoryHost, type TrajectoryPublisherProvider } from "./trajectory-host-handle.js";
 import { getSubagentManager } from "./subagent-manager-handle.js";
 import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, roleNameOf, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type ModelSpec, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import type { SubagentManagerContext, SubagentRunRequest, SubagentStatus } from "../subagents/src/contracts.js";
@@ -56,14 +57,7 @@ import {
   type WorkflowLogEntry,
 } from "./host-delivery.js";
 
-export type WorkflowTrajectoryDependencies = {
-  controller?: TrajectoryController;
-  openUrl?: (url: string) => void;
-};
-
-export type WorkflowExtensionAPI = Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "getThinkingLevel" | "on" | "registerCommand" | "registerTool" | "sendMessage"> & Pick<BackgroundWidgetAPI, "events" | "registerEntryRenderer" | "registerShortcut"> & {
-  trajectory?: WorkflowTrajectoryDependencies;
-};
+export type WorkflowExtensionAPI = Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "getThinkingLevel" | "on" | "registerCommand" | "registerTool" | "sendMessage"> & Pick<BackgroundWidgetAPI, "events" | "registerEntryRenderer" | "registerShortcut">;
 
 export {
   agentBreadcrumb,
@@ -352,9 +346,6 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   const liveSubagents = new Map<string, { readonly status: Readonly<SubagentStatus>; readonly request: Readonly<SubagentRunRequest> }>();
   const clearSubagentStatusObserver = (): void => { liveSubagents.clear(); registry.setSubagentStatusObserver(undefined); };
   registry.setSubagentStatusObserver((status, request) => { liveSubagents.set(status.id, { status, request }); });
-  const trajectoryController = pi.trajectory?.controller ?? createTrajectoryController(extensionAgentDir);
-  const openTrajectoryUrlFn = pi.trajectory?.openUrl ?? openTrajectoryUrl;
-  let trajectoryAutoOpened = false;
   const trajectoryRuns = (context: unknown) => {
     const host = object(context) ? context : undefined;
     const cwd = typeof host?.cwd === "string" ? host.cwd : undefined;
@@ -396,45 +387,28 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     if (request.action === "resume") { await resumeSelectedWorkflow(runId, false, context); return; }
     await recovery.retryWorkflowRun(runId, context);
   };
-  const openTrajectory = async (context: unknown): Promise<void> => {
-    try {
-      const { cwd, sessionId } = trajectoryRuns(context);
-      const trusted = projectTrusted(context);
-      const settings = resolveWorkflowSettings(cwd, trusted, workflowSettingsPath(extensionAgentDir)).effective.extensionSettings?.trajectory;
-      const port = settings?.port;
-      const themes = settings?.themes ?? false;
-      const current = object(context) ? context : undefined;
-      const loadRuns = createTrajectoryRunLoader(cwd, sessionId, home, (run) => {
-        const active = runs.get(run.id);
-        const live = withLiveActivities(run);
-        return active ? { ...live, state: active.lifecycle.state, usage: active.budget.usage } : live;
-      });
-      const loadSubagents = createTrajectorySubagentLoader(cwd, sessionId, extensionAgentDir, (subagent) => {
-        const live = liveSubagents.get(subagent.id);
-        if (!live) return subagent;
-        if (live.status.sessionId !== subagent.sessionId) return subagent;
-        if (live.status.state !== "running" && live.status.finishedAt === subagent.finishedAt) { liveSubagents.delete(subagent.id); return subagent; }
-        const attempt = live.status.attemptDetails?.at(-1) ?? subagent.attempt;
-        const tools = live.status.progress?.state?.tools ?? attempt?.setup.tools ?? subagent.tools;
-        const model = live.status.progress?.state?.model ?? attempt?.setup.model ?? subagent.model;
-        return { ...subagent, request: live.request, mode: live.request.mode ?? subagent.mode, state: live.status.state, tools, ...(live.status.startedAt === undefined ? {} : { startedAt: live.status.startedAt }), ...(live.status.finishedAt === undefined ? {} : { finishedAt: live.status.finishedAt }), ...(live.status.attempts === undefined ? {} : { attempts: live.status.attempts }), ...(live.status.error === undefined ? {} : { error: live.status.error }), ...(live.status.worktree === undefined ? {} : { worktree: live.status.worktree }), ...(model === undefined ? {} : { model }), ...(live.status.progress === undefined ? {} : { progress: live.status.progress }), ...(attempt === undefined ? {} : { attempt }) };
-      });
-      const input = { cwd, sessionId, ...(port === undefined ? {} : { port }), themes, loadRuns, loadSubagents, handleAction: (request: Readonly<TrajectoryActionRequest>) => trajectoryAction(request, context) };
-      const server = await trajectoryController.open(input);
-      const url = trajectoryUrl(server.port);
-      openTrajectoryUrlFn(url);
-      const ui = current && object(current.ui) ? current.ui : undefined;
-      if (typeof ui?.notify === "function") Reflect.apply(ui.notify, ui, [`Trajectory opened at ${url}`, "info"]);
-    } catch (error) {
-      const current = object(context) ? context : undefined;
-      const ui = current && object(current.ui) ? current.ui : undefined;
-      if (typeof ui?.notify === "function") Reflect.apply(ui.notify, ui, [`Unable to open Trajectory: ${errorText(error)}`, "error"]);
-    }
-  };
-  const autoOpenTrajectory = (context: Pick<ExtensionContext, "hasUI">): void => {
-    if (trajectoryAutoOpened || !context.hasUI) return;
-    trajectoryAutoOpened = true;
-    void openTrajectory(context);
+  const trajectoryProvider: TrajectoryPublisherProvider = (context) => {
+    const { cwd, sessionId } = trajectoryRuns(context);
+    const trusted = projectTrusted(context);
+    const settings = resolveWorkflowSettings(cwd, trusted, workflowSettingsPath(extensionAgentDir)).effective.extensionSettings?.trajectory;
+    const port = settings?.port;
+    const themes = settings?.themes ?? false;
+    const loadRuns = createTrajectoryRunLoader(cwd, sessionId, home, (run) => {
+      const active = runs.get(run.id);
+      const live = withLiveActivities(run);
+      return active ? { ...live, state: active.lifecycle.state, usage: active.budget.usage } : live;
+    });
+    const loadSubagents = createTrajectorySubagentLoader(cwd, sessionId, extensionAgentDir, (subagent) => {
+      const live = liveSubagents.get(subagent.id);
+      if (!live) return subagent;
+      if (live.status.sessionId !== subagent.sessionId) return subagent;
+      if (live.status.state !== "running" && live.status.finishedAt === subagent.finishedAt) { liveSubagents.delete(subagent.id); return subagent; }
+      const attempt = live.status.attemptDetails?.at(-1) ?? subagent.attempt;
+      const tools = live.status.progress?.state?.tools ?? attempt?.setup.tools ?? subagent.tools;
+      const model = live.status.progress?.state?.model ?? attempt?.setup.model ?? subagent.model;
+      return { ...subagent, request: live.request, mode: live.request.mode ?? subagent.mode, state: live.status.state, tools, ...(live.status.startedAt === undefined ? {} : { startedAt: live.status.startedAt }), ...(live.status.finishedAt === undefined ? {} : { finishedAt: live.status.finishedAt }), ...(live.status.attempts === undefined ? {} : { attempts: live.status.attempts }), ...(live.status.error === undefined ? {} : { error: live.status.error }), ...(live.status.worktree === undefined ? {} : { worktree: live.status.worktree }), ...(model === undefined ? {} : { model }), ...(live.status.progress === undefined ? {} : { progress: live.status.progress }), ...(attempt === undefined ? {} : { attempt }) };
+    });
+    return { cwd, sessionId, ...(port === undefined ? {} : { port }), themes, loadRuns, loadSubagents, handleAction: (request: Readonly<TrajectoryActionRequest>) => trajectoryAction(request, context) };
   };
   const withLiveActivities = (run: PersistedRun): PersistedRun => liveAgents.overlay(run);
   const terminalRunStates = new Map<string, "completed" | "failed" | "stopped">();
@@ -1061,7 +1035,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       for (const decision of await store.pendingWorkflowDecisions()) deliver(pi, recovery.budgetDecisionDelivery(loaded.snapshot.metadata, decision));
       scheduler.restoreRun(runId, loaded.snapshot.settings.concurrency, loaded.snapshot.identityVersion === LAUNCH_SNAPSHOT_IDENTITY_VERSION ? await store.loadOwnership() : [], () => runs.get(runId)?.budget.checkAgentLaunch());
     }
-    if (runIds.length > 0) autoOpenTrajectory(ctx);
+    if (runIds.length > 0) getTrajectoryHost()?.autoOpen(trajectoryProvider, ctx);
     const resumeSelect = uiHostCapabilities(ctx.ui)?.select;
     if (ctx.hasUI && resumeSelect) {
       const interrupted = [...runs.values()].filter((r) => r.lifecycle.state === "interrupted");
@@ -1160,7 +1134,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const budgetRuntime = new WorkflowBudgetRuntime(budget);
       const initialBudget = budgetRuntime.snapshot();
       await store.create({ id: runId, workflowName: checked.metadata.name, cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId(), state: "running", ...(parentRunId !== undefined ? { parentRunId } : {}), agents: [], agentSessions: [], delivery: params.foreground ? { mode: "foreground", state: "attached", toolCallId } : { mode: "background", state: "pending" }, ...(budget ? { budget } : {}), budgetVersion: 1, ...initialBudget }, snapshot);
-      autoOpenTrajectory(ctx);
+      getTrajectoryHost()?.autoOpen(trajectoryProvider, ctx);
       if (params.foreground) {
         const delivery: ForegroundDelivery = {
           store, inline: false, detached: false,
@@ -1328,7 +1302,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     },
   };
   pi.registerTool(workflowTool);
-  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground: deliveryController.moveForegroundToBackground, isForegroundAttached: deliveryController.isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked, openTrajectory, setNavigatorOpen: (open) => { if (open) backgroundWidgetController.suspend(); else backgroundWidgetController.resume(); } });
+  registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground: deliveryController.moveForegroundToBackground, isForegroundAttached: deliveryController.isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked, trajectoryProvider, setNavigatorOpen: (open) => { if (open) backgroundWidgetController.suspend(); else backgroundWidgetController.resume(); } });
   pi.on("session_shutdown", async () => {
     try {
       await Promise.all([...runs.entries()].map(async ([runId, run]) => {
@@ -1342,7 +1316,6 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         await run.completion?.catch(() => undefined);
       }));
       await scheduler.flush();
-      await trajectoryController.close();
     } finally {
       clearSubagentStatusObserver();
       try { await releaseSessionLease(); } finally {

@@ -11,6 +11,7 @@ import { buildWorkflowPhaseModel, buildWorkflowPhaseTree, navigateWorkflowPhaseT
 import { type WorkflowRecoveryContext, type createWorkflowRecovery } from "./host-recovery.js";
 import { failureDiagnosticsFrom, formatWorkflowFailureDelivery, formatWorkflowFailureDeliveryFallback } from "./host-delivery.js";
 import { type WorkflowRunRecord } from "./host-runtime.js";
+import { getTrajectoryHost, type TrajectoryPublisherProvider } from "./trajectory-host-handle.js";
 import { type AgentAttemptActionContext, type AgentAttemptSummary, type AgentRecord, type JsonValue, type LaunchSnapshot } from "./types.js";
 
 type UiSelect = (title: string, options: string[]) => Promise<string | undefined>;
@@ -96,10 +97,10 @@ export type WorkflowNavigatorDependencies = {
   resumeSelectedWorkflow: (runId: string, foreground: boolean, context: unknown, budgetPatch?: unknown) => Promise<{ workflowName: string; state: "running" | "completed" | "awaiting_approval"; attached: boolean; value?: JsonValue }>;
   reportBlocked?: ReportBlocked;
   setNavigatorOpen?: (open: boolean) => void;
-  openTrajectory: (context: unknown) => Promise<void>;
+  trajectoryProvider: TrajectoryPublisherProvider;
 };
 export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): void {
-  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked, setNavigatorOpen, openTrajectory } = deps;
+  const { pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates, ensureSessionLease, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground, isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked, setNavigatorOpen, trajectoryProvider } = deps;
   const command = {
     description: "Open the workflow picker; workflow actions are available contextually",
     handler: async (args, ctx) => {
@@ -109,7 +110,12 @@ export function registerWorkflowNavigator(deps: WorkflowNavigatorDependencies): 
         return;
       }
       if (command === "trajectory") {
-        await openTrajectory(ctx);
+        const trajectory = getTrajectoryHost();
+        if (!trajectory) {
+          ctx.ui.notify("Trajectory is disabled", "warning");
+          return;
+        }
+        await trajectory.open(trajectoryProvider, ctx);
         return;
       }
       await ensureSessionLease(ctx.cwd, ctx.sessionManager.getSessionId());

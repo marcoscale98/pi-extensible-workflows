@@ -17,11 +17,11 @@ test("the repository keeps the public package in the core workspace", () => {
 
   assert.equal(root.private, true);
   assert.deepEqual(root.workspaces, ["packages/cli", "packages/core", "packages/extensions/*"]);
-  assert.deepEqual(root.pi.extensions, ["./packages/core/src/index.ts", "./packages/core/starter/index.ts", "./packages/core/subagents/index.ts"]);
+  assert.deepEqual(root.pi.extensions, ["./packages/core/src/index.ts", "./packages/core/starter/index.ts", "./packages/core/subagents/index.ts", "./packages/core/trajectory/index.ts"]);
   assert.equal(core.name, "pi-extensible-workflows");
   assert.equal(core.version, root.version);
   assert.notEqual(core.private, true);
-  assert.deepEqual(core.pi.extensions, ["./src/index.ts", "./starter/index.ts", "./subagents/index.ts"]);
+  assert.deepEqual(core.pi.extensions, ["./src/index.ts", "./starter/index.ts", "./subagents/index.ts", "./trajectory/index.ts"]);
   assert.deepEqual(core.exports, {
     ".": "./dist/src/index.js",
     "./persistence": "./dist/src/persistence.js",
@@ -34,6 +34,9 @@ test("the repository keeps the public package in the core workspace", () => {
   });
   assert.equal(core.bin, undefined);
   assert.ok(core.files.includes("starter"));
+  assert.ok(core.files.includes("dist/trajectory"));
+  assert.ok(core.files.includes("trajectory/index.ts"));
+  assert.ok(core.files.includes("trajectory/src"));
   assert.ok(core.files.includes("subagents/index.ts"));
   assert.ok(core.files.includes("subagents/src"));
   assert.ok(core.files.includes("subagents/README.md"));

@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createTrajectoryServer } from "../src/trajectory-server.js";
+import { createTrajectoryServer } from "../src/server.js";
 
 async function availablePort(): Promise<number> {
   const probe = createNetServer();
@@ -450,7 +450,7 @@ void test("Trajectory idle exit closes open clients and removes its lock", async
   const root = await mkdtemp(join(tmpdir(), "trajectory-server-idle-exit-"));
   const port = await availablePort();
   const lockPath = join(root, "trajectory.lock");
-  const moduleUrl = new URL("../src/trajectory-server.js", import.meta.url).href;
+  const moduleUrl = new URL("../src/server.js", import.meta.url).href;
   const childScript = `const realSetTimeout = globalThis.setTimeout; globalThis.setTimeout = (callback, delay, ...args) => realSetTimeout(callback, delay === 300000 ? 10000 : delay, ...args); const { createTrajectoryServer } = await import(${JSON.stringify(moduleUrl)}); const server = createTrajectoryServer(${String(port)}, ${JSON.stringify(lockPath)}, { maxFrameBytes: 33554432, fingerprint: "test-fingerprint" }); server.listen(${String(port)}, "127.0.0.1");`;
   const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], { stdio: "ignore" });
   let socket: Socket | undefined;

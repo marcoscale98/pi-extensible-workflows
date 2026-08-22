@@ -7,8 +7,8 @@ import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { createTrajectoryController, trajectoryServerPath, type TrajectoryController } from "../src/trajectory.js";
-import { isNodeError } from "../src/utils.js";
+import { createTrajectoryController, trajectoryServerPath, type TrajectoryController } from "../src/index.js";
+import { isNodeError } from "../../src/utils.js";
 
 type TrajectoryLock = { pid: number; port: number; fingerprint?: string };
 
@@ -31,8 +31,8 @@ function input(home: string, port: number) {
   return { cwd: home, sessionId: "trajectory-lock-test", port, themes: false, loadRuns: async () => [], loadSubagents: async () => [], handleAction: async () => {} };
 }
 async function currentFingerprint(): Promise<string> {
-  const serverPath = fileURLToPath(new URL("../src/trajectory-server.js", import.meta.url));
-  const [serverBytes, htmlBytes] = await Promise.all([readFile(serverPath), readFile(join(dirname(serverPath), "trajectory/index.html"))]);
+  const serverPath = fileURLToPath(new URL("../src/server.js", import.meta.url));
+  const [serverBytes, htmlBytes] = await Promise.all([readFile(serverPath), readFile(join(dirname(serverPath), "assets/index.html"))]);
   return `${createHash("sha256").update(serverBytes).digest("hex")}:${createHash("sha256").update(htmlBytes).digest("hex")}`;
 }
 function kill(pid: number): void {
@@ -116,7 +116,7 @@ void test("unhealthy live Trajectory lock waits without killing the startup proc
   const pids: number[] = [];
   try {
     const fingerprint = await currentFingerprint();
-    const childScript = `const { createTrajectoryServer } = await import(${JSON.stringify(new URL("../src/trajectory-server.js", import.meta.url).href)}); setTimeout(() => { const server = createTrajectoryServer(${String(port)}, ${JSON.stringify(lockPath(home))}, { fingerprint: ${JSON.stringify(fingerprint)} }); server.listen(${String(port)}, "127.0.0.1"); }, 100); setInterval(() => {}, 1000);`;
+    const childScript = `const { createTrajectoryServer } = await import(${JSON.stringify(new URL("../src/server.js", import.meta.url).href)}); setTimeout(() => { const server = createTrajectoryServer(${String(port)}, ${JSON.stringify(lockPath(home))}, { fingerprint: ${JSON.stringify(fingerprint)} }); server.listen(${String(port)}, "127.0.0.1"); }, 100); setInterval(() => {}, 1000);`;
     const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], { stdio: "ignore" });
     assert.ok(child.pid);
     pids.push(child.pid);
@@ -172,7 +172,7 @@ void test("unhealthy Trajectory lock owned by the attacher is replaced without k
   const pids: number[] = [];
   try {
     const fingerprint = await currentFingerprint();
-    const trajectoryModule = new URL("../src/trajectory.js", import.meta.url).href;
+    const trajectoryModule = new URL("../src/index.js", import.meta.url).href;
     const childScript = `import { mkdir, writeFile } from "node:fs/promises"; import { dirname } from "node:path"; const { createTrajectoryController } = await import(${JSON.stringify(trajectoryModule)}); const home = ${JSON.stringify(home)}; const lockPath = ${JSON.stringify(lockPath(home))}; const port = ${String(port)}; await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 }); await writeFile(lockPath, JSON.stringify({ pid: process.pid, port, fingerprint: ${JSON.stringify(fingerprint)} }) + String.fromCharCode(10)); const controller = createTrajectoryController(home); await controller.open({ cwd: home, sessionId: "trajectory-lock-self-test", port, themes: false, loadRuns: async () => [], loadSubagents: async () => [], handleAction: async () => {} }); await controller.close();`;
     const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], { stdio: "ignore" });
     assert.ok(child.pid);
@@ -196,16 +196,15 @@ void test("unhealthy Trajectory lock owned by the attacher is replaced without k
 void test("Trajectory resolves the runnable server in a source checkout", async () => {
   const home = await mkdtemp(join(tmpdir(), "trajectory-server-path-"));
   try {
-    // A source checkout offers trajectory-server.ts beside trajectory.ts, but a spawned bare node cannot run it:
-    // it imports ./trajectory.js, which only exists in dist.
-    await mkdir(join(home, "src"), { recursive: true });
-    await mkdir(join(home, "dist", "src"), { recursive: true });
-    await writeFile(join(home, "src", "trajectory-server.ts"), "export {};\n", "utf8");
-    await writeFile(join(home, "dist", "src", "trajectory-server.js"), "export {};\n", "utf8");
-    assert.equal(trajectoryServerPath(join(home, "src")), join(home, "dist", "src", "trajectory-server.js"));
+    // A source checkout has TypeScript under trajectory/src, while spawned bare node needs dist.
+    await mkdir(join(home, "trajectory", "src"), { recursive: true });
+    await mkdir(join(home, "dist", "trajectory", "src"), { recursive: true });
+    await writeFile(join(home, "trajectory", "src", "server.ts"), "export {};\n", "utf8");
+    await writeFile(join(home, "dist", "trajectory", "src", "server.js"), "export {};\n", "utf8");
+    assert.equal(trajectoryServerPath(join(home, "trajectory", "src")), join(home, "dist", "trajectory", "src", "server.js"));
     await mkdir(join(home, "installed"), { recursive: true });
-    await writeFile(join(home, "installed", "trajectory-server.js"), "export {};\n", "utf8");
-    assert.equal(trajectoryServerPath(join(home, "installed")), join(home, "installed", "trajectory-server.js"));
+    await writeFile(join(home, "installed", "server.js"), "export {};\n", "utf8");
+    assert.equal(trajectoryServerPath(join(home, "installed")), join(home, "installed", "server.js"));
   } finally {
     await rm(home, { recursive: true, force: true });
   }
