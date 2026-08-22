@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { createTrajectoryController, type TrajectoryController } from "../src/trajectory.js";
+import { createTrajectoryController, trajectoryServerPath, type TrajectoryController } from "../src/trajectory.js";
 import { isNodeError } from "../src/utils.js";
 
 type TrajectoryLock = { pid: number; port: number; fingerprint?: string };
@@ -28,7 +28,7 @@ async function availablePort(): Promise<number> {
 function lockPath(home: string): string { return join(home, "pi-extensible-workflows", "trajectory.lock"); }
 async function readLock(home: string): Promise<TrajectoryLock> { return JSON.parse(await readFile(lockPath(home), "utf8")) as TrajectoryLock; }
 function input(home: string, port: number) {
-  return { cwd: home, sessionId: "trajectory-lock-test", port, themes: false, loadRuns: async () => [], handleAction: async () => {} };
+  return { cwd: home, sessionId: "trajectory-lock-test", port, themes: false, loadRuns: async () => [], loadSubagents: async () => [], handleAction: async () => {} };
 }
 async function currentFingerprint(): Promise<string> {
   const serverPath = fileURLToPath(new URL("../src/trajectory-server.js", import.meta.url));
@@ -173,7 +173,7 @@ void test("unhealthy Trajectory lock owned by the attacher is replaced without k
   try {
     const fingerprint = await currentFingerprint();
     const trajectoryModule = new URL("../src/trajectory.js", import.meta.url).href;
-    const childScript = `import { mkdir, writeFile } from "node:fs/promises"; import { dirname } from "node:path"; const { createTrajectoryController } = await import(${JSON.stringify(trajectoryModule)}); const home = ${JSON.stringify(home)}; const lockPath = ${JSON.stringify(lockPath(home))}; const port = ${String(port)}; await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 }); await writeFile(lockPath, JSON.stringify({ pid: process.pid, port, fingerprint: ${JSON.stringify(fingerprint)} }) + String.fromCharCode(10)); const controller = createTrajectoryController(home); await controller.open({ cwd: home, sessionId: "trajectory-lock-self-test", port, themes: false, loadRuns: async () => [], handleAction: async () => {} }); await controller.close();`;
+    const childScript = `import { mkdir, writeFile } from "node:fs/promises"; import { dirname } from "node:path"; const { createTrajectoryController } = await import(${JSON.stringify(trajectoryModule)}); const home = ${JSON.stringify(home)}; const lockPath = ${JSON.stringify(lockPath(home))}; const port = ${String(port)}; await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 }); await writeFile(lockPath, JSON.stringify({ pid: process.pid, port, fingerprint: ${JSON.stringify(fingerprint)} }) + String.fromCharCode(10)); const controller = createTrajectoryController(home); await controller.open({ cwd: home, sessionId: "trajectory-lock-self-test", port, themes: false, loadRuns: async () => [], loadSubagents: async () => [], handleAction: async () => {} }); await controller.close();`;
     const child = spawn(process.execPath, ["--input-type=module", "-e", childScript], { stdio: "ignore" });
     assert.ok(child.pid);
     pids.push(child.pid);
@@ -190,5 +190,23 @@ void test("unhealthy Trajectory lock owned by the attacher is replaced without k
     assert.equal((await fetch(`http://127.0.0.1:${String(port)}/health`)).ok, true);
   } finally {
     await cleanup(home, [], pids);
+  }
+});
+
+void test("Trajectory resolves the runnable server in a source checkout", async () => {
+  const home = await mkdtemp(join(tmpdir(), "trajectory-server-path-"));
+  try {
+    // A source checkout offers trajectory-server.ts beside trajectory.ts, but a spawned bare node cannot run it:
+    // it imports ./trajectory.js, which only exists in dist.
+    await mkdir(join(home, "src"), { recursive: true });
+    await mkdir(join(home, "dist", "src"), { recursive: true });
+    await writeFile(join(home, "src", "trajectory-server.ts"), "export {};\n", "utf8");
+    await writeFile(join(home, "dist", "src", "trajectory-server.js"), "export {};\n", "utf8");
+    assert.equal(trajectoryServerPath(join(home, "src")), join(home, "dist", "src", "trajectory-server.js"));
+    await mkdir(join(home, "installed"), { recursive: true });
+    await writeFile(join(home, "installed", "trajectory-server.js"), "export {};\n", "utf8");
+    assert.equal(trajectoryServerPath(join(home, "installed")), join(home, "installed", "trajectory-server.js"));
+  } finally {
+    await rm(home, { recursive: true, force: true });
   }
 });

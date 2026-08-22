@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { defineTool, getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
-import { WorkflowError } from "../../src/index.js";
+import { WorkflowError, loadingRegistry } from "../../src/index.js";
+import { clearSubagentManager, setSubagentManager } from "../../src/subagent-manager-handle.js";
 import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentStatus, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
 import { registerSubagentNavigator } from "./navigator.js";
@@ -17,6 +18,7 @@ import {
 } from "./contracts.js";
 
 export * from "./contracts.js";
+export * from "./decode.js";
 export { createSubagentManager, createUnavailableSubagentManager } from "./manager.js";
 export { createRunStoreWorktreeAdapter, defaultWorktreeHome } from "./worktree.js";
 export type { SubagentWorktreeAdapter, SubagentWorktreeContext, SubagentWorktreeHandle, SubagentWorktreeRunStore } from "./worktree.js";
@@ -153,7 +155,8 @@ function storageDirectory(options: SubagentsExtensionOptions): string {
 
 export function createSubagentsExtension(options: SubagentsExtensionOptions = {}, activeTools?: () => readonly string[], notify?: (notification: SubagentNotification) => void | Promise<void>, onStatus?: (status: Readonly<SubagentStatus>, request: Readonly<SubagentRunRequest>) => void): SubagentsExtension {
   const manager = options.manager ?? createSubagentManager(managerDependencies(options, activeTools, notify, onStatus));
-  return { manager, tools: createSubagentTools(manager) };
+  const extension = { manager, tools: createSubagentTools(manager) };
+  return extension;
 }
 
 export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: SubagentsExtensionOptions = {}): SubagentsExtension {
@@ -164,14 +167,19 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
     sendMessage.call(pi, { customType: "subagents", content: notificationContent(notification), display: true, details: notification }, { deliverAs: "followUp", triggerTurn: true });
   };
   const widget = createSubagentBackgroundWidget();
-  const extension = createSubagentsExtension(options, activeTools, notify, (status, request) => { widget.update(status, request); });
+  const extension = createSubagentsExtension(options, activeTools, notify, (status, request) => { widget.update(status, request); const registry = loadingRegistry(); if (typeof registry.observeSubagentStatus === "function") registry.observeSubagentStatus(status, request); });
   for (const tool of extension.tools) pi.registerTool(tool);
   if (pi.registerCommand !== undefined) registerSubagentNavigator(pi.registerCommand.bind(pi), extension.manager, storageDirectory(options), options.clipboard);
   if (pi.on !== undefined) {
+    setSubagentManager(extension.manager);
     pi.on("session_start", (_event, context) => { widget.start(context); });
     pi.on("session_shutdown", async () => {
-      widget.dispose();
-      await extension.manager.dispose?.();
+      try {
+        widget.dispose();
+        await extension.manager.dispose?.();
+      } finally {
+        clearSubagentManager(extension.manager);
+      }
     });
   }
   return extension;
