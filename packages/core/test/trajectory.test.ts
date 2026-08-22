@@ -672,11 +672,11 @@ void test("Trajectory renders a publisher subagent sidebar section", () => {
   assert.match(sidebar, /SUBAGENTS/);
   assert.match(sidebar, /data-subagent/);
   assert.match(sidebar, /subagents:\$\{publisher\.id\}/);
-  assert.match(sidebar, /subagentModel\(subagent\)/);
+  assert.doesNotMatch(sidebar, /subagentModel\(subagent\)/);
   assert.match(sidebar, /subagentCost\(subagent\)/);
   assert.match(sidebar, /subagentRuntime\(subagent\)/);
 });
-void test("Trajectory sidebar subagent rows keep telemetry compact and model discoverable", () => {
+void test("Trajectory sidebar subagent rows match the workflow run row shape", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    function renderSidebar");
   const helperEnd = source.indexOf("    function renderGantt", helperStart);
@@ -703,7 +703,7 @@ void test("Trajectory sidebar subagent rows keep telemetry compact and model dis
     const fmtRuntime = () => "2m";
     const startOf = () => new Date();
     const age = () => "0m ago";
-    const subagentModel = (value) => value.model.provider + "/" + value.model.model;
+    const subagentStartOf = (value) => value.startedAt;
     const subagentLabel = (value) => value.label;
     const subagentCost = (value) => value.progress.accounting.cost;
     const subagentRuntime = () => 120000;
@@ -713,36 +713,43 @@ void test("Trajectory sidebar subagent rows keep telemetry compact and model dis
     return sidebar.innerHTML;
   })()`, { Date }) as string;
   assert.match(result, /class="run-item subagent/);
-  assert.match(result, /title="running · anthropic\/claude-sonnet-4-5 · \$0\.24 · 2m"/);
+  assert.match(result, /title="running · \$0\.24 · 2m"/);
   // The glyph carries the state, so the visible telemetry stays as short as a workflow run row's.
   assert.match(result, />\*<span class="n"[^>]*>publisher audit<\/span><span class="tel"[^>]*>\$0\.24 · 2m<\/span>/);
   assert.doesNotMatch(result, /<span class="tel"[^>]*>running/);
 });
 
-void test("Trajectory subagent dossier only exposes valid controls", () => {
+void test("Trajectory subagent stats bar only exposes valid controls", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
   const helperStart = source.indexOf("    const subagentAccounting");
-  const helperEnd = source.indexOf("    function renderDossier", helperStart);
+  const helperEnd = source.indexOf("    function renderAgent()", helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
-  const helpers = runInNewContext(`(() => { const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); const json = (value) => JSON.stringify(value); const fmtClock = (value) => String(value); const fmtRuntime = (value) => String(value); const fmtCost = (value) => String(value); const fmtTokens = (value) => String(value); const stateClass = (value) => value === "running" ? "spin" : value === "completed" ? "ok" : "fail"; const glyph = (value) => value; ${source.slice(helperStart, helperEnd)}; return { renderSubagentDossier }; })()`, { Date }) as {
-    renderSubagentDossier: (publisher: { connected: boolean }, subagent: Record<string, unknown>) => string;
+  const helpers = runInNewContext(`(() => { const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); const json = (value) => JSON.stringify(value); const fmtClock = (value) => String(value); const fmtRuntime = (value) => String(value); const fmtCost = (value) => String(value); const fmtTokens = (value) => String(value); const accounting = (value) => value.accounting || { input: 0, output: 0, cost: 0 }; const stateClass = (value) => value === "running" ? "spin" : value === "completed" ? "ok" : "fail"; const glyph = (value) => value; ${source.slice(helperStart, helperEnd)}; return { renderAgentStats, subagentAgent }; })()`, { Date }) as {
+    renderAgentStats: (found: Record<string, unknown>, agent: Record<string, unknown>, isSubagent: boolean) => string;
+    subagentAgent: (subagent: Record<string, unknown>) => Record<string, unknown>;
   };
   const base = { mode: "background", role: "reviewer", attempts: 1, request: { prompt: "inspect" }, tools: ["read"], progress: { accounting: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.1 } }, startedAt: 1, model: { provider: "fixture", model: "model" } };
-  const running = helpers.renderSubagentDossier({ connected: true }, { ...base, id: "running", state: "running" });
-  const failed = helpers.renderSubagentDossier({ connected: true }, { ...base, id: "failed", state: "failed", failure: { code: "FAILED", message: "no" } });
-  const completed = helpers.renderSubagentDossier({ connected: true }, { ...base, id: "completed", state: "completed", result: { ok: true } });
+  const stats = (subagent: Record<string, unknown>) => helpers.renderAgentStats({ publisher: { connected: true }, record: subagent }, helpers.subagentAgent(subagent), true);
+  const running = stats({ ...base, id: "running", state: "running" });
+  const failed = stats({ ...base, id: "failed", state: "failed", failure: { code: "FAILED", message: "no" } });
+  const completed = stats({ ...base, id: "completed", state: "completed", result: { ok: true } });
   assert.match(running, />Stop</);
   assert.match(running, /Send/);
   assert.doesNotMatch(running, /Pause|Resume|Checkpoint/);
   assert.match(failed, />Retry</);
   assert.doesNotMatch(failed, /Send/);
   assert.doesNotMatch(completed, /Stop|Retry|Pause|Resume/);
+  // A subagent carries its outcome as a trailing transcript event, exactly like the system prompt leads.
+  assert.equal(JSON.stringify(helpers.subagentAgent({ ...base, id: "completed", state: "completed", result: { ok: true } }).outcome), '{"kind":"result","value":{"ok":true}}');
+  assert.equal(JSON.stringify(helpers.subagentAgent({ ...base, id: "failed", state: "failed", failure: { code: "FAILED", message: "no" } }).outcome), '{"kind":"failure","value":{"code":"FAILED","message":"no"}}');
 });
 
-void test("Trajectory keeps subagent controls and event scroll stable during updates", () => {
+void test("Trajectory renders subagents through the same agent view as workflow agents", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
-  assert.match(source, /if \(state\.inspSig !== dossierSig\)/);
-  assert.match(source, /const eventPanel = \$\("subagent-event-inspector"\)/);
+  // One inspector path for both kinds: no dossier stacked above the event inspector, no nested panel.
+  assert.doesNotMatch(source, /subagent-event-inspector/);
+  assert.doesNotMatch(source, /renderSubagentDossier/);
+  assert.match(source, /patch\(\$\("agent-stats"\), renderAgentStats\(found, agent, isSubagent\)\); if \(state\.inspSig !== sig\)/);
   assert.match(source, /if \(state\.eventsSig !== eventsSig\)/);
   assert.match(source, /events\.scrollTop = eventsScroll/);
   assert.match(source, /setInterval\(tickClocks, 1000\)/);
