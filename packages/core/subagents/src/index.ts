@@ -164,7 +164,7 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
   const activeTools = getActiveTools === undefined ? undefined : () => getActiveTools.call(pi);
   const sendMessage = pi.sendMessage;
   const notify = sendMessage === undefined ? undefined : (notification: SubagentNotification): void => {
-    sendMessage.call(pi, { customType: "subagents", content: notificationContent(notification), display: true, details: notification }, { deliverAs: "followUp", triggerTurn: true });
+    sendMessage.call(pi, { customType: "subagents", content: notificationContent(notification), display: true, details: notification }, { deliverAs: "steer", triggerTurn: true });
   };
   const widget = createSubagentBackgroundWidget();
   const extension = createSubagentsExtension(options, activeTools, notify, (status, request) => { widget.update(status, request); const registry = loadingRegistry(); if (typeof registry.observeSubagentStatus === "function") registry.observeSubagentStatus(status, request); });

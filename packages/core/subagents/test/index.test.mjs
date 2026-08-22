@@ -1842,9 +1842,27 @@ test("keeps retry accounting cumulative while live and at success or failure set
   }
 });
 
-test("delivers completion and failure through follow-up messages", async () => {
+// Mirrors the host's delivery semantics, verified in pi-agent-core dist/agent-loop.js: the steering
+// queue is drained at run start and after every turn_end, so a steering message reaches the parent at
+// its next turn boundary; the follow-up queue is only read at the stop point, after the parent's run
+// would otherwise end. Both queues survive an undrained run end (agent.js PendingMessageQueue), so
+// endRun drains steering too; the modes differ in WHEN delivery happens, never in whether it happens.
+function streamingParent(events) {
+  const steering = [];
+  const followUps = [];
+  const deliver = (queue) => { for (const message of queue.splice(0)) events.push(["delivered", message.details.id]); };
+  return {
+    sendMessage(message, options) { (options.deliverAs === "followUp" ? followUps : steering).push(message); },
+    pending() { return steering.length + followUps.length; },
+    boundary() { deliver(steering); },
+    endRun() { deliver(steering); deliver(followUps); },
+  };
+}
+test("delivers completion and failure through steering messages while the parent is working", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "subagents-notifications-"));
   const messages = [];
+  const events = [];
+  const parent = streamingParent(events);
   const managerDependencies = {
     storageDir: join(cwd, "subagents-storage"),
     createExecutor() {
@@ -1859,19 +1877,42 @@ test("delivers completion and failure through follow-up messages", async () => {
   let shutdown;
   const registered = registerSubagentsExtension({
     registerTool() {},
-    sendMessage(message, options) { messages.push({ message, options }); },
+    sendMessage(message, options) { messages.push({ message, options }); parent.sendMessage(message, options); },
     on(name, handler) { if (name === "session_shutdown") shutdown = handler; },
   }, { managerDependencies });
   const context = await managerContext(cwd);
   try {
     const success = await registered.manager.run({ prompt: "success", label: "docs-check", role: "scout" }, context);
     const failure = await registered.manager.run({ prompt: "failure", label: "tests-check", role: "reviewer" }, context);
-    await waitFor(async () => (await registered.manager.inspect({ id: success.id }, context)).state === "completed");
-    await waitFor(async () => (await registered.manager.inspect({ id: failure.id }, context)).state === "failed");
-    await waitFor(() => messages.length === 2);
-    assert.deepEqual(messages.map(({ options }) => options), [{ deliverAs: "followUp", triggerTurn: true }, { deliverAs: "followUp", triggerTurn: true }]);
+    await waitFor(() => parent.pending() === 2);
+    // The parent keeps working: its next inner-loop boundary happens before it collects the results.
+    parent.boundary();
+    await waitFor(async () => {
+      const result = await registered.manager.inspect({ id: success.id }, context);
+      if (result.state === "completed") events.push(["inspect", success.id]);
+      return result.state === "completed";
+    });
+    await waitFor(async () => {
+      const result = await registered.manager.inspect({ id: failure.id }, context);
+      if (result.state === "failed") events.push(["inspect", failure.id]);
+      return result.state === "failed";
+    });
+    parent.endRun();
+    assert.deepEqual(messages.map(({ options }) => options), [{ deliverAs: "steer", triggerTurn: true }, { deliverAs: "steer", triggerTurn: true }]);
+    assert.deepEqual(messages.map(({ message }) => ({ customType: message.customType, display: message.display, details: message.details })), [
+      { customType: "subagents", display: true, details: { id: success.id, label: "docs-check", role: "scout", state: "completed" } },
+      { customType: "subagents", display: true, details: { id: failure.id, label: "tests-check", role: "reviewer", state: "failed", error: { code: "AGENT_FAILED", message: "failed background work" } } },
+    ]);
     assert.match(messages[0].message.content, /Subagent docs-check role=scout \([^)]+\) completed/);
     assert.match(messages[1].message.content, /Subagent tests-check role=reviewer \([^)]+\) failed/);
+    // A follow-up would only be delivered by endRun, that is after the parent already collected both
+    // results, which is the staleness this delivery mode exists to avoid.
+    const delivered = (id) => events.findIndex(([kind, value]) => kind === "delivered" && value === id);
+    const collected = (id) => events.findIndex(([kind, value]) => kind === "inspect" && value === id);
+    for (const id of [success.id, failure.id]) {
+      assert.notEqual(delivered(id), -1);
+      assert.ok(delivered(id) < collected(id), `notification for ${id} was delivered after the parent collected the result`);
+    }
   } finally {
     await shutdown?.({ type: "session_shutdown", reason: "quit" }, context);
     await rm(cwd, { recursive: true, force: true });
