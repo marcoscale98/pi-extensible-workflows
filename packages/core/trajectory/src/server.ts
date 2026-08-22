@@ -309,6 +309,13 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
       }).catch(() => { writeJson(response, 500, { error: "Trajectory DOM diffing library is unavailable" }); });
       return;
     }
+    if (request.method === "GET" && (path === "/favicon.png" || path === "/favicon.ico")) {
+      void readFile(new URL("./assets/favicon.png", import.meta.url)).then((icon) => {
+        response.writeHead(200, { "content-type": "image/png", "content-length": icon.byteLength, "cache-control": "no-store" });
+        response.end(icon);
+      }).catch(() => { writeJson(response, 404, { error: "Not found" }); });
+      return;
+    }
     writeJson(response, 404, { error: "Not found" });
   });
   server.on("upgrade", (request, socket) => {
