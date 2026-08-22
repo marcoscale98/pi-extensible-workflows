@@ -11,31 +11,31 @@ Requires Node.js 22.19 or newer. This is trusted Pi host code with the same file
 <table>
 <tr>
 <td align="center" valign="top" width="50%">
-<video src="https://github.com/user-attachments/assets/e886c4c5-bede-4960-a57f-c52bac42f198" width="100%" controls></video>
+<video src="https://github.com/user-attachments/assets/2f458025-38a5-49de-8fba-9d2fc52c7703" width="100%" controls></video>
 <br><b>TUI</b><br>Live tree, cost, and the workflow script while a run is in progress.
 </td>
 <td align="center" valign="top" width="50%">
-<video src="https://github.com/user-attachments/assets/2f3a3865-dacc-426c-89e5-8d0c9e782a0b" width="100%" controls></video>
+<video src="https://github.com/user-attachments/assets/92de3070-373a-4da2-86c0-cb0c9c0122b8" width="100%" controls></video>
 <br><b>Herdr</b><br>Inspect a live workflow agent in its own pane.
 </td>
 </tr>
 <tr>
 <td align="center" valign="top" width="50%">
-<video src="https://github.com/user-attachments/assets/9456f561-b43c-4360-8693-a20466ae2037" width="100%" controls></video>
+<video src="https://github.com/user-attachments/assets/e9225bb9-c985-4aec-bc3e-7b6f0e1a6f16" width="100%" controls></video>
 <br><b>Trajectory</b><br>Gantt of model and tool events, plus steer/stop on a running subagent.
 </td>
 <td align="center" valign="top" width="50%">
-<video src="https://github.com/user-attachments/assets/953410d9-07a0-45c8-b9ca-42a5f85ca744" width="100%" controls></video>
+<video src="https://github.com/user-attachments/assets/f9c3a7a3-2116-429a-9aeb-e166dad0d926" width="100%" controls></video>
 <br><b>Configuring</b><br>Model aliases, skills, and extension settings.
 </td>
 </tr>
 <tr>
 <td align="center" valign="top" width="50%">
-<video src="https://github.com/user-attachments/assets/1c65a1fe-b789-4727-a5c8-961f8fbcf4f1" width="100%" controls></video>
+<video src="https://github.com/user-attachments/assets/eb76bfb7-a44b-4569-8612-b25af52daaf1" width="100%" controls></video>
 <br><b>Roles</b><br>Markdown roles for tools, model, and policy.
 </td>
 <td align="center" valign="top" width="50%">
-<video src="https://github.com/user-attachments/assets/523bd9e8-18c4-443c-9137-986f7980b452" width="100%" controls></video>
+<video src="https://github.com/user-attachments/assets/36d9c34c-822f-4e37-bd31-39db16f9b2ed" width="100%" controls></video>
 <br><b>Reusable workflows</b><br>Register a callable <code>defineWorkflowFunction</code> and mix shell gates with agents.
 </td>
 </tr>
