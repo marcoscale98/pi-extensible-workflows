@@ -119,7 +119,7 @@ void test("navigator reviews each pending checkpoint before answering", async ()
   assert.deepEqual(await store.replay("checkpoint/first"), { path: "checkpoint/first", value: true });
   assert.deepEqual(await store.replay("checkpoint/second"), { path: "checkpoint/second", value: false });
   assert.deepEqual(await store.awaitingCheckpoints(), []);
-  assert.deepEqual(notices, ["Trajectory opened at http://127.0.0.1:7432/"]);
+  assert.deepEqual(notices, []);
 });
 
 void test("checkpoint contract is boolean-only and enforces UTF-8 limits", async () => {

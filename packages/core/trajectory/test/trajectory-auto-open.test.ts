@@ -3,10 +3,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, RunStore, type PersistedRun, type TrajectoryPublisherInput } from "../src/index.js";
-import { loadingRegistry } from "../src/registry.js";
-import { registerSubagentsExtension } from "../subagents/src/index.js";
-import { testExtensionApi } from "./support.js";
+import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, RunStore, type PersistedRun } from "../../src/index.js";
+import type { TrajectoryPublisherInput } from "../../src/trajectory.js";
+import { registerTrajectoryExtension } from "../src/index.js";
+import { loadingRegistry } from "../../src/registry.js";
+import { registerSubagentsExtension } from "../../subagents/src/index.js";
+import { testExtensionApi } from "../../test/support.js";
 
 type TestTool = { name: string; execute?: (...args: unknown[]) => Promise<unknown> };
 type WorkflowHandler = (args: string, context: unknown) => Promise<void>;
@@ -46,21 +48,22 @@ function install(home: string, probe: TrajectoryProbe, agentDir?: string): { wor
   const tools: TestTool[] = [];
   let command: WorkflowHandler | undefined;
   let start: SessionStartHandler | undefined;
-  let shutdown: (() => Promise<void>) | undefined;
-  workflowExtension(testExtensionApi({
+  const shutdowns: Array<() => Promise<void>> = [];
+  const api = testExtensionApi({
     registerTool(tool) { tools.push(tool); },
     registerCommand(_name, options) { command = options.handler as WorkflowHandler; },
     on(name, handler) {
       if (name === "session_start") start = handler as SessionStartHandler;
-      if (name === "session_shutdown") shutdown = handler as () => Promise<void>;
+      if (name === "session_shutdown") shutdowns.push(handler as () => Promise<void>);
     },
     getThinkingLevel: () => "medium",
     getActiveTools: () => ["workflow"],
-    trajectory: { controller: probe.controller, openUrl: (url) => { probe.urls.push(url); } },
-  }), home, undefined, undefined, agentDir);
+  });
+  workflowExtension(api, home, undefined, undefined, agentDir);
+  registerTrajectoryExtension(api, { controller: probe.controller, openUrl: (url) => { probe.urls.push(url); }, ...(agentDir === undefined ? {} : { agentDir }) });
   assert.ok(tools.find(({ name }) => name === "workflow"));
-  assert.ok(command && start && shutdown);
-  return { workflow: tools.find(({ name }) => name === "workflow") as TestTool, command, start, shutdown };
+  assert.ok(command && start && shutdowns.length);
+  return { workflow: tools.find(({ name }) => name === "workflow") as TestTool, command, start, shutdown: async () => { for (const shutdown of shutdowns) await shutdown(); } };
 }
 
 function context(cwd: string, hasUI: boolean, select: (prompt: string, options: string[]) => Promise<string | undefined> = async () => undefined): Record<string, unknown> {

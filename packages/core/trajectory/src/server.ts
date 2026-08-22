@@ -3,9 +3,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
-import { isTrajectoryAction, isTrajectoryTarget, trajectoryActionError, withPiToolDescriptions, withPiToolDescriptionsForTools, withResolvedAttemptResources, withResolvedResources } from "./trajectory.js";
-import type { AgentAttemptSummary } from "./types.js";
-import type { PersistedRun } from "./persistence.js";
+import { isTrajectoryAction, isTrajectoryTarget, trajectoryActionError, withPiToolDescriptions, withPiToolDescriptionsForTools, withResolvedAttemptResources, withResolvedResources } from "../../src/trajectory.js";
+import type { AgentAttemptSummary } from "../../src/types.js";
+import type { PersistedRun } from "../../src/persistence.js";
 const TRAJECTORY_IDLE_EXIT_MS = 5 * 60 * 1000;
 
 type Socket = import("node:stream").Duplex;
@@ -289,21 +289,21 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
     const path = url.pathname;
     if (request.method === "GET" && path === "/health") { writeJson(response, 200, { ok: true }); return; }
     if (request.method === "GET" && (path === "/" || path === "/index.html")) {
-      void readFile(new URL("./trajectory/index.html", import.meta.url)).then((html) => {
+      void readFile(new URL("./assets/index.html", import.meta.url)).then((html) => {
         response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": html.byteLength, "cache-control": "no-store" });
         response.end(html);
       }).catch(() => { writeJson(response, 500, { error: "Trajectory UI is unavailable" }); });
       return;
     }
     if (request.method === "GET" && path === "/marked.min.js") {
-      void readFile(new URL("./trajectory/marked.min.js", import.meta.url)).then((script) => {
+      void readFile(new URL("./assets/marked.min.js", import.meta.url)).then((script) => {
         response.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "content-length": script.byteLength, "cache-control": "no-store" });
         response.end(script);
       }).catch(() => { writeJson(response, 500, { error: "Trajectory markdown renderer is unavailable" }); });
       return;
     }
     if (request.method === "GET" && path === "/morphdom.min.js") {
-      void readFile(new URL("./trajectory/morphdom.min.js", import.meta.url)).then((script) => {
+      void readFile(new URL("./assets/morphdom.min.js", import.meta.url)).then((script) => {
         response.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "content-length": script.byteLength, "cache-control": "no-store" });
         response.end(script);
       }).catch(() => { writeJson(response, 500, { error: "Trajectory DOM diffing library is unavailable" }); });

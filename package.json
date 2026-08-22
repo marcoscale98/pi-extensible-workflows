@@ -13,7 +13,8 @@
     "extensions": [
       "./packages/core/src/index.ts",
       "./packages/core/starter/index.ts",
-      "./packages/core/subagents/index.ts"
+      "./packages/core/subagents/index.ts",
+      "./packages/core/trajectory/index.ts"
     ]
   },
   "scripts": {

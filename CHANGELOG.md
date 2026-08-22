@@ -14,6 +14,9 @@
 - Trajectory renders tool event arguments as colored key/value pairs with bounded row values while retaining full input for search and inspection ([#222](https://github.com/vekexasia/pi-extensible-workflows/issues/222)).
 - Trajectory summarizes assistant tool calls as separate event chips and inspector blocks with searchable arguments ([#220](https://github.com/vekexasia/pi-extensible-workflows/issues/220)).
 
+### Packaging
+- Moved Trajectory's server and controller into the bundled extension; the core entry no longer exports `createTrajectoryController`, `createTrajectoryRunLoader`, `createTrajectorySubagentLoader`, `loadTrajectoryRuns`, `openTrajectoryUrl`, `trajectoryUrl`, or the Trajectory contract types.
+
 ### Fixes
 - Sanitize Trajectory markdown before rendering assistant messages and system prompts.
 - Keep Trajectory layout and sidebar preference storage failures from stopping the UI, preserving defaults.

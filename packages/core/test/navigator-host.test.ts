@@ -33,14 +33,15 @@ void test("workflow slash subcommands are rejected with picker guidance", async 
 void test("trajectory is the only accepted workflow argument", async () => {
   let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
   const opened: unknown[] = [];
-  registerWorkflowNavigator({ pi: { registerCommand(_name: string, options: { handler: typeof handler }) { handler = options.handler; } }, openTrajectory: async (context: unknown) => { opened.push(context); } } as unknown as WorkflowNavigatorDependencies);
+  registerWorkflowNavigator({ pi: { registerCommand(_name: string, options: { handler: typeof handler }) { handler = options.handler; } }, trajectoryProvider: (context: unknown) => { opened.push(context); return { cwd: "/repo", sessionId: "session", themes: false, loadRuns: async () => [], loadSubagents: async () => [], handleAction: async () => {} }; } } as unknown as WorkflowNavigatorDependencies);
   assert.ok(handler);
   const notices: string[] = [];
   const context = { ui: { notify(message: string) { notices.push(message); } } };
   await executeCommand(handler, "trajectory", context);
-  assert.equal(opened.length, 1);
+  assert.equal(opened.length, 0);
+  assert.equal(notices[0], "Trajectory is disabled");
   await executeCommand(handler, "resume run-id", context);
-  assert.match(notices[0] ?? "", /do not accept arguments/);
+  assert.match(notices[1] ?? "", /do not accept arguments/);
 });
 void test("selected workflow agent details use the shared formatter seam", () => {
   const agent = { id: "agent-1", name: "reviewer", path: "agent-1", state: "running" as const, model: { provider: "openai", model: "gpt" }, tools: ["read"], attempts: 2, startedAt: 0, durationMs: 2000, lastEventAt: 0, role: "critic", activity: { kind: "tool" as const, text: "read" }, accounting: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, cost: 0.5 } };
