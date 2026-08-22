@@ -128,7 +128,7 @@ void test("Trajectory theme preference storage failures preserve the default", (
   const button = { dataset: { theme: "harness" }, addEventListener: (_type: string, handler: () => void) => { clickHandler = handler; }, classList: { toggle: () => {} } };
   const themeButtons = { innerHTML: "", classList: { toggle: () => {} }, querySelectorAll: () => [button] };
   const document = { documentElement: { dataset: {} as Record<string, string> } };
-  const helpers = runInNewContext(`(() => { const state = { publishers: [{ themes: true }] }; const $ = () => themeButtons; ${source.slice(helperStart, helperEnd)}; return { document, renderThemeButtons }; })()`, { document, localStorage: { getItem: () => { throw new Error("storage unavailable"); }, setItem: () => { throw new Error("storage unavailable"); } }, themeButtons }) as { document: typeof document; renderThemeButtons: () => void };
+  const helpers = runInNewContext(`(() => { const state = { publishers: [{ themes: true }] }; const $ = () => themeButtons; const patch = (root, html) => { root.innerHTML = html; }; ${source.slice(helperStart, helperEnd)}; return { document, renderThemeButtons }; })()`, { document, localStorage: { getItem: () => { throw new Error("storage unavailable"); }, setItem: () => { throw new Error("storage unavailable"); } }, themeButtons }) as { document: typeof document; renderThemeButtons: () => void };
   helpers.renderThemeButtons();
   assert.equal(helpers.document.documentElement.dataset.theme, "tty");
   assert.doesNotThrow(() => { clickHandler?.(); });
@@ -686,6 +686,7 @@ void test("Trajectory sidebar subagent rows keep telemetry compact and model dis
     const state = { publishers: [{ id: "publisher", title: "publisher", connected: true, runs: [], subagents: [subagent] }], currentPub: null, currentTarget: null, sidebarCollapsed: new Set() };
     const sidebar = { innerHTML: "" };
     const $ = () => sidebar;
+    const patch = (root, html) => { root.innerHTML = html; };
     const esc = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const livePublishers = () => state.publishers;
     const sidebarGroups = () => [{ key: "publisher", label: "publisher", publishers: state.publishers }];
@@ -744,7 +745,8 @@ void test("Trajectory keeps subagent controls and event scroll stable during upd
   assert.match(source, /const eventPanel = \$\("subagent-event-inspector"\)/);
   assert.match(source, /if \(state\.eventsSig !== eventsSig\)/);
   assert.match(source, /events\.scrollTop = eventsScroll/);
-  assert.match(source, /setInterval\(\(\) => \{ if \(document\.body\.dataset\.view === "run"\) renderRun\(\); \}, 1000\)/);
+  assert.match(source, /setInterval\(tickClocks, 1000\)/);
+  assert.doesNotMatch(source, /setInterval\(\(\) => \{ if \(document\.body\.dataset\.view === "run"\) renderRun\(\); \}, 1000\)/);
 });
 void test("Trajectory subagent Gantt gives running and finished lanes tool geometry", () => {
   const source = readFileSync(new URL("../src/trajectory/index.html", import.meta.url), "utf8");
@@ -793,7 +795,7 @@ void test("Trajectory run rendering preserves the dossier scroll across re-rende
   const end = source.indexOf("    function renderAgent()", start);
   assert.ok(start >= 0 && end > start);
   const body = source.slice(start, end);
-  // The dossier is rewritten by the one-second interval and by every state frame, so the scroll must be restored.
+  // The dossier is rewritten on every state frame, so the scroll must be restored around the patch.
   assert.match(body, /const dossierBody = \$\("insp"\)\.querySelector\("\.ins-body"\); const dossierScroll = dossierBody \? dossierBody\.scrollTop : 0;/);
-  assert.match(body, /\$\("insp"\)\.innerHTML = renderDossier\(publisher, record\); const nextDossierBody = \$\("insp"\)\.querySelector\("\.ins-body"\); if \(nextDossierBody && dossierScroll\) nextDossierBody\.scrollTop = dossierScroll;/);
+  assert.match(body, /patch\(\$\("insp"\), renderDossier\(publisher, record\)\); const nextDossierBody = \$\("insp"\)\.querySelector\("\.ins-body"\); if \(nextDossierBody && dossierScroll\) nextDossierBody\.scrollTop = dossierScroll;/);
 });

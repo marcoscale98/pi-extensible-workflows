@@ -10,7 +10,7 @@ const TRAJECTORY_IDLE_EXIT_MS = 5 * 60 * 1000;
 
 type Socket = import("node:stream").Duplex;
 type ClientKind = "publisher" | "browser";
-type Client = { socket: Socket; kind: ClientKind; publisherId?: string; buffer: Buffer };
+type Client = { socket: Socket; kind: ClientKind; publisherId?: string; buffer: Buffer; pendingState: Buffer | undefined; backpressured: boolean };
 type State = { type: "state"; publishers: readonly unknown[]; updatedAt: number; initial?: boolean; truncated?: boolean };
 const MAX_FRAME_BYTES = 32 * 1024 * 1024;
 const TIMING_ENTRY_TYPE = "pi-workflows:tool-timing";
@@ -83,12 +83,23 @@ function frame(payload: string, maxBytes: number): Buffer {
   const header = Buffer.alloc(10); header[0] = 0x81; header[1] = 127; header.writeBigUInt64BE(BigInt(body.length), 2); return Buffer.concat([header, body]);
 }
 
+function isState(value: unknown): value is State {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value) && (value as { type?: unknown }).type === "state");
+}
+
+function writeFrame(client: Client, packet: Buffer, state: boolean): void {
+  if (state && client.backpressured) { client.pendingState = packet; return; }
+  try {
+    if (state) client.pendingState = undefined;
+    if (!client.socket.write(packet)) client.backpressured = true;
+  } catch { client.socket.destroy(); }
+}
+
 function send(client: Client, value: unknown, maxBytes: number): void {
   try {
-    const payload = value && typeof value === "object" && !Array.isArray(value) && (value as { type?: unknown }).type === "state"
-      ? encodeState(value as State, maxBytes)
-      : JSON.stringify(value);
-    client.socket.write(frame(payload, maxBytes));
+    const state = isState(value);
+    const packet = frame(state ? encodeState(value, maxBytes) : JSON.stringify(value), maxBytes);
+    writeFrame(client, packet, state);
   } catch { client.socket.destroy(); }
 }
 
@@ -112,7 +123,7 @@ function parseFrames(client: Client, chunk: Buffer, maxBytes: number): readonly 
     const data = client.buffer.subarray(offset, offset + length);
     client.buffer = client.buffer.subarray(offset + length);
     if (opcode === 0x8) { client.socket.end(); break; }
-    if (opcode === 0x9) { const pong = Buffer.alloc(2 + length); pong[0] = 0x8a; pong[1] = length; for (let index = 0; index < length; index += 1) pong[index + 2] = (data[index] ?? 0) ^ (mask[index % 4] ?? 0); client.socket.write(pong); continue; }
+    if (opcode === 0x9) { const pong = Buffer.alloc(2 + length); pong[0] = 0x8a; pong[1] = length; for (let index = 0; index < length; index += 1) pong[index + 2] = (data[index] ?? 0) ^ (mask[index % 4] ?? 0); writeFrame(client, pong, false); continue; }
     if (opcode === 0xA) continue;
     if (opcode !== 0x1) throw new Error("Unsupported Trajectory WebSocket frame");
     const decoded = Buffer.alloc(length);
@@ -137,7 +148,7 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
   const maxFrameBytes = options.maxFrameBytes ?? MAX_FRAME_BYTES;
   const serverFingerprint = options.fingerprint ?? "";
   const clients = new Set<Client>();
-  const publishers = new Map<string, { client: Client; value: Record<string, unknown> }>();
+  const publishers = new Map<string, { client: Client; value: Record<string, unknown>; sequence: number }>();
   let latest: State = { type: "state", publishers: [], updatedAt: Date.now(), initial: true };
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
@@ -156,7 +167,18 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
   const cancelIdleExit = () => {
     if (idleTimer !== undefined) { clearTimeout(idleTimer); idleTimer = undefined; }
   };
-  const broadcast = (value: unknown) => { for (const client of clients) if (client.kind === "browser") emit(client, value); };
+  const broadcast = (value: unknown) => {
+    if (isState(value)) {
+      try {
+        const stateFrame = frame(encodeState(value, maxFrameBytes), maxFrameBytes);
+        for (const client of clients) if (client.kind === "browser") writeFrame(client, stateFrame, true);
+      } catch {
+        for (const client of clients) if (client.kind === "browser") client.socket.destroy();
+      }
+      return;
+    }
+    for (const client of clients) if (client.kind === "browser") emit(client, value);
+  };
   const publishState = () => {
     const values = [...publishers.values()].map(({ value }) => value);
     latest = { type: "state", publishers: values, updatedAt: Date.now() };
@@ -180,7 +202,8 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
       cancelIdleExit();
       client.publisherId = message.publisherId;
       const previous = publishers.get(message.publisherId);
-      publishers.set(message.publisherId, { client, value: { ...(previous?.value ?? { id: message.publisherId }), id: message.publisherId, connected: true } });
+      const sequence = (previous?.sequence ?? 0) + 1;
+      publishers.set(message.publisherId, { client, value: { ...(previous?.value ?? { id: message.publisherId }), id: message.publisherId, connected: true }, sequence });
       publishState();
       return;
     }
@@ -190,14 +213,16 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
       if (!id) return;
       client.publisherId = id;
       cancelIdleExit();
-      publishers.set(id, { client, value: { ...(publishers.get(id)?.value ?? { id }), ...publisher, connected: true } });
+      const previous = publishers.get(id);
+      const sequence = (previous?.sequence ?? 0) + 1;
+      publishers.set(id, { client, value: { ...(previous?.value ?? { id }), ...publisher, connected: true }, sequence });
       void Promise.all([withDescribedRuns(message.runs), withDescribedSubagents(message.subagents)]).then(([runs, subagents]) => {
-        if (client.publisherId !== id || publishers.get(id)?.client !== client) return;
-        publishers.set(id, { client, value: { ...publisher, connected: true, runs, subagents } });
+        if (client.publisherId !== id || publishers.get(id)?.client !== client || publishers.get(id)?.sequence !== sequence) return;
+        publishers.set(id, { client, value: { ...publisher, connected: true, runs, subagents }, sequence });
         publishState();
       }, () => {
-        if (client.publisherId !== id || publishers.get(id)?.client !== client) return;
-        publishers.set(id, { client, value: { ...publisher, connected: true, runs: Array.isArray(message.runs) ? message.runs : [], subagents: Array.isArray(message.subagents) ? message.subagents : [] } });
+        if (client.publisherId !== id || publishers.get(id)?.client !== client || publishers.get(id)?.sequence !== sequence) return;
+        publishers.set(id, { client, value: { ...publisher, connected: true, runs: Array.isArray(message.runs) ? message.runs : [], subagents: Array.isArray(message.subagents) ? message.subagents : [] }, sequence });
         publishState();
       });
       return;
@@ -277,6 +302,13 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
       }).catch(() => { writeJson(response, 500, { error: "Trajectory markdown renderer is unavailable" }); });
       return;
     }
+    if (request.method === "GET" && path === "/morphdom.min.js") {
+      void readFile(new URL("./trajectory/morphdom.min.js", import.meta.url)).then((script) => {
+        response.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "content-length": script.byteLength, "cache-control": "no-store" });
+        response.end(script);
+      }).catch(() => { writeJson(response, 500, { error: "Trajectory DOM diffing library is unavailable" }); });
+      return;
+    }
     writeJson(response, 404, { error: "Not found" });
   });
   server.on("upgrade", (request, socket) => {
@@ -287,7 +319,13 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
     if (!authorized(request, port) || url.pathname !== "/ws" || typeof key !== "string") { socket.destroy(); return; }
     const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    const client: Client = { socket, kind: "publisher", buffer: Buffer.alloc(0) };
+    const client: Client = { socket, kind: "publisher", buffer: Buffer.alloc(0), pendingState: undefined, backpressured: false };
+    socket.on("drain", () => {
+      const pendingState = client.pendingState;
+      client.pendingState = undefined;
+      client.backpressured = false;
+      if (pendingState !== undefined) writeFrame(client, pendingState, true);
+    });
     clients.add(client);
     socket.on("data", (chunk: unknown) => {
       if (!Buffer.isBuffer(chunk)) return;
