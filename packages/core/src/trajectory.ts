@@ -88,9 +88,9 @@ export type TrajectoryController = {
   close(): Promise<void>;
 };
 function trajectoryLockPath(agentDir: string): string { return join(agentDir, "pi-extensible-workflows", TRAJECTORY_LOCK_NAME); }
-function trajectoryServerPath(): string {
-  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
-  const candidates = [join(moduleDirectory, "trajectory-server.js"), join(moduleDirectory, "trajectory-server.ts"), join(moduleDirectory, "../dist/src/trajectory-server.js")];
+export function trajectoryServerPath(moduleDirectory = dirname(fileURLToPath(import.meta.url))): string {
+  // A spawned bare node cannot run trajectory-server.ts: it imports ./trajectory.js, which only exists in dist.
+  const candidates = [join(moduleDirectory, "trajectory-server.js"), join(moduleDirectory, "../dist/src/trajectory-server.js")];
   const path = candidates.find((candidate) => existsSync(candidate));
   if (!path) throw new Error("Trajectory server implementation is unavailable");
   return path;

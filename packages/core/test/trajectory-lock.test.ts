@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import { createTrajectoryController, type TrajectoryController } from "../src/trajectory.js";
+import { createTrajectoryController, trajectoryServerPath, type TrajectoryController } from "../src/trajectory.js";
 import { isNodeError } from "../src/utils.js";
 
 type TrajectoryLock = { pid: number; port: number; fingerprint?: string };
@@ -190,5 +190,23 @@ void test("unhealthy Trajectory lock owned by the attacher is replaced without k
     assert.equal((await fetch(`http://127.0.0.1:${String(port)}/health`)).ok, true);
   } finally {
     await cleanup(home, [], pids);
+  }
+});
+
+void test("Trajectory resolves the runnable server in a source checkout", async () => {
+  const home = await mkdtemp(join(tmpdir(), "trajectory-server-path-"));
+  try {
+    // A source checkout offers trajectory-server.ts beside trajectory.ts, but a spawned bare node cannot run it:
+    // it imports ./trajectory.js, which only exists in dist.
+    await mkdir(join(home, "src"), { recursive: true });
+    await mkdir(join(home, "dist", "src"), { recursive: true });
+    await writeFile(join(home, "src", "trajectory-server.ts"), "export {};\n", "utf8");
+    await writeFile(join(home, "dist", "src", "trajectory-server.js"), "export {};\n", "utf8");
+    assert.equal(trajectoryServerPath(join(home, "src")), join(home, "dist", "src", "trajectory-server.js"));
+    await mkdir(join(home, "installed"), { recursive: true });
+    await writeFile(join(home, "installed", "trajectory-server.js"), "export {};\n", "utf8");
+    assert.equal(trajectoryServerPath(join(home, "installed")), join(home, "installed", "trajectory-server.js"));
+  } finally {
+    await rm(home, { recursive: true, force: true });
   }
 });
