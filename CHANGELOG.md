@@ -1,6 +1,8 @@
 # Changelog
 ## Unreleased
 
+## [5.8.0] - 2026-08-23
+
 ### Breaking changes
 
 - Require every workflow agent to submit its result through `workflow_result`. Unstructured agents use `{ result: string }`, return that string to their parent, and fail with `RESULT_INVALID` after the existing two result prompts when they do not submit one. Eager transports now receive the runtime-generated workflow prompt when their session is created.
@@ -34,6 +36,10 @@
 - Drop disconnected Trajectory publishers and their runs, returning an open session to the empty home view ([#218](https://github.com/vekexasia/pi-extensible-workflows/issues/218)).
 - Collapse shadowed model aliases to the static settings winner in the LLM-facing workflow catalog index and detail results while preserving full provenance for trusted catalogs ([#210](https://github.com/vekexasia/pi-extensible-workflows/issues/210)).
 - Clarify Trajectory message token usage as per-call provider input/output (with optional reasoning and cache rows) or a displayed-text estimate, without duplicating it in the header ([#221](https://github.com/vekexasia/pi-extensible-workflows/issues/221)).
+
+### Documentation
+
+- Document how to disable the bundled `reviewLoop` starter, Subagents, and Trajectory independently with Pi package filters.
 
 ## [5.7.0] - 2026-08-20
 

@@ -16,7 +16,7 @@ Install the core workflow extension for deterministic orchestration:
 pi install npm:pi-extensible-workflows
 ```
 
-The core installation includes workflow orchestration, the `reviewLoop` starter, and standalone subagent tools. The starter ships `reviewLoop`, packaged `developer`/`reviewer` roles, and dynamic `developer-model`/`reviewer-model` aliases. Global or project roles with the same name override packaged roles. Static settings `modelAliases` shadow the dynamic resolvers. `reviewLoop` cannot be overridden: a duplicate name is `GLOBAL_COLLISION`. Disable the factory with a Pi package filter `"-starter/index.ts"` (local repo checkout: `"-packages/core/starter/index.ts"`), then register a replacement. See `docs/extensions.html#starter`. Add companion packages only for the capability you need:
+The core installation includes workflow orchestration, the `reviewLoop` starter, standalone subagent tools, and Trajectory. The starter ships `reviewLoop`, packaged `developer`/`reviewer` roles, and dynamic `developer-model`/`reviewer-model` aliases. Global or project roles with the same name override packaged roles. Static settings `modelAliases` shadow the dynamic resolvers. `reviewLoop` cannot be overridden: a duplicate name is `GLOBAL_COLLISION`. Disable optional entries with Pi package filters `"-starter/index.ts"`, `"-subagents/index.ts"`, and `"-trajectory/index.ts"`; keep `src/index.ts` for workflow tools. The same package-root paths apply to `pi install "$PWD/packages/core"`. See `docs/extensions.html#bundled-filters`. Add companion packages only for the capability you need:
 
 ```sh
 pi install npm:@piewf/herdr

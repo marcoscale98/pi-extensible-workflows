@@ -25,6 +25,7 @@
     <aside class="toc" aria-label="On this page">
       <p class="toc-title">Extensions</p>
       <a href="#shipped">Shipped extensions</a>
+      <a href="#bundled-filters">Disable bundled features</a>
       <a href="#starter">Bundled starter</a>
       <a href="#start-here">Authoring start</a>
       <a href="#registration">Registration contract</a>
@@ -51,6 +52,32 @@
         </table></div>
         <p>The core package includes the starter and Subagents tools. Herdr complements the core workflow extension and activates only in a Herdr-managed pane. Each shipped capability has a dedicated guide linked above.</p>
       </section>
+      <section id="bundled-filters">
+        <h2>Disable bundled features</h2>
+        <p>The core package loads the workflow host plus three optional extension entries. Exclude only the entries you do not want; keep <code>src/index.ts</code> loaded for workflow tools and <code>/workflow</code>. Independent Trajectory filtering requires version 5.8.0 or newer; earlier versions loaded it from the workflow host entry.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Feature</th><th>Package path</th><th>What exclusion removes</th></tr></thead>
+          <tbody>
+            <tr><td><code>reviewLoop</code> starter</td><td><code>starter/index.ts</code></td><td>The <code>reviewLoop</code> function, packaged developer/reviewer roles, and dynamic model aliases.</td></tr>
+            <tr><td>Standalone Subagents</td><td><code>subagents/index.ts</code></td><td>The five <code>subagents_*</code> tools and <code>/subagents</code>.</td></tr>
+            <tr><td>Trajectory</td><td><code>trajectory/index.ts</code></td><td>The browser server and automatic opening. <code>/workflow trajectory</code> remains available and reports that Trajectory is disabled.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Use exact package-root exclusions in Pi's global <code>settings.json</code>. This example disables all three optional entries; delete an exclusion to keep that feature:</p>
+        <pre><code class="language-json"><span class="tok-punctuation">{</span>
+  <span class="tok-property">"packages"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>
+    <span class="tok-punctuation">{</span>
+      <span class="tok-property">"source"</span><span class="tok-punctuation">:</span> <span class="tok-string">"npm:pi-extensible-workflows"</span><span class="tok-punctuation">,</span>
+      <span class="tok-property">"extensions"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>
+        <span class="tok-string">"-starter/index.ts"</span><span class="tok-punctuation">,</span>
+        <span class="tok-string">"-subagents/index.ts"</span><span class="tok-punctuation">,</span>
+        <span class="tok-string">"-trajectory/index.ts"</span>
+      <span class="tok-punctuation">]</span>
+    <span class="tok-punctuation">}</span>
+  <span class="tok-punctuation">]</span>
+<span class="tok-punctuation">}</span></code></pre>
+        <p>The same exclusions apply to the documented source install, <code>pi install "$PWD/packages/core"</code>, because that directory is the package root. Only a repository-root package source needs the <code>packages/core/</code> prefix. Restart Pi after changing the filter.</p>
+      </section>
       <section id="starter">
         <h2>Bundled starter</h2>
         <p>The core package loads <code>starter/index.ts</code> next to the workflow host. It registers one function, two packaged roles, and two dynamic model aliases:</p>
@@ -72,16 +99,7 @@
             <tr><td><code>reviewLoop</code></td><td>None. A second function with the same name is <code>GLOBAL_COLLISION</code>.</td><td>Disable the starter extension, then register your own function.</td></tr>
           </tbody>
         </table></div>
-        <p>Disable the starter factory without uninstalling core. Filters are relative to the package root:</p>
-        <pre><code class="language-json"><span class="tok-punctuation">{</span>
-  <span class="tok-property">"packages"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>
-    <span class="tok-punctuation">{</span>
-      <span class="tok-property">"source"</span><span class="tok-punctuation">:</span> <span class="tok-string">"npm:pi-extensible-workflows"</span><span class="tok-punctuation">,</span>
-      <span class="tok-property">"extensions"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span><span class="tok-string">"-starter/index.ts"</span><span class="tok-punctuation">]</span>
-    <span class="tok-punctuation">}</span>
-  <span class="tok-punctuation">]</span>
-<span class="tok-punctuation">}</span></code></pre>
-        <p>A local install of this repository uses <code>-packages/core/starter/index.ts</code> instead. Reload Pi after changing the filter. Subagents stay loaded; only the starter factory is excluded.</p>
+        <p>To replace <code>reviewLoop</code>, exclude <code>starter/index.ts</code> as described above, then register the replacement.</p>
       </section>
       <section id="start-here">
         <h2>Start here</h2>
