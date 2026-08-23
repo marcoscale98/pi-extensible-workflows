@@ -9,6 +9,7 @@ import type { AgentAttemptSummary, JsonValue, LaunchSnapshot, WorkflowAgentSessi
 import { normalizeSubagentRunRequest, type SubagentProgress, type SubagentRunRequest, type SubagentStatus } from "../subagents/src/contracts.js";
 import { statusValue, subagentErrorValue } from "../subagents/src/decode.js";
 import { isNodeError, jsonValue, object, resourcePatternHasMagic, selectResourcesByLayers } from "./utils.js";
+import type { TrajectoryAction, TrajectoryTarget } from "./trajectory-contracts.js";
 
 const TRAJECTORY_MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 const TRAJECTORY_MAX_NON_TIMING_ENTRIES = 400;
@@ -46,13 +47,9 @@ export type TrajectorySubagent = {
 };
 export type TrajectorySubagentLoader = () => Promise<readonly TrajectorySubagent[]>;
 
-export type TrajectoryTarget = { kind: "run" | "subagent"; id: string };
-export type TrajectoryAction = "checkpoint-approve" | "checkpoint-reject" | "pause" | "resume" | "steer" | "stop" | "retry";
+export type { TrajectoryAction, TrajectoryTarget } from "./trajectory-contracts.js";
+export { isTrajectoryAction, isTrajectoryTarget, trajectoryActionError } from "./trajectory-contracts.js";
 export type TrajectoryActionRequest = { action: TrajectoryAction; target: TrajectoryTarget; name?: string; payload?: unknown };
-const TRAJECTORY_ACTIONS: readonly TrajectoryAction[] = ["checkpoint-approve", "checkpoint-reject", "pause", "resume", "steer", "stop", "retry"];
-export function isTrajectoryAction(value: unknown): value is TrajectoryAction { return typeof value === "string" && TRAJECTORY_ACTIONS.includes(value as TrajectoryAction); }
-export function isTrajectoryTarget(value: unknown): value is TrajectoryTarget { return object(value) && (value.kind === "run" || value.kind === "subagent") && typeof value.id === "string" && value.id.length >= 1 && value.id.length <= 200; }
-export function trajectoryActionError(action: TrajectoryAction, target: TrajectoryTarget): string | undefined { return target.kind === "subagent" && (action === "checkpoint-approve" || action === "checkpoint-reject" || action === "pause" || action === "resume") ? `Trajectory action ${action} is not supported for subagent targets` : target.kind === "run" && action === "steer" ? "Trajectory action steer is not supported for run targets" : undefined; }
 export type TrajectoryActionResult = { readonly id: string; readonly state: "running" };
 export type TrajectoryActionHandler = (request: Readonly<TrajectoryActionRequest>) => Promise<void> | Promise<TrajectoryActionResult | undefined>;
 export type TrajectoryRunLoader = () => Promise<readonly TrajectoryRun[]>;

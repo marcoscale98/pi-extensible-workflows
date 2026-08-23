@@ -310,12 +310,12 @@ void test("Trajectory fetches one agent transcript after compacting combined sta
   }
 });
 
-void test("Trajectory relays subagents, enriches their attempt, and compacts only transcript bodies", async () => {
+void test("Trajectory relays subagents and compacts only transcript bodies", async () => {
   const root = await mkdtemp(join(tmpdir(), "trajectory-server-subagent-state-"));
   const port = await availablePort();
   const maxFrameBytes = 1800;
   const timing = { type: "custom", customType: "pi-workflows:tool-timing", data: { toolCallId: "call", toolName: "bash", startedAt: 1, completedAt: 2, durationMs: 1, isError: false } };
-  const subagent = { id: "subagent", state: "running", cwd: process.cwd(), worktree: { path: "/tmp/worktree", branch: "subagent" }, tools: ["bash"], attempt: { attempt: 1, setup: { tools: ["bash"], cwd: process.cwd() } }, transcript: [{ type: "message", text: "x".repeat(500) }, timing] };
+  const subagent = { id: "subagent", state: "running", cwd: process.cwd(), worktree: { path: "/tmp/worktree", branch: "subagent" }, tools: ["bash"], toolDefinitions: [{ name: "bash", description: "Execute a bash command" }], attempt: { attempt: 1, setup: { tools: ["bash"], cwd: process.cwd() } }, transcript: [{ type: "message", text: "x".repeat(500) }, timing] };
   const server = createTrajectoryServer(port, join(root, "trajectory.lock"), { maxFrameBytes });
   await listen(server, port);
   const sockets: Socket[] = [];

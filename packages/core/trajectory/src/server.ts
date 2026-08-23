@@ -3,9 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { URL } from "node:url";
-import { isTrajectoryAction, isTrajectoryTarget, trajectoryActionError, withPiToolDescriptions, withPiToolDescriptionsForTools, withResolvedAttemptResources, withResolvedResources } from "../../src/trajectory.js";
-import type { AgentAttemptSummary } from "../../src/types.js";
-import type { PersistedRun } from "../../src/persistence.js";
+import { isTrajectoryAction, isTrajectoryTarget, trajectoryActionError } from "../../src/trajectory-contracts.js";
 const TRAJECTORY_IDLE_EXIT_MS = 5 * 60 * 1000;
 
 type Socket = import("node:stream").Duplex;
@@ -48,32 +46,6 @@ function encodeState(state: State, maxBytes: number): string {
   const compact = JSON.stringify({ type: "state", publishers: compactPublishers(state.publishers), updatedAt: state.updatedAt });
   if (Buffer.byteLength(compact) <= maxBytes) return compact;
   return JSON.stringify({ type: "state", publishers: [], updatedAt: state.updatedAt, truncated: true });
-}
-
-async function withDescribedRuns(runs: unknown): Promise<unknown[]> {
-  if (!Array.isArray(runs)) return [];
-  const items: unknown[] = runs;
-  return Promise.all(items.map(async (item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item) || !("run" in item)) return item;
-    const record = item as { run: PersistedRun };
-    const run = record.run;
-    const cwd = run.agents.at(0)?.attemptDetails?.at(-1)?.setup.cwd ?? process.cwd();
-    return { ...record, run: await withResolvedResources(withPiToolDescriptions(run), cwd) };
-  }));
-}
-async function withDescribedSubagents(subagents: unknown): Promise<unknown[]> {
-  if (!Array.isArray(subagents)) return [];
-  const items: unknown[] = subagents;
-  return Promise.all(items.map(async (item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item) || !("attempt" in item)) return item;
-    const record = item as { attempt: AgentAttemptSummary; cwd?: unknown; tools?: unknown; toolDefinitions?: unknown };
-    const cwd = typeof record.cwd === "string" ? record.cwd : record.attempt.setup.cwd;
-    const attempt = await withResolvedAttemptResources(record.attempt, cwd);
-    const tools = Array.isArray(record.tools) ? record.tools.filter((tool): tool is string => typeof tool === "string") : attempt.setup.tools;
-    const toolDefinitions = withPiToolDescriptionsForTools(tools, cwd);
-    const hasToolDefinitions = Array.isArray(record.toolDefinitions) && record.toolDefinitions.length > 0;
-    return { ...record, attempt, ...(!hasToolDefinitions && toolDefinitions.length ? { toolDefinitions } : {}) };
-  }));
 }
 function frame(payload: string, maxBytes: number): Buffer {
   const body = Buffer.from(payload);
@@ -216,15 +188,10 @@ export function createTrajectoryServer(port: number, lockPath: string, options: 
       const previous = publishers.get(id);
       const sequence = (previous?.sequence ?? 0) + 1;
       publishers.set(id, { client, value: { ...(previous?.value ?? { id }), ...publisher, connected: true }, sequence });
-      void Promise.all([withDescribedRuns(message.runs), withDescribedSubagents(message.subagents)]).then(([runs, subagents]) => {
-        if (client.publisherId !== id || publishers.get(id)?.client !== client || publishers.get(id)?.sequence !== sequence) return;
-        publishers.set(id, { client, value: { ...publisher, connected: true, runs, subagents }, sequence });
-        publishState();
-      }, () => {
-        if (client.publisherId !== id || publishers.get(id)?.client !== client || publishers.get(id)?.sequence !== sequence) return;
-        publishers.set(id, { client, value: { ...publisher, connected: true, runs: Array.isArray(message.runs) ? message.runs : [], subagents: Array.isArray(message.subagents) ? message.subagents : [] }, sequence });
-        publishState();
-      });
+      const runs = Array.isArray(message.runs) ? message.runs : [];
+      const subagents = Array.isArray(message.subagents) ? message.subagents : [];
+      publishers.set(id, { client, value: { ...publisher, connected: true, runs, subagents }, sequence });
+      publishState();
       return;
     }
     if (client.kind === "publisher" && message.type === "publisher:action-result" && typeof message.requestId === "string") { broadcast(message); return; }
