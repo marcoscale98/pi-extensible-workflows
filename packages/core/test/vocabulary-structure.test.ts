@@ -44,9 +44,9 @@ void test("scheduler and persistence state validation use the canonical agent-st
 });
 
 void test("host runtime and workflow evals reuse the shared workflow-error guard", () => {
-  for (const name of ["host-runtime.ts", "workflow-evals.ts"]) {
+  for (const [name, utilsModule] of [["host-runtime.ts", "\\./utils\\.js"], ["../evals/src/workflow-evals.ts", "\\.\\./\\.\\./src/utils\\.js"]] as const) {
     const sourceText = source(name);
-    assert.equal(importsFrom(sourceText, "isWorkflowErrorCode", "\\./utils\\.js"), true, `${name} must import the shared guard directly from utils`);
+    assert.equal(importsFrom(sourceText, "isWorkflowErrorCode", utilsModule), true, `${name} must import the shared guard directly from utils`);
     assert.doesNotMatch(sourceText, /function isWorkflowErrorCode\s*\(/, `${name} must not define a local guard`);
   }
 });

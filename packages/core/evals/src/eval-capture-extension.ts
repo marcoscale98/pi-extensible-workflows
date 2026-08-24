@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { validateWorkflowLaunch, WorkflowError, WORKFLOW_RETRY_PARAMETERS, WORKFLOW_TOOL_DESCRIPTION, WORKFLOW_TOOL_LABEL, WORKFLOW_TOOL_PARAMETERS, WORKFLOW_TOOL_PROMPT_SNIPPET } from "./index.js";
+import { validateWorkflowLaunch, WorkflowError, WORKFLOW_RETRY_PARAMETERS, WORKFLOW_TOOL_DESCRIPTION, WORKFLOW_TOOL_LABEL, WORKFLOW_TOOL_PARAMETERS, WORKFLOW_TOOL_PROMPT_SNIPPET } from "../../src/index.js";
 
 export const CAPTURE_IDENTITY = "pi-extensible-workflows-eval-capture-v1";
 export const CAPTURE_ERROR_PREFIX = `${CAPTURE_IDENTITY}:`;

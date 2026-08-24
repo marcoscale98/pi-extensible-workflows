@@ -13,7 +13,7 @@ import {
   runAmbientPiProcess,
   runAmbientWorkflowEvals,
   assertAmbientOptIn,
-} from "../src/ambient-workflow-evals.js";
+} from "../evals/src/ambient-workflow-evals.js";
 
 void test("ambient evals require explicit opt-in and execute capture safely", async () => {
   assert.throws(() => { assertAmbientOptIn({}); }, /PI_WORKFLOW_EVAL_AMBIENT=1/);

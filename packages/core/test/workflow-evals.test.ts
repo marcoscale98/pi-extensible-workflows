@@ -7,8 +7,8 @@ import test from "node:test";
 import { callUnchecked, executeToolCall, testExtensionContext, testExtensionApi } from "./support.js";
 import { Compile } from "typebox/compile";
 import { inspectWorkflowScript, WorkflowError } from "../src/index.js";
-import evalCaptureExtension from "../src/eval-capture-extension.js";
-import { assertEvalScriptSafe, captureEvalCase, captureValidationReports, evalExpectationErrors, extractCapturedWorkflows, extractParentOracle, extractParentToolCalls, findSessionFile, formatEvalSummary, INITIAL_WORKFLOW_EVAL_CASES, loadWorkflowEvalCases, matchesJsonResult, matchesJsonSchema, matchesOutputSchema, parseSemanticJudge, recoverySelectionErrors, replayExpectationErrors, replayWorkflowScript, resolveWorkflowSkillPath, selectStaticCandidate, staticExpectationResults, runIsolatedProcess, runWorkflowEvals, validateWorkflowEvalCases, type ParentOracle } from "../src/workflow-evals.js";
+import evalCaptureExtension from "../evals/src/eval-capture-extension.js";
+import { assertEvalScriptSafe, captureEvalCase, captureValidationReports, evalExpectationErrors, extractCapturedWorkflows, extractParentOracle, extractParentToolCalls, findSessionFile, formatEvalSummary, INITIAL_WORKFLOW_EVAL_CASES, loadWorkflowEvalCases, matchesJsonResult, matchesJsonSchema, matchesOutputSchema, parseSemanticJudge, recoverySelectionErrors, replayExpectationErrors, replayWorkflowScript, resolveWorkflowSkillPath, selectStaticCandidate, staticExpectationResults, runIsolatedProcess, runWorkflowEvals, validateWorkflowEvalCases, type ParentOracle } from "../evals/src/workflow-evals.js";
 
 const schema = { type: "object", properties: { answer: { type: "number" }, label: { type: "string" } }, required: ["answer", "label"], additionalProperties: false };
 function assertRecord(value: unknown): asserts value is Record<string, unknown> { assert.ok(typeof value === "object" && value !== null && !Array.isArray(value)); }
@@ -86,13 +86,12 @@ void test("validates programmatic case overrides before starting Pi", async () =
     rmSync(root, { recursive: true, force: true });
   }
 });
-void test("publishes eval cases and referenced fixtures", () => {
+void test("does not publish the eval harness, cases, or fixtures", () => {
   const output = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], { cwd: process.cwd(), encoding: "utf8" });
   const reports = JSON.parse(output) as Array<{ files?: Array<{ path: string }> }>;
   const files = reports[0]?.files?.map(({ path }) => path) ?? [];
-  assert.equal(files.includes("evals/cases/parallel.yaml"), true);
-  assert.equal(files.includes("test/fixtures/ready-for-agent-tasks.md"), true);
-  assert.equal(files.includes("test/fixtures/workflow-eval-roles/developer.md"), true);
+  assert.ok(files.length > 0);
+  assert.equal(files.some((path) => path.startsWith("evals/") || path.startsWith("dist/evals/") || path.startsWith("test/")), false, "eval harness files must stay out of the published package");
 });
 
 
@@ -175,7 +174,7 @@ void test("captures production-validated calls without execution and judges the 
   const piPath = join(root, "fake-pi.mjs");
   writeFileSync(piPath, `#!/usr/bin/env node\nimport { mkdirSync, writeFileSync } from "node:fs"; import { join } from "node:path"; const args = process.argv.slice(2); const value = name => args[args.indexOf(name) + 1]; if (args.includes("--no-tools")) { console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: JSON.stringify({ criteria: [{ id: "intent", pass: true, evidence: "reviewer agent returns the review" }] }) }], provider: "fake", model: "judge", usage: { input: 5, output: 6, cacheRead: 0, cacheWrite: 0, cost: { total: 0.02 } } } })); process.exit(0); } const sessionDir = value("--session-dir"); const id = value("--session-id"); if (!value("--skill")?.endsWith("skills/pi-extensible-workflows/SKILL.md")) process.exit(2); if (!value("--extension")?.endsWith("/eval-capture-extension.js")) process.exit(3); mkdirSync(sessionDir, { recursive: true }); const script = 'return await agent("fake", { role: "reviewer" });'; const rows = [{ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: process.cwd() }, { type: "message", id: "bad", parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "toolCall", id: "bad-call", name: "workflow", arguments: { script } }], provider: "fake", model: "parent", usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } } } }, { type: "message", id: "bad-result", parentId: "bad", timestamp: new Date().toISOString(), message: { role: "toolResult", toolCallId: "bad-call", toolName: "workflow", content: [{ type: "text", text: "pi-extensible-workflows-eval-capture-v1:INVALID_METADATA: Inline workflows require name" }], isError: true } }, { type: "message", id: "good", parentId: "bad-result", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "toolCall", id: "good-call", name: "workflow", arguments: { name: "review", script } }], provider: "fake", model: "parent", usage: { input: 2, output: 4, cacheRead: 0, cost: { total: 0.01 } } } }, { type: "message", id: "good-result", parentId: "good", timestamp: new Date().toISOString(), message: { role: "toolResult", toolCallId: "good-call", toolName: "workflow", content: [{ type: "text", text: "captured" }], details: { captureIdentity: "pi-extensible-workflows-eval-capture-v1", realWorkflowAgentsLaunched: 0, validation: { valid: true, script } }, isError: false } }]; writeFileSync(join(sessionDir, "parent.jsonl"), rows.map(JSON.stringify).join("\\n") + "\\n");`);
   chmodSync(piPath, 0o755);
-  const result = await runIsolatedProcess({ case: { id: "capture", prompt: "review this", timeoutMs: 10_000, maxCost: 1, expectations: { workflowCallCount: { min: 1 }, requiredRoles: ["reviewer"] }, semanticCriteria: [{ id: "intent", description: "Return a reviewer assessment." }] }, model: "fake/model", piCommand: piPath, maxCost: 1 }, { childPath: join(process.cwd(), "dist/src/workflow-evals-child.js"), timeoutMs: 25_000 });
+  const result = await runIsolatedProcess({ case: { id: "capture", prompt: "review this", timeoutMs: 10_000, maxCost: 1, expectations: { workflowCallCount: { min: 1 }, requiredRoles: ["reviewer"] }, semanticCriteria: [{ id: "intent", description: "Return a reviewer assessment." }] }, model: "fake/model", piCommand: piPath, maxCost: 1 }, { childPath: join(process.cwd(), "dist/evals/src/workflow-evals-child.js"), timeoutMs: 25_000 });
   assertRecord(result.value);
   assert.equal(result.value.status, "passed");
   assertArray(result.value.workflows);
@@ -256,7 +255,7 @@ void test("selects the required valid workflow set and records surplus valid cal
     "writeFileSync(join(sessionDir, 'parent.jsonl'), rows.map(JSON.stringify).join('\\n') + '\\n');",
   ].join("\n"));
   chmodSync(piPath, 0o755);
-  const result = await runIsolatedProcess({ case: { id: "multiple-valid", prompt: "delegate twice", timeoutMs: 10_000, maxCost: 1, expectations: { workflowCallCount: { min: 2 }, minimumAgentCalls: 2 }, expectedWorkflowCalls: 2, semanticCriteria: [{ id: "intent", description: "Use both results." }] }, model: "fake/model", piCommand: piPath, maxCost: 1 }, { childPath: join(process.cwd(), "dist/src/workflow-evals-child.js"), timeoutMs: 25_000 });
+  const result = await runIsolatedProcess({ case: { id: "multiple-valid", prompt: "delegate twice", timeoutMs: 10_000, maxCost: 1, expectations: { workflowCallCount: { min: 2 }, minimumAgentCalls: 2 }, expectedWorkflowCalls: 2, semanticCriteria: [{ id: "intent", description: "Use both results." }] }, model: "fake/model", piCommand: piPath, maxCost: 1 }, { childPath: join(process.cwd(), "dist/evals/src/workflow-evals-child.js"), timeoutMs: 25_000 });
   assertRecord(result.value);
   assert.equal(result.value.status, "passed");
   assertArray(result.value.workflows);
@@ -280,7 +279,7 @@ void test("skips the semantic judge when every captured call fails production va
   const marker = join(root, "judge-ran");
   writeFileSync(piPath, `#!/usr/bin/env node\nimport { mkdirSync, writeFileSync } from "node:fs"; import { join } from "node:path"; const args = process.argv.slice(2); const value = name => args[args.indexOf(name) + 1]; if (args.includes("--no-tools")) { writeFileSync(${JSON.stringify(marker)}, "unexpected"); process.exit(9); } const dir = value("--session-dir"); const id = value("--session-id"); mkdirSync(dir, { recursive: true }); const rows = [{ type: "session", version: 3, id, cwd: process.cwd() }, { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "bad", name: "workflow", arguments: { script: "return 1" } }], provider: "fake", model: "parent", usage: { input: 1, output: 1, cost: { total: 0.01 } } } }, { type: "message", message: { role: "toolResult", toolCallId: "bad", toolName: "workflow", content: [{ type: "text", text: "pi-extensible-workflows-eval-capture-v1:INVALID_METADATA: Inline workflows require name" }], isError: true } }]; writeFileSync(join(dir, "parent.jsonl"), rows.map(JSON.stringify).join("\\n") + "\\n");`);
   chmodSync(piPath, 0o755);
-  const result = await runIsolatedProcess({ case: { id: "invalid", prompt: "delegate", timeoutMs: 10_000, maxCost: 1, expectations: { workflowCallCount: { min: 1 } }, semanticCriteria: [{ id: "intent", description: "delegate" }] }, model: "fake/model", piCommand: piPath, maxCost: 1 }, { childPath: join(process.cwd(), "dist/src/workflow-evals-child.js"), timeoutMs: 25_000 });
+  const result = await runIsolatedProcess({ case: { id: "invalid", prompt: "delegate", timeoutMs: 10_000, maxCost: 1, expectations: { workflowCallCount: { min: 1 } }, semanticCriteria: [{ id: "intent", description: "delegate" }] }, model: "fake/model", piCommand: piPath, maxCost: 1 }, { childPath: join(process.cwd(), "dist/evals/src/workflow-evals-child.js"), timeoutMs: 25_000 });
   assertRecord(result.value);
   assert.equal(result.value.status, "failed");
   assertRecord(result.value.metrics);

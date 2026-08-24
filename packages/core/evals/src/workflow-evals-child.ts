@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { captureEvalCase, type CaptureCaseInput, validateWorkflowEvalCases } from "./workflow-evals.js";
-import { isObject } from "./utils.js";
+import { isObject } from "../../src/utils.js";
 
 interface ChildInput { payload: CaptureCaseInput; outputPath: string }
 

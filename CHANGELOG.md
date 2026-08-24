@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### Packaging
+
+- Moved the eval harness from `src/` to the unpublished `evals/src/` directory and stopped publishing `evals/` cases and `test/fixtures` in the npm package. `npm run evals` and `npm run evals:ambient` are unchanged for repository checkouts.
+
 ## [5.8.0] - 2026-08-23
 
 ### Breaking changes

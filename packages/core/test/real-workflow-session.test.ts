@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { createAmbientCaseWorktree, createAmbientFixtureRepository, removeAmbientCaseWorktree, removeAmbientFixtureRepository } from "../src/ambient-workflow-evals.js";
-import { resolveWorkflowSkillPath } from "../src/workflow-evals.js";
+import { createAmbientCaseWorktree, createAmbientFixtureRepository, removeAmbientCaseWorktree, removeAmbientFixtureRepository } from "../evals/src/ambient-workflow-evals.js";
+import { resolveWorkflowSkillPath } from "../evals/src/workflow-evals.js";
 import { decodeTestJsonRecord } from "./support.js";
 
 const enabled = process.env.PI_WORKFLOW_REAL_SESSION === "1";

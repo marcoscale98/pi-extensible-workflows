@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CAPTURE_IDENTITY } from "./eval-capture-extension.js";
-import { errorText, isObject } from "./index.js";
+import { errorText, isObject } from "../../src/index.js";
 import { extractCapturedWorkflows, extractParentOracleFile, findSessionFile } from "./workflow-evals.js";
 
 export const AMBIENT_OPT_IN = "PI_WORKFLOW_EVAL_AMBIENT";
