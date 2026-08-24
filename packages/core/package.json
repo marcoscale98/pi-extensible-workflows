@@ -32,6 +32,8 @@
     "dist/src",
     "dist/subagents",
     "dist/trajectory",
+    "!dist/**/test/**",
+    "!dist/**/*.test.*",
     "src",
     "starter",
     "trajectory/index.ts",
