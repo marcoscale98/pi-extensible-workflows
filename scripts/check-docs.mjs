@@ -41,11 +41,13 @@ const landing = readFileSync(resolve(docsDir, "index.html"), "utf8");
 for (const link of ["developers.html", "roles.html", "extensions.html", "subagents.html", "herdr.html"]) {
   if (!landing.includes(`href="${link}"`)) errors.push(`landing page does not link to ${link}`);
 }
-for (const file of htmlFiles) {
+// run.html is a full-screen gist viewer, not a documentation page.
+const docPages = htmlFiles.filter((file) => file !== "run.html");
+for (const file of docPages) {
   const source = readFileSync(resolve(docsDir, file), "utf8");
   for (const headerLink of ["developers.html", "roles.html", "extensions.html", "subagents.html", "herdr.html"]) if (!source.includes(`href="${headerLink}"`)) errors.push(`${file}: header does not link to ${headerLink}`);
 }
-for (const file of htmlFiles) {
+for (const file of docPages) {
   const source = readFileSync(resolve(docsDir, file), "utf8");
   const examples = [...source.matchAll(/<pre><code class="language-(?!text\b)[^"]*">([\s\S]*?)<\/code><\/pre>/g)];
   if (!examples.length) errors.push(`${file}: missing syntax-highlighted example`);

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Run report · pi-extensible-workflows</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      body::before,
+      body::after {
+        display: none;
+      }
+      .state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        gap: 1.25rem;
+        padding: 2rem;
+        text-align: center;
+      }
+      .spinner {
+        width: 44px;
+        height: 44px;
+        border: 3px solid #e9eef7;
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .state p {
+        max-width: 480px;
+        margin: 0;
+        line-height: 1.6;
+      }
+      .report-frame {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        border: none;
+        background: white;
+      }
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading" class="state">
+      <div class="spinner"></div>
+      <p>Loading run report…</p>
+    </div>
+
+    <div id="error" class="state hidden">
+      <h1>Failed to load run report</h1>
+      <p id="error-message"></p>
+      <p><a href="index.html">← pi-extensible-workflows</a></p>
+    </div>
+
+    <iframe id="report" class="report-frame hidden" sandbox="allow-scripts"></iframe>
+
+    <script>
+      (function () {
+        const DEFAULT_FILENAME = "trajectory.html";
+
+        const loadingEl = document.getElementById("loading");
+        const errorEl = document.getElementById("error");
+        const errorMessageEl = document.getElementById("error-message");
+        const reportEl = document.getElementById("report");
+
+        function showError(message) {
+          loadingEl.classList.add("hidden");
+          errorMessageEl.innerHTML = message;
+          errorEl.classList.remove("hidden");
+        }
+
+        function showReport(content) {
+          loadingEl.classList.add("hidden");
+          reportEl.srcdoc = content;
+          reportEl.classList.remove("hidden");
+        }
+
+        // URL formats: #GIST_ID or #GIST_ID/filename.html
+        const query = location.hash.substring(1);
+        if (!query) {
+          showError("No run ID provided.<br><br>URL format: <code>#GIST_ID</code>");
+          return;
+        }
+        const parts = query.split("/");
+        const gistId = parts[0];
+        const fileName = decodeURIComponent(parts[1] || DEFAULT_FILENAME);
+        if (!/^[0-9a-f]+$/i.test(gistId)) {
+          showError("Invalid run ID");
+          return;
+        }
+
+        fetch("https://api.github.com/gists/" + encodeURIComponent(gistId))
+          .then(function (res) {
+            if (!res.ok) {
+              if (res.status === 404) throw new Error("Run report not found. The gist may have been deleted.");
+              if (res.status === 403) throw new Error("GitHub API rate limit reached. Try again in a few minutes.");
+              throw new Error("GitHub API error: " + res.status);
+            }
+            return res.json();
+          })
+          .then(function (gist) {
+            if (!gist.files || !gist.files[fileName]) {
+              const available = gist.files ? Object.keys(gist.files).join(", ") : "none";
+              throw new Error('File "' + fileName + '" not found in this gist.<br><br>Available files: ' + available);
+            }
+            const file = gist.files[fileName];
+            if (file.truncated && file.raw_url) {
+              return fetch(file.raw_url).then(function (r) {
+                if (!r.ok) throw new Error("Failed to fetch report content");
+                return r.text();
+              });
+            }
+            return file.content;
+          })
+          .then(showReport)
+          .catch(function (err) {
+            showError(err.message);
+          });
+      })();
+    </script>
+  </body>
+</html>
