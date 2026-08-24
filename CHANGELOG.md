@@ -1,6 +1,11 @@
 # Changelog
 ## Unreleased
 
+### New capabilities
+
+- Trajectory can export one persisted workflow run as a self-contained static HTML report (`exportTrajectoryRunHtml`): the live UI with inlined assets and injected state instead of a WebSocket, viewable from `file://`, sandboxed iframes, and the `docs/run.html` gist viewer.
+- The Trajectory run dossier gains a Share button (and the CLI a `piewf share <run-id>` command) that uploads the static report as a secret GitHub gist through the user's `gh` CLI and returns the viewer URL. Share is served by the Trajectory extension itself; secret gists are unlisted, not private.
+
 ### Packaging
 
 - Moved the eval harness from `src/` to the unpublished `evals/src/` directory and stopped publishing `evals/` cases and `test/fixtures` in the npm package. `npm run evals` and `npm run evals:ambient` are unchanged for repository checkouts.

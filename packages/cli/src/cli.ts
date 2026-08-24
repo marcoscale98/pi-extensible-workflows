@@ -11,7 +11,8 @@ import { doctorCleanup, doctorCleanupExitCode, formatDoctorCleanupReport, type D
 import workflowExtension, { errorText, formatWorkflowProgress, isNodeError, jsonValue, loadAgentDefinitions, registeredWorkflowFunctions, truncateWorkflowProgress, workflowCatalog, workflowSettingsPath, type JsonSchema, type JsonValue, type WorkflowExtensionAPI, type WorkflowProgressStyles } from "pi-extensible-workflows";
 import { portableEngineVersion, portablePiVersion, writePortableWorkflowBundle } from "./bundles.js";
 import { runSessionInspector, transcriptFileLines, type InspectMode } from "./session-inspector.js";
-import { isPersistedRun, type PersistedRun } from "pi-extensible-workflows/persistence";
+import { isPersistedRun, listPersistedSessionIds, listRunIds, type PersistedRun } from "pi-extensible-workflows/persistence";
+import { shareTrajectoryRun } from "pi-extensible-workflows/trajectory";
 import type { WorkflowCatalogFunction } from "pi-extensible-workflows";
 
 export interface CliOptions extends DoctorOptions { inspect?: (sessionId?: string, mode?: InspectMode, failedOnly?: boolean) => Promise<void>; transcript?: (sessionFile: string) => Promise<void>; stderr?: (text: string) => void; signal?: AbortSignal; trustOverride?: boolean; isTTY?: boolean; skillPaths?: readonly string[] }
@@ -627,6 +628,24 @@ export async function runCli(args: readonly string[], options: CliOptions = {}, 
       return 0;
     } catch (error) { write(`Error: ${errorText(error)}\n`); return 1; }
   }
+  if (args[0] === "share") {
+    if (args.length !== 2 || args[1] === "--help" || args[1] === "-h") {
+      write("Usage: piewf share <run-id>\n\nExports the run as a static Trajectory report and uploads it as a secret GitHub gist via the gh CLI.\nSecret gists are unlisted, not private: anyone with the link can read the full report.\n");
+      return args.some((arg) => arg === "--help" || arg === "-h") ? 0 : 1;
+    }
+    try {
+      const runId = requiredArg(args, 1);
+      const cwd = options.cwd ?? process.cwd();
+      let sessionId: string | undefined;
+      for (const candidate of await listPersistedSessionIds(cwd)) {
+        if ((await listRunIds(cwd, candidate, homedir(), false)).includes(runId)) { sessionId = candidate; break; }
+      }
+      if (!sessionId) { stderr(`Error: workflow run ${runId} was not found under ${cwd}\n`); return 1; }
+      const result = await shareTrajectoryRun({ cwd, sessionId, runId });
+      write(`Share URL: ${result.shareUrl}\nGist: ${result.gistUrl}\nSecret gist: anyone with the link can read the full report.\n`);
+      return 0;
+    } catch (error) { stderr(`Error: ${errorText(error)}\n`); return 1; }
+  }
   if (args[0] === "bundle" || args[0] === "run" || args[0] === "export") {
     try {
       const workflowOptions: WorkflowIo = { write, stderr, ...(options.cwd !== undefined ? { cwd: options.cwd } : {}), ...(options.agentDir !== undefined ? { agentDir: options.agentDir } : {}), ...(options.signal ? { signal: options.signal } : {}), ...(options.trustOverride !== undefined ? { trustOverride: options.trustOverride } : {}), ...(options.isTTY !== undefined ? { isTTY: options.isTTY } : {}), ...(options.skillPaths?.length ? { skillPaths: [...options.skillPaths] } : {}) };
@@ -634,7 +653,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}, 
       return args[0] === "run" ? await runWorkflowCli(args.slice(1), workflowOptions) : await exportWorkflowCli(args.slice(1), workflowOptions);
     } catch (error) { stderr(`Error: ${errorText(error)}\n`); return 1; }
   }
-  write("Usage: piewf doctor [role] [--role <role>] [--prompt <text>] [--json] | inspect [session-id] [--json|--summary] [--failed] | transcript <session-file> | bundle <workflow-name> [--name <command>] [--output <path>] [--force] | run <workflow-name> [workflow arguments] | export <workflow-name> [--name <command>] [--output <path>] [--force] [--bundle]\n");
+  write("Usage: piewf doctor [role] [--role <role>] [--prompt <text>] [--json] | inspect [session-id] [--json|--summary] [--failed] | transcript <session-file> | share <run-id> | bundle <workflow-name> [--name <command>] [--output <path>] [--force] | run <workflow-name> [workflow arguments] | export <workflow-name> [--name <command>] [--output <path>] [--force] [--bundle]\n");
   return 1;
 }
 

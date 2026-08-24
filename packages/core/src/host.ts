@@ -385,6 +385,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     if (request.action === "pause") { if (!run) throw new WorkflowError("RUN_NOT_FOUND", "Workflow run is not active"); await run.lifecycle.pause(); return; }
     if (request.action === "stop") { const result = await stopWorkflowRun(runId); if (!result.stopped && result.reason !== "already_terminal") throw new WorkflowError("RUN_NOT_FOUND", "Workflow run is not active"); return; }
     if (request.action === "resume") { await resumeSelectedWorkflow(runId, false, context); return; }
+    if (request.action !== "retry") throw new WorkflowError("INVALID_METADATA", `Trajectory action ${request.action} is handled by the Trajectory extension`);
     await recovery.retryWorkflowRun(runId, context);
   };
   const trajectoryProvider: TrajectoryPublisherProvider = (context) => {

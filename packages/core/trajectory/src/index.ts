@@ -8,6 +8,7 @@ import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { clearTrajectoryHost, setTrajectoryHost, type TrajectoryHost, type TrajectoryPublisherProvider } from "../../src/trajectory-host-handle.js";
 import { errorText, isNodeError, object, positiveInteger } from "../../src/utils.js";
 import { isTrajectoryAction, isTrajectoryTarget, trajectoryActionError, type TrajectoryPublisherInput } from "../../src/trajectory.js";
+import { shareTrajectoryRun } from "./export.js";
 
 const DEFAULT_TRAJECTORY_PORT = 7432;
 const TRAJECTORY_IDLE_EXIT_MS = 5 * 60 * 1000;
@@ -231,6 +232,11 @@ export function createTrajectoryController(agentDir: string): TrajectoryControll
         const target = message.target;
         const actionError = trajectoryActionError(message.action, target);
         if (actionError !== undefined) { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: false, error: actionError })); return; }
+        if (message.action === "share") {
+          // Share is served by the extension itself: it reads persisted state and needs no live host context.
+          void shareTrajectoryRun({ cwd: input.cwd, sessionId: input.sessionId, runId: target.id }).then((result) => { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: true, result })); }, (error: unknown) => { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: false, error: errorText(error) })); }).catch(() => undefined);
+          return;
+        }
         void input.handleAction({ action: message.action, target, ...(typeof message.name === "string" ? { name: message.name } : {}), ...(message.payload === undefined ? {} : { payload: message.payload }) }).then((result) => { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: true, ...(result === undefined ? {} : { result }) })); }, (error: unknown) => { next.send(JSON.stringify({ type: "publisher:action-result", requestId: message.requestId, ok: false, error: errorText(error) })); }).catch(() => undefined);
       } catch { /* Ignore malformed local browser messages. */ }
     });
@@ -263,6 +269,7 @@ export function createTrajectoryController(agentDir: string): TrajectoryControll
 
 
 export { DEFAULT_TRAJECTORY_PORT, TRAJECTORY_IDLE_EXIT_MS, TRAJECTORY_LOCK_NAME };
+export { exportTrajectoryRunHtml, shareTrajectoryRun, type TrajectoryExportOptions, type TrajectoryShareOptions, type TrajectoryShareResult } from "./export.js";
 
 export type TrajectoryExtensionOptions = {
   controller?: TrajectoryController;
