@@ -14,7 +14,8 @@ void test("exportTrajectoryRunHtml renders a self-contained static run report", 
   const home = join(root, "home");
   const sessionFile = join(root, "session.jsonl");
   mkdirSync(cwd, { recursive: true });
-  writeFileSync(sessionFile, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "hello </script> world" }] } })}\n`);
+  const transcriptText = "hello </script> world and $' $` $& replacement traps";
+  writeFileSync(sessionFile, `${JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "text", text: transcriptText }] } })}\n`);
   const store = new RunStore(cwd, "session", "run", home);
   const model = { provider: "fixture", model: "fixture-model" };
   const run = {
@@ -36,6 +37,9 @@ void test("exportTrajectoryRunHtml renders a self-contained static run report", 
     assert.ok(html.includes('href="data:image/png;base64,'));
     // The raw injected payload cannot terminate its script block early.
     assert.equal(html.includes("</script> world"), false);
+    // $-sequences in transcripts must not trigger String.replace expansion and duplicate the document.
+    assert.equal(html.split("function renderDossier").length, 2);
+    assert.ok(html.includes("$' $` $& replacement traps"));
     await assert.rejects(exportTrajectoryRunHtml({ cwd, sessionId: "session", runId: "missing", home }), /was not found/);
 
     const stubGh = join(root, "gh");

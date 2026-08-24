@@ -12,7 +12,8 @@ const DEFAULT_SHARE_VIEWER_URL = "https://vekexasia.github.io/pi-extensible-work
 
 function inlineAsset(html: string, tag: string, replacement: string): string {
   if (!html.includes(tag)) throw new Error(`Trajectory UI is missing the expected ${tag} reference`);
-  return html.replace(tag, replacement);
+  // Replacer function: a string replacement would interpret $&, $`, and $' — sequences that occur in real transcripts — and duplicate the document.
+  return html.replace(tag, () => replacement);
 }
 
 /**
