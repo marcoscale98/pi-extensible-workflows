@@ -41,6 +41,8 @@ test("the repository keeps the public package in the core workspace", () => {
   assert.equal(core.bin, undefined);
   assert.ok(core.files.includes("starter"));
   assert.ok(core.files.includes("dist/trajectory"));
+  assert.ok(core.files.includes("!dist/**/test/**"));
+  assert.ok(core.files.includes("!dist/**/*.test.*"));
   assert.ok(core.files.includes("trajectory/index.ts"));
   assert.ok(core.files.includes("trajectory/src"));
   assert.ok(core.files.includes("subagents/index.ts"));
