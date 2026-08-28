@@ -192,10 +192,11 @@ void test("opens the active session after the handoff boundary and releases on p
   const promise = extension.agentAttemptActions.openLiveSession.run({ liveSession: session, prepared, handoff, attempt: { attempt: 1 }, agent: { label: "reviewer", structuralPath: ["review"], parentBreadcrumb: "flow" }, run: {}, signal: new AbortController().signal, ui: { setWorkingMessage(message) { workingMessages.push(message); } } });
   await Promise.resolve();
   assert.equal(calls.length, 0);
+  assert.deepEqual(workingMessages, ["reviewer: queued (waiting for a turn boundary)"]);
   handoff.observe({ type: "turn_end" });
   await promise;
   const runCall = calls.find(([command, subcommand]) => command === "pane" && subcommand === "run");
-  assert.deepEqual(workingMessages, ["reviewer: working", "reviewer: idle", undefined]);
+  assert.deepEqual(workingMessages, ["reviewer: queued (waiting for a turn boundary)", "reviewer: opening pane", "reviewer: working", "reviewer: idle", undefined]);
   assert.equal(calls.filter(([command, subcommand]) => command === "pane" && subcommand === "run").length, 1);
   assert.ok(runCall);
   assert.ok(runCall[3].length < 4096);
@@ -241,7 +242,8 @@ void test("cancellation during live pane launch restores local ownership", async
   const extension = createHerdrExtension({ agentDir: root, env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "pane" }, runner });
   const ownership = [];
   const session = { reference: { transport: "local", sessionId: "session", locator: { sessionFile: join(root, "session.jsonl") } }, abort: async () => ownership.push("abort"), suspendForHandoff: async () => ownership.push("suspend"), resumeFromHandoff: async () => ownership.push("resume"), getLastAssistant: () => ({ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "done" }] }) };
-  const opening = extension.agentAttemptActions.openLiveSession.run({ liveSession: session, prepared: { cwd: process.cwd(), model: { provider: "openai", model: "gpt" }, tools: [], piRuntime }, handoff, attempt: { attempt: 1 }, agent: {}, run: {}, signal: controller.signal, ui: {} });
+  const workingMessages = [];
+  const opening = extension.agentAttemptActions.openLiveSession.run({ liveSession: session, prepared: { cwd: process.cwd(), model: { provider: "openai", model: "gpt" }, tools: [], piRuntime }, handoff, attempt: { attempt: 1 }, agent: {}, run: {}, signal: controller.signal, ui: { setWorkingMessage(message) { workingMessages.push(message); } } });
   handoff.observe({ type: "turn_end" });
   try {
     assert.equal(await settlesWithin(paneRunStarted), true, "pane launch should reach Herdr");
@@ -250,6 +252,8 @@ void test("cancellation during live pane launch restores local ownership", async
     assert.equal(await settlesWithin(opening), true, "cancellation should settle the handoff");
     await opening;
     assert.deepEqual(ownership, ["abort", "suspend", "resume"]);
+    assert.ok(workingMessages.length > 0);
+    assert.equal(workingMessages.at(-1), undefined);
     assert.equal(handoff.transferred, false);
     assert.ok(calls.some(([command, subcommand]) => command === "pane" && subcommand === "close"));
   } finally {

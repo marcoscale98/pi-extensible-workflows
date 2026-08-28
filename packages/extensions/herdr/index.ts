@@ -594,10 +594,18 @@ export function createHerdrExtension(options: HerdrExtensionOptions = {}): Herdr
     if (!session || !prepared || !handoff) return;
     if (!sessionPath(session.reference)) throw new Error("Herdr cannot hand off a live session without a transferable session file.");
     const label = typeof context.agent.label === "string" && context.agent.label.trim() ? context.agent.label : typeof context.agent.name === "string" && context.agent.name.trim() ? context.agent.name : "workflow agent";
-    const setWorkingMessage = (state?: HerdrAgentStatus | "done" | "completed"): void => context.ui.setWorkingMessage?.(state ? `${label}: ${state}` : undefined);
+    let lastWorkingMessage: string | undefined;
+    const setWorkingMessage = (state?: string): void => {
+      const message = state ? `${label}: ${state}` : undefined;
+      if (message === lastWorkingMessage) return;
+      lastWorkingMessage = message;
+      context.ui.setWorkingMessage?.(message);
+    };
     const handoffReleased = (): boolean => handoff.state === "completed";
     const handoffCancelled = (): boolean => context.signal.aborted || handoffReleased();
+    setWorkingMessage("queued (waiting for a turn boundary)");
     await handoff.request(async () => {
+      setWorkingMessage("opening pane");
       const continueTask = needsContinuation(session.getLastAssistant());
       let opened: PaneHandle | undefined;
       let suspended = false;
@@ -631,7 +639,7 @@ export function createHerdrExtension(options: HerdrExtensionOptions = {}): Herdr
           }
         }
       }
-    });
+    }).finally(() => { setWorkingMessage(); });
   };
   return {
     version: "1.0.0",

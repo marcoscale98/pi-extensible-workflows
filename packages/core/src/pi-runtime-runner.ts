@@ -48,6 +48,7 @@ function hasToolCall(message: unknown): boolean {
 }
 
 function isEmptyAbortedAssistant(message: WorkflowAgentMessage | undefined): boolean { return message?.stopReason === "aborted" && Array.isArray(message.content) && message.content.length === 0; }
+function isHandoffAbort(message: WorkflowAgentMessage | undefined): boolean { return message?.role === "assistant" && message.stopReason === "error" && Array.isArray(message.content) && message.content.length === 0 && typeof message.errorMessage === "string" && /abort/i.test(message.errorMessage); }
 function isTerminalAssistant(message: WorkflowAgentMessage | undefined): boolean { return Boolean(message) && message?.stopReason !== "aborted" && !hasToolCall(message); }
 function runtimeUsage(session: WorkflowAgentSession): RuntimeUsage {
   const stats = session.getSessionStats();
@@ -190,6 +191,7 @@ export class PiRuntimeAgentRunner implements RuntimeAgentRunner {
     let turnPolicyFailure: WorkflowError | undefined;
     let lastAssistant: WorkflowAgentMessage | undefined;
     let handoffBoundaryAssistant: WorkflowAgentMessage | undefined;
+    let handoffAbortHandled = false;
 
     const hasResult = (): boolean => structuredResult !== undefined;
     // Session event observations are best effort, matching the legacy synchronous subscription.
@@ -319,10 +321,13 @@ export class PiRuntimeAgentRunner implements RuntimeAgentRunner {
         let promptError: unknown;
         try { await promptOnce(prompt, turnAlreadyStarted); }
         catch (error) { acceptAssistant(session?.getLastAssistant() ?? lastAssistant); promptFailed = true; promptError = error; }
-        const recovered = await recoverTerminal();
+        const handoffWasAttempted = runtimeHandoff.state !== "local-running";
+        throwIfCancelled();
+        const suppressHandoffAbort = handoffWasAttempted && !handoffAbortHandled && isHandoffAbort(lastAssistant);
+        if (suppressHandoffAbort) handoffAbortHandled = true;
+        const recovered = suppressHandoffAbort ? false : await recoverTerminal();
         const preHandoffAssistant = handoffBoundaryAssistant;
         handoffBoundaryAssistant = undefined;
-        const handoffWasAttempted = runtimeHandoff.state !== "local-running";
         throwIfCancelled();
         await runtimeHandoff.waitForResume();
         throwIfCancelled();
@@ -332,7 +337,7 @@ export class PiRuntimeAgentRunner implements RuntimeAgentRunner {
         else acceptAssistant(resumed);
         let handoffError: unknown;
         let handoffRecovered = false;
-        if (runtimeHandoff.transferred && !preservePreHandoffResult && !hasResult() && (!resumed || resumed.stopReason === "aborted" || hasToolCall(resumed))) {
+        if (runtimeHandoff.transferred && !preservePreHandoffResult && !hasResult() && (!resumed || resumed.stopReason === "aborted" || isHandoffAbort(resumed) || hasToolCall(resumed))) {
           try { await promptOnce(handoffContinuationPrompt); }
           catch (error) { handoffError = error; }
         }
