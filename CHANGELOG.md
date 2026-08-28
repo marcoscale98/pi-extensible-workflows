@@ -1,6 +1,8 @@
 # Changelog
 ## Unreleased
 
+## [5.9.0] - 2026-08-28
+
 ### New capabilities
 
 - Trajectory can export one persisted workflow run as a self-contained static HTML report (`exportTrajectoryRunHtml`): the live UI with inlined assets and injected state instead of a WebSocket, viewable from `file://`, sandboxed iframes, and the `docs/run.html` gist viewer.
