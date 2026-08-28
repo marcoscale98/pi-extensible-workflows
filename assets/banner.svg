@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-labelledby="title desc">
+  <title id="title">pi-extensible-workflows: parallel agents with a review loop</title>
+  <desc id="desc">A task fans out to two agents, merges into review, then either returns a result or loops back for another iteration.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.52" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#170f20"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#153a30"/>
+      <stop offset="1" stop-color="#10231d"/>
+    </linearGradient>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0 H0 V28" fill="none" stroke="#213049"/>
+    </pattern>
+    <filter id="glow" x="-180%" y="-180%" width="460%" height="460%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-25%" y="-35%" width="150%" height="170%">
+      <feDropShadow dx="0" dy="8" stdDeviation="11" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="360" rx="18" fill="url(#bg)"/>
+  <rect width="1200" height="360" rx="18" fill="url(#grid)" opacity="0.32"/>
+
+  <g fill="none" stroke-linecap="round">
+    <path d="M150 180 H210 C235 180 235 105 285 105" stroke="#426176" stroke-width="2"/>
+    <path d="M150 180 H210 C235 180 235 255 285 255" stroke="#426176" stroke-width="2"/>
+    <path d="M455 105 H485 C520 105 520 180 540 180" stroke="#5d4f8e" stroke-width="2"/>
+    <path d="M455 255 H485 C520 255 520 180 540 180" stroke="#5d4f8e" stroke-width="2"/>
+    <path d="M640 180 H665 M835 180 H880 M980 180 H1030" stroke="#43516a" stroke-width="2"/>
+    <path d="M930 230 C930 330 210 330 210 180" stroke="#ffcc66" stroke-width="2" stroke-dasharray="8 10" opacity="0.76"/>
+
+    <g class="motion" stroke-dasharray="8 12">
+      <path d="M150 180 H210 C235 180 235 105 285 105 M150 180 H210 C235 180 235 255 285 255" stroke="#63e6ff" stroke-width="2"><animate attributeName="stroke-dashoffset" from="40" to="0" dur="1.15s" repeatCount="indefinite"/></path>
+      <path d="M455 105 H485 C520 105 520 180 540 180 M455 255 H485 C520 255 520 180 540 180" stroke="#9b87ff" stroke-width="2"><animate attributeName="stroke-dashoffset" from="40" to="0" dur="1.15s" repeatCount="indefinite"/></path>
+      <path d="M640 180 H665 M835 180 H880" stroke="#9b87ff" stroke-width="2"><animate attributeName="stroke-dashoffset" from="40" to="0" dur="1.15s" repeatCount="indefinite"/></path>
+      <path d="M980 180 H1030" stroke="#65e6a6" stroke-width="2"><animate attributeName="stroke-dashoffset" from="40" to="0" dur="1s" repeatCount="indefinite"/></path>
+      <path d="M930 230 C930 330 210 330 210 180" stroke="#ffcc66" stroke-width="2"><animate attributeName="stroke-dashoffset" from="40" to="0" dur="1.1s" repeatCount="indefinite"/></path>
+    </g>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="30" y="143" width="120" height="74" rx="16" fill="#101d2b" stroke="#42677a"/>
+    <circle cx="72" cy="180" r="15" fill="#153443" stroke="#63e6ff"/>
+    <path d="M66 174 H78 M66 180 H78 M66 186 H74" stroke="#63e6ff" stroke-width="2" stroke-linecap="round"/>
+
+    <rect x="285" y="65" width="170" height="80" rx="17" fill="#101d2b" stroke="#42677a" stroke-width="1.5"/>
+    <rect x="285" y="65" width="9" height="80" rx="4" fill="#63e6ff"/>
+    <circle cx="336" cy="105" r="18" fill="#153443" stroke="#63e6ff"/>
+    <circle cx="336" cy="100" r="5" fill="none" stroke="#63e6ff" stroke-width="2"/>
+    <path d="M327 117 C328 109 344 109 345 117" fill="none" stroke="#63e6ff" stroke-width="2" stroke-linecap="round"/>
+
+    <rect x="285" y="215" width="170" height="80" rx="17" fill="#1e1529" stroke="#6d4d7c" stroke-width="1.5"/>
+    <rect x="285" y="215" width="9" height="80" rx="4" fill="#dc8cff"/>
+    <circle cx="336" cy="255" r="18" fill="#34203f" stroke="#dc8cff"/>
+    <circle cx="336" cy="250" r="5" fill="none" stroke="#e4a8ff" stroke-width="2"/>
+    <path d="M327 267 C328 259 344 259 345 267" fill="none" stroke="#e4a8ff" stroke-width="2" stroke-linecap="round"/>
+
+    <rect x="555" y="145" width="70" height="70" rx="15" transform="rotate(45 590 180)" fill="#1a1730" stroke="#9b87ff" stroke-width="2"/>
+    <path d="M574 166 L590 180 L606 166 M590 180 V197" fill="none" stroke="#c9beff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="665" y="135" width="170" height="90" rx="18" fill="#17172d" stroke="#5d4f8e" stroke-width="1.5"/>
+    <circle cx="710" cy="180" r="20" fill="#262044" stroke="#9b87ff"/>
+    <circle cx="704" cy="176" r="7" fill="none" stroke="#b8aaff" stroke-width="2"/>
+    <path d="M709 181 L720 192" stroke="#b8aaff" stroke-width="3" stroke-linecap="round"/>
+
+    <rect x="895" y="145" width="70" height="70" rx="15" transform="rotate(45 930 180)" fill="#2a2116" stroke="#ffcc66" stroke-width="2"/>
+    <path d="M915 180 H945 M930 165 V195" stroke="#ffcc66" stroke-width="3" stroke-linecap="round"/>
+
+    <rect x="1030" y="135" width="140" height="90" rx="18" fill="url(#green)" stroke="#3f8069" stroke-width="1.5"/>
+    <circle cx="1100" cy="180" r="20" fill="#173c33" stroke="#65e6a6"/>
+    <path d="M1090 180 L1097 187 L1110 172" fill="none" stroke="#65e6a6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="570" y="307" width="132" height="30" rx="15" fill="#281f15" stroke="#755d31"/>
+    <circle cx="592" cy="322" r="6" fill="#ffcc66"/>
+    <path d="M617 322 H676" stroke="#9b783d" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <g class="motion" filter="url(#glow)">
+    <circle r="4" fill="#63e6ff" opacity="0"><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.08;0.92;1" dur="3.4s" repeatCount="indefinite"/><animateMotion dur="3.4s" repeatCount="indefinite" path="M150 180 H210 C235 180 235 105 285 105"/></circle>
+    <circle r="4" fill="#63e6ff" opacity="0"><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.08;0.92;1" dur="3.4s" begin="0.45s" repeatCount="indefinite"/><animateMotion dur="3.4s" begin="0.45s" repeatCount="indefinite" path="M150 180 H210 C235 180 235 255 285 255"/></circle>
+    <circle r="4" fill="#9b87ff" opacity="0"><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.08;0.92;1" dur="3.4s" begin="1s" repeatCount="indefinite"/><animateMotion dur="3.4s" begin="1s" repeatCount="indefinite" path="M455 105 H485 C520 105 520 180 540 180"/></circle>
+    <circle r="4" fill="#dc8cff" opacity="0"><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.08;0.92;1" dur="3.4s" begin="1.45s" repeatCount="indefinite"/><animateMotion dur="3.4s" begin="1.45s" repeatCount="indefinite" path="M455 255 H485 C520 255 520 180 540 180"/></circle>
+    <circle r="4" fill="#9b87ff" opacity="0"><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.08;0.92;1" dur="3s" begin="2s" repeatCount="indefinite"/><animateMotion dur="3s" begin="2s" repeatCount="indefinite" path="M640 180 H880"/></circle>
+    <circle r="4" fill="#65e6a6" opacity="0"><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.08;0.92;1" dur="1.6s" begin="2.8s" repeatCount="indefinite"/><animateMotion dur="1.6s" begin="2.8s" repeatCount="indefinite" path="M980 180 H1030"/></circle>
+    <circle r="4" fill="#ffcc66" opacity="0"><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.08;0.92;1" dur="5.2s" begin="2.6s" repeatCount="indefinite"/><animateMotion dur="5.2s" begin="2.6s" repeatCount="indefinite" path="M930 230 C930 330 210 330 210 180"/></circle>
+  </g>
+
+  <style>@media (prefers-reduced-motion: reduce) { .motion { display: none; } }</style>
+</svg>

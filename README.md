@@ -2,6 +2,10 @@
 
 Deterministic, resumable multi-agent workflow orchestration for Pi.
 
+<p align="center">
+  <img src="assets/banner.svg" alt="Animated workflow: a task fans out to parallel agents, merges into review, and either completes or loops back" width="100%">
+</p>
+
 [Documentation](https://vekexasia.github.io/pi-extensible-workflows/) | [Developer guide](https://vekexasia.github.io/pi-extensible-workflows/developers.html) | [Subagents](https://vekexasia.github.io/pi-extensible-workflows/subagents.html) | [Herdr](https://vekexasia.github.io/pi-extensible-workflows/herdr.html) | [Roles](https://vekexasia.github.io/pi-extensible-workflows/roles.html) | [Extension authoring](https://vekexasia.github.io/pi-extensible-workflows/extensions.html)
 
 Requires Node.js 22.19 or newer. This is trusted Pi host code with the same filesystem and process access as Pi. Install only code you trust.

@@ -2,6 +2,10 @@
 
 Deterministic multi-agent workflow orchestration for Pi. Build named jobs that fan out, pause for approval, use isolated worktrees, and recover without rerunning completed work.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/vekexasia/pi-extensible-workflows/main/assets/banner.svg" alt="Animated workflow: a task fans out to parallel agents, merges into review, and either completes or loops back" width="100%">
+</p>
+
 The repository [README](https://github.com/vekexasia/pi-extensible-workflows#readme) is the canonical product overview, package map, and documentation index.
 
 ## Install
