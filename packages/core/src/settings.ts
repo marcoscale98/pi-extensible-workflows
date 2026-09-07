@@ -7,12 +7,12 @@ import { getAgentDir, type ToolAnnotations } from "@earendil-works/pi-coding-age
 import type { AgentResourcePolicy, AgentResourceSelectors, AgentResourceSelectorSet, ContextFileScope, JsonValue, WorkflowExtensionSettings, WorkflowRetentionSettings, WorkflowSettings, WorkflowSettingsOverrides, WorkflowSettingsResolution, WorkflowSettingsSources } from "./types.js";
 import { isContextFileScope } from "./types.js";
 import { annotateModelAliasError, deepFreeze, errorText, fail, isNodeError, jsonValue, modelCapability, object, positiveInteger, resourcePatternHasMagic, unknownModel, validateModelAliases, validateResourcePattern, validWorkflowExtensionNamespace } from "./utils.js";
-import { canonicalPath } from "./paths.js";
+import { canonicalPath, workflowProjectSettingsPath } from "./paths.js";
+export { workflowProjectSettingsPath } from "./paths.js";
 
 const ROLE_DIRECTORY = "pi-extensible-workflows";
 export const DEFAULT_SETTINGS: Readonly<WorkflowSettings> = Object.freeze({ concurrency: 8, backgroundWidget: true });
 export function workflowSettingsPath(agentDir = getAgentDir()): string { return join(agentDir, ROLE_DIRECTORY, "settings.json"); }
-export function workflowProjectSettingsPath(cwd: string): string { return join(cwd, ".pi", ROLE_DIRECTORY, "settings.json"); }
 function normalizedResourcePath(value: string, settingsPath: string): string {
   // Built-in extensions are named `builtin:<name>`, not by a path.
   if (value === "*" || value.startsWith("builtin:")) return value;
@@ -47,6 +47,14 @@ export function validateSelectorList(value: unknown, path: string, kind: "skills
     normalized.push(selector);
   }
   return Object.freeze(normalized);
+}
+function validateWorktreePostCreateCommand(value: unknown, settingsPath: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) fail("INVALID_SETTINGS", `${settingsPath}.worktreePostCreateCommand must be a non-empty array`);
+  return Object.freeze(value.map((entry, index) => {
+    if (typeof entry !== "string" || !entry.trim()) fail("INVALID_SETTINGS", `${settingsPath}.worktreePostCreateCommand[${String(index)}] must be a non-empty string`);
+    return entry;
+  }));
 }
 function selectorsFromSettings(settings: Readonly<WorkflowSettings | WorkflowSettingsOverrides>): AgentResourceSelectors {
   return {
@@ -108,7 +116,7 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
     fail("CONFIG_ERROR", `Invalid workflow settings JSON at ${path}: ${errorText(error)}`);
   }
   if (!object(parsed)) fail("INVALID_SETTINGS", `Workflow settings at ${path} must be an object`);
-  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", "retention", ...(partial ? [] : ["backgroundWidget", "codemodeTools"]) ]);
+  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", "retention", "worktreePostCreateCommand", ...(partial ? [] : ["backgroundWidget", "codemodeTools"]) ]);
   const unknown = Object.keys(parsed).find((key) => !allowed.has(key));
   if (Object.prototype.hasOwnProperty.call(parsed, "disabledAgentResources")) fail("INVALID_SETTINGS", `disabledAgentResources is no longer supported; use skills, extensions, and tools selectors (settings: ${path})`);
   if (unknown) fail("INVALID_SETTINGS", `Unknown workflow setting at ${path}: ${unknown}`);
@@ -124,10 +132,12 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
   const extensions = validateSelectorList(parsed.extensions, path, "extensions");
   const extensionSettings = parsed.extensionSettings === undefined ? undefined : validateWorkflowExtensionSettings(parsed.extensionSettings, path, "INVALID_SETTINGS");
   const retention = validateRetention(parsed.retention, path);
+  const worktreePostCreateCommand = validateWorktreePostCreateCommand(parsed.worktreePostCreateCommand, path);
   return Object.freeze({
     ...(concurrency === undefined ? {} : { concurrency }), ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(codemodeTools === undefined ? {} : { codemodeTools }), ...(modelAliases === undefined ? {} : { modelAliases }),
     ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }),
     ...(extensionSettings === undefined ? {} : { extensionSettings }), ...(tools === undefined ? {} : { tools }), ...(retention === undefined ? {} : { retention }),
+    ...(worktreePostCreateCommand === undefined ? {} : { worktreePostCreateCommand }),
   });
 }
 export function loadSettings(path = workflowSettingsPath()): Readonly<WorkflowSettings> { return parseSettings(path, false); }
@@ -168,6 +178,7 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
     skills: sourceFor("skills"), extensions: sourceFor("extensions"), tools: sourceFor("tools"),
     ...(extensionSettings === undefined ? {} : { extensionSettings: projectHas("extensionSettings") ? projectSettingsPath : globalSettingsPath }),
     ...(project.retention === undefined && global.retention === undefined ? {} : { retention: project.retention === undefined ? globalSettingsPath : projectSettingsPath }),
+    ...(projectHas("worktreePostCreateCommand") || global.worktreePostCreateCommand !== undefined ? { worktreePostCreateCommand: projectHas("worktreePostCreateCommand") ? projectSettingsPath : globalSettingsPath } : {}),
   };
   const effective = Object.freeze({
     concurrency: project.concurrency ?? global.concurrency,
@@ -178,6 +189,7 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
     ...(extensionSettings === undefined ? {} : { extensionSettings }),
     ...(effectiveSelectors.tools?.length ? { tools: effectiveSelectors.tools } : global.tools !== undefined || project.tools !== undefined ? { tools: effectiveSelectors.tools } : {}),
     ...((project.retention ?? global.retention) === undefined ? {} : { retention: project.retention ?? global.retention }),
+    ...(projectHas("worktreePostCreateCommand") ? { worktreePostCreateCommand: project.worktreePostCreateCommand } : global.worktreePostCreateCommand === undefined ? {} : { worktreePostCreateCommand: global.worktreePostCreateCommand }),
   });
   return { globalSettingsPath, projectSettingsPath, projectTrusted, global, project, effective, sources };
 }
