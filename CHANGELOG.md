@@ -12,6 +12,7 @@
 - Herdr detects agent settlement through a direct lifecycle bridge instead of waiting for pane status to become idle, preventing completed agents from becoming stale.
 - Canonical filesystem path handling is shared across the CLI, workflows, and Trajectory; the detached Trajectory server is bundled correctly for installed packages.
 - Explicit empty extension settings, including `extensionSettings: {}`, now replace inherited settings instead of silently falling back.
+- Optionally run a trusted workflow-settings command after newly created worktrees are checked out; failures roll back the worktree and report `WORKTREE_FAILED`.
 
 ### Compatibility
 
