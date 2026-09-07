@@ -6,7 +6,8 @@ import type { AgentResourcePolicy, AgentResourceSelectorSources, AgentResourceSe
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { canonicalPath } from "./paths.js";
+import { canonicalPath, workflowProjectSettingsPath } from "./paths.js";
+export { workflowProjectSettingsPath } from "./paths.js";
 import { isContextFileScope } from "./types.js";
 import { annotateModelAliasError, deepFreeze, errorText, fail, isNodeError, modelCapability, object, positiveInteger, unknownModel, validateModelAliases } from "./utils.js";
 import { jsonValue, resourcePatternHasMagic, validateResourcePattern, validWorkflowExtensionNamespace } from "./utils.js";
@@ -14,7 +15,6 @@ import { jsonValue, resourcePatternHasMagic, validateResourcePattern, validWorkf
 const WORKFLOW_DIRECTORY = "pi-extensible-workflows";
 export const DEFAULT_SETTINGS: Readonly<WorkflowSettings> = Object.freeze({ concurrency: 8, backgroundWidget: true });
 export function workflowSettingsPath(agentDir = getAgentDir()): string { return join(agentDir, WORKFLOW_DIRECTORY, "settings.json"); }
-export function workflowProjectSettingsPath(cwd: string): string { return join(cwd, ".pi", WORKFLOW_DIRECTORY, "settings.json"); }
 function normalizedResourcePath(value: string, settingsPath: string): string {
   // Built-in extensions are named `builtin:<name>`, not by a path.
   if (value === "*" || value.startsWith("builtin:")) return value;
@@ -49,6 +49,14 @@ export function validateSelectorList(value: unknown, path: string, kind: "skills
     normalized.push(selector);
   }
   return Object.freeze(normalized);
+}
+function validateWorktreePostCreateCommand(value: unknown, settingsPath: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) fail("INVALID_SETTINGS", `${settingsPath}.worktreePostCreateCommand must be a non-empty array`);
+  return Object.freeze(value.map((entry, index) => {
+    if (typeof entry !== "string" || !entry.trim()) fail("INVALID_SETTINGS", `${settingsPath}.worktreePostCreateCommand[${String(index)}] must be a non-empty string`);
+    return entry;
+  }));
 }
 function selectorsFromSettings(settings: Readonly<WorkflowSettings | WorkflowSettingsOverrides>): AgentResourceSelectors {
   return {
@@ -110,7 +118,7 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
     fail("CONFIG_ERROR", `Invalid workflow settings JSON at ${path}: ${errorText(error)}`);
   }
   if (!object(parsed)) fail("INVALID_SETTINGS", `Workflow settings at ${path} must be an object`);
-  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", "retention", ...(partial ? [] : ["backgroundWidget", "codemodeTools"]) ]);
+  const allowed = new Set(["concurrency", "modelAliases", "skills", "extensions", "extensionSettings", "tools", "retention", "worktreePostCreateCommand", ...(partial ? [] : ["backgroundWidget", "codemodeTools"]) ]);
   const unknown = Object.keys(parsed).find((key) => !allowed.has(key));
   if (Object.prototype.hasOwnProperty.call(parsed, "disabledAgentResources")) fail("INVALID_SETTINGS", `disabledAgentResources is no longer supported; use skills, extensions, and tools selectors (settings: ${path})`);
   if (unknown) fail("INVALID_SETTINGS", `Unknown workflow setting at ${path}: ${unknown}`);
@@ -126,10 +134,12 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
   const extensions = validateSelectorList(parsed.extensions, path, "extensions");
   const extensionSettings = parsed.extensionSettings === undefined ? undefined : validateWorkflowExtensionSettings(parsed.extensionSettings, path, "INVALID_SETTINGS");
   const retention = validateRetention(parsed.retention, path);
+  const worktreePostCreateCommand = validateWorktreePostCreateCommand(parsed.worktreePostCreateCommand, path);
   return Object.freeze({
     ...(concurrency === undefined ? {} : { concurrency }), ...(backgroundWidget === undefined ? {} : { backgroundWidget }), ...(codemodeTools === undefined ? {} : { codemodeTools }), ...(modelAliases === undefined ? {} : { modelAliases }),
     ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }),
     ...(extensionSettings === undefined ? {} : { extensionSettings }), ...(tools === undefined ? {} : { tools }), ...(retention === undefined ? {} : { retention }),
+    ...(worktreePostCreateCommand === undefined ? {} : { worktreePostCreateCommand }),
   });
 }
 export function loadSettings(path = workflowSettingsPath()): Readonly<WorkflowSettings> { return parseSettings(path, false); }
@@ -163,7 +173,7 @@ export function resolveWorkflowSettings(cwd: string, projectTrusted: boolean, gl
     ...(global.tools === undefined && project.tools === undefined ? {} : { tools: [...(global.tools ?? []), ...(project.tools ?? [])] }),
   });
   const sources: WorkflowSettingsSources = { concurrency: project.concurrency === undefined ? globalSettingsPath : projectSettingsPath, modelAliases: project.modelAliases === undefined ? globalSettingsPath : projectSettingsPath };
-  for (const key of ["skills", "extensions", "tools", "extensionSettings", "retention"] as const) if (effective[key] !== undefined) sources[key] = project[key] === undefined ? globalSettingsPath : projectSettingsPath;
+  for (const key of ["skills", "extensions", "tools", "extensionSettings", "retention", "worktreePostCreateCommand"] as const) if (effective[key] !== undefined) sources[key] = project[key] === undefined ? globalSettingsPath : projectSettingsPath;
   return { globalSettingsPath, projectSettingsPath, projectTrusted, global, project, effective, sources, selectorSources };
 }
 export function validateModelAliasAvailability(aliases: Readonly<Record<string, string>>, names: readonly string[], availableModels: ReadonlySet<string>, knownModels: ReadonlySet<string>, settingsPath?: string): void {

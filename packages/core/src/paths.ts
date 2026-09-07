@@ -28,6 +28,7 @@ export function piResourceContains(root: string, path: string): boolean {
   const relativePath = relative(resolve(root), resolve(path));
   return relativePath === "" || (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath));
 }
+export function workflowProjectSettingsPath(cwd: string): string { return join(cwd, ".pi", "pi-extensible-workflows", "settings.json"); }
 
 export function projectStorageKey(cwd: string): string {
   const exact = resolve(cwd);
