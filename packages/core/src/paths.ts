@@ -19,6 +19,7 @@ export function canonicalPath(path: string): string {
 }
 
 export function sameFilesystemPath(left: string, right: string): boolean { return canonicalPath(left) === canonicalPath(right); }
+export function workflowProjectSettingsPath(cwd: string): string { return join(cwd, ".pi", "pi-extensible-workflows", "settings.json"); }
 
 export function projectStorageKey(cwd: string): string {
   const exact = resolve(cwd);
