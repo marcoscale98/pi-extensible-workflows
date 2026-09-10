@@ -3,6 +3,8 @@
 
 ### Fixes
 
+- Trajectory only signals a stale server whose lock `startedAt` still matches the live process (checked against `/proc/<pid>` ctime like the session lease), so a reused PID after a reboot is never sent `SIGTERM`/`SIGKILL`.
+- Herdr tool bridge places its Unix socket and shim in a private `0700` temp directory instead of `tmpdir()` with umask permissions.
 - Trajectory attaches when Pi runs as a Bun-compiled binary: the detached server is spawned with `node` from `PATH` instead of `process.execPath`, which re-ran the Pi CLI (exit 1) and, under Bun, never completed the WebSocket 101 upgrade (oven-sh/bun#28157).
 
 ## [5.14.0] - 2026-09-10
