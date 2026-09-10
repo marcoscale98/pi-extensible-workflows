@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
@@ -223,8 +223,10 @@ async function createToolBridge(session: HerdrSession, prepared: Readonly<Prepar
     const { name, label, description, promptSnippet, promptGuidelines, parameters, renderShell, executionMode } = definition;
     return { name, label, description, ...(promptSnippet === undefined ? {} : { promptSnippet }), ...(promptGuidelines === undefined ? {} : { promptGuidelines }), parameters, ...(renderShell === undefined ? {} : { renderShell }), ...(executionMode === undefined ? {} : { executionMode }) };
   });
-  const socketPath = join(tmpdir(), `pi-herdr-tools-${String(process.pid)}-${randomBytes(6).toString("hex")}.sock`);
-  const extensionPath = join(tmpdir(), `pi-herdr-tools-${String(process.pid)}-${randomBytes(6).toString("hex")}.mjs`);
+  // NOTE: mkdtemp creates the directory 0700, so only this user can connect to the socket regardless of umask.
+  const bridgeDirectory = mkdtempSync(join(tmpdir(), "pi-herdr-tools-"));
+  const socketPath = join(bridgeDirectory, "bridge.sock");
+  const extensionPath = join(bridgeDirectory, "bridge.mjs");
   const source = `import net from "node:net";\nconst socketPath = ${JSON.stringify(socketPath)};\nconst tools = ${JSON.stringify(specs)};\nfunction callTool(toolCallId, name, params, signal, onUpdate) {\n  return new Promise((resolve, reject) => {\n    const socket = net.createConnection(socketPath);\n    let buffer = "";\n    let settled = false;\n    const finish = (error, value) => { if (settled) return; settled = true; signal?.removeEventListener("abort", abort); socket.destroy(); error ? reject(error) : resolve(value); };\n    const abort = () => finish(new Error("Herdr tool call aborted"));\n    socket.setEncoding("utf8");\n    socket.on("connect", () => socket.write(JSON.stringify({ toolCallId, name, params }) + "\\n"));\n    socket.on("data", (chunk) => { buffer += chunk.toString(); let newline; while ((newline = buffer.indexOf("\\n")) >= 0) { const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1); if (!line) continue; let message; try { message = JSON.parse(line); } catch { continue; } if (message.type === "update") onUpdate?.(message.value); else if (message.type === "error") finish(new Error(message.error)); else if (message.type === "result") finish(undefined, message.value); } });\n    socket.on("error", (error) => finish(error));\n    socket.on("close", () => finish(new Error("Herdr tool bridge closed")));\n    signal?.addEventListener("abort", abort, { once: true });\n  });\n}\nfunction reportSettled() {\n  return new Promise((resolve) => {\n    const socket = net.createConnection(socketPath);\n    let buffer = "";\n    let finished = false;\n    const finish = () => { if (finished) return; finished = true; socket.destroy(); resolve(); };\n    socket.setEncoding("utf8");\n    socket.on("connect", () => socket.write(JSON.stringify({ type: "agent_settled" }) + "\\n"));\n    socket.on("data", (chunk) => { buffer += chunk.toString(); let newline; while ((newline = buffer.indexOf("\\n")) >= 0) { const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1); if (!line) continue; try { if (JSON.parse(line).type === "ack") finish(); } catch {} } });\n    socket.on("error", finish);\n    socket.on("close", finish);\n  });\n}\nexport default function(pi) { for (const tool of tools) pi.registerTool({ ...tool, async execute(toolCallId, params, signal, onUpdate) { return callTool(toolCallId, tool.name, params, signal, onUpdate); } }); pi.on("agent_settled", reportSettled); }\n`;
   writeFileSync(extensionPath, source, { encoding: "utf8", mode: 0o600 });
   const sockets = new Set<Socket>();
@@ -266,8 +268,7 @@ async function createToolBridge(session: HerdrSession, prepared: Readonly<Prepar
     markSettled();
     for (const socket of sockets) socket.destroy();
     await new Promise<void>((resolve) => server.close(() => { resolve(); }));
-    try { unlinkSync(extensionPath); } catch { /* Cleanup is best effort after the child exits. */ }
-    try { unlinkSync(socketPath); } catch { /* Cleanup is best effort after the child exits. */ }
+    rmSync(bridgeDirectory, { recursive: true, force: true });
   } };
 }
 
