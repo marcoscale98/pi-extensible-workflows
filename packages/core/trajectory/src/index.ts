@@ -151,7 +151,8 @@ async function ensureTrajectoryServer(agentDir: string, configuredPort: number):
     }
   } finally { await lockHandle?.close(); }
   try {
-    const child = spawn(process.execPath, [serverPath, "--port", String(configuredPort), "--lock", lockPath, "--fingerprint", fingerprint], { detached: true, stdio: "ignore" });
+    // NOTE: under a Bun-compiled pi binary process.execPath is the pi CLI, and Bun's node:http never writes the WebSocket 101 upgrade (oven-sh/bun#28157), so the server must run on a real node from PATH.
+    const child = spawn(process.versions.bun ? "node" : process.execPath, [serverPath, "--port", String(configuredPort), "--lock", lockPath, "--fingerprint", fingerprint], { detached: true, stdio: "ignore" });
     const startupError = new Promise<never>((_resolve, reject) => { child.once("error", reject); });
     child.unref();
     await Promise.race([waitForServer(configuredPort), startupError]);

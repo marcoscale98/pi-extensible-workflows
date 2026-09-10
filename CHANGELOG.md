@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### Fixes
+
+- Trajectory attaches when Pi runs as a Bun-compiled binary: the detached server is spawned with `node` from `PATH` instead of `process.execPath`, which re-ran the Pi CLI (exit 1) and, under Bun, never completed the WebSocket 101 upgrade (oven-sh/bun#28157).
+
 ## [5.14.0] - 2026-09-10
 
 ### New capabilities
