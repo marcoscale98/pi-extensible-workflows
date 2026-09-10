@@ -134,7 +134,9 @@ void test("Trajectory persists the server fingerprint in its listening lock", as
   const server = createTrajectoryServer(port, join(root, "trajectory.lock"), { fingerprint });
   await listen(server, port);
   try {
-    assert.deepEqual(JSON.parse(await readFile(join(root, "trajectory.lock"), "utf8")), { pid: process.pid, port, fingerprint });
+    const lock: unknown = JSON.parse(await readFile(join(root, "trajectory.lock"), "utf8"));
+    assert.ok(typeof lock === "object" && lock !== null && "startedAt" in lock && typeof lock.startedAt === "number" && lock.startedAt <= Date.now());
+    assert.deepEqual({ ...lock, startedAt: undefined }, { pid: process.pid, port, fingerprint, startedAt: undefined });
   } finally {
     server.closeAllConnections();
     server.closeIdleConnections();

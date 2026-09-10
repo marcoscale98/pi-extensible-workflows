@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { clearTrajectoryHost, setTrajectoryHost, type TrajectoryHost, type TrajectoryPublisherProvider } from "../../src/trajectory-host-handle.js";
+import { processAlive } from "../../src/session-lease.js";
 import { errorText, isNodeError, object, positiveInteger } from "../../src/utils.js";
 import { isTrajectoryAction, isTrajectoryTarget, trajectoryActionError, TRAJECTORY_MAX_TRANSCRIPT_BYTES, type TrajectoryPublisherInput, type TrajectoryPublisherMetadata, type TrajectoryTranscriptRequest, type TrajectoryTranscriptResult } from "../../src/trajectory.js";
 import { shareTrajectoryRun } from "./export.js";
@@ -23,7 +24,7 @@ type TrajectoryPublisherClient = {
 
 type TrajectoryPublisherConstructor = new (url: string) => TrajectoryPublisherClient;
 
-type TrajectoryLock = { pid: number; port: number; fingerprint?: string };
+type TrajectoryLock = { pid: number; port: number; fingerprint?: string; startedAt?: number };
 export type TrajectoryController = {
   open(input: TrajectoryPublisherInput): Promise<{ port: number }>;
   close(): Promise<void>;
@@ -51,15 +52,6 @@ async function serverHealthy(port: number): Promise<boolean> {
   } catch { return false; }
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if (isNodeError(error, "ESRCH")) return false;
-    throw error;
-  }
-}
 function signalProcess(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(pid, signal);
@@ -70,6 +62,8 @@ function signalProcess(pid: number, signal: NodeJS.Signals): void {
 async function stopStaleServer(lock: TrajectoryLock): Promise<void> {
   // During startup, the lock can name the current Pi process rather than the detached server.
   if (lock.pid === process.pid) return;
+  // NOTE: after a reboot the pid can belong to an unrelated process; startedAt (checked against /proc ctime) is the only proof it is still ours.
+  if (!await processAlive(lock.pid, lock.startedAt)) return;
   signalProcess(lock.pid, "SIGTERM");
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
@@ -78,7 +72,7 @@ async function stopStaleServer(lock: TrajectoryLock): Promise<void> {
     if (remaining <= 0) break;
     await delay(Math.min(50, remaining));
   }
-  if (processAlive(lock.pid)) signalProcess(lock.pid, "SIGKILL");
+  if (await processAlive(lock.pid, lock.startedAt)) signalProcess(lock.pid, "SIGKILL");
 }
 
 async function readLock(path: string): Promise<TrajectoryLock | undefined> {
@@ -86,7 +80,8 @@ async function readLock(path: string): Promise<TrajectoryLock | undefined> {
     const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
     if (!object(parsed) || !positiveInteger(parsed.pid) || !positiveInteger(parsed.port) || parsed.port > 65535) return undefined;
     const fingerprint = typeof parsed.fingerprint === "string" ? parsed.fingerprint : undefined;
-    return { pid: parsed.pid, port: parsed.port, ...(fingerprint === undefined ? {} : { fingerprint }) };
+    const startedAt = positiveInteger(parsed.startedAt) ? parsed.startedAt : undefined;
+    return { pid: parsed.pid, port: parsed.port, ...(fingerprint === undefined ? {} : { fingerprint }), ...(startedAt === undefined ? {} : { startedAt }) };
   } catch (error) {
     if (isNodeError(error, "ENOENT")) return undefined;
     return undefined;
@@ -107,7 +102,7 @@ async function resolveExistingServer(lockPath: string, existing: TrajectoryLock,
     await rm(lockPath, { force: true });
     return undefined;
   }
-  if (processAlive(existing.pid)) {
+  if (await processAlive(existing.pid, existing.startedAt)) {
     try {
       await waitForServer(existing.port);
       return existing;
@@ -135,7 +130,7 @@ async function ensureTrajectoryServer(agentDir: string, configuredPort: number):
   let lockHandle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     lockHandle = await open(lockPath, "wx", 0o600);
-    await lockHandle.writeFile(`${JSON.stringify({ pid: process.pid, port: configuredPort, fingerprint })}\n`, "utf8");
+    await lockHandle.writeFile(`${JSON.stringify({ pid: process.pid, port: configuredPort, fingerprint, startedAt: Date.now() })}\n`, "utf8");
   } catch (error) {
     if (isNodeError(error, "EEXIST")) {
       const raced = await readLock(lockPath);
@@ -145,7 +140,7 @@ async function ensureTrajectoryServer(agentDir: string, configuredPort: number):
       }
       await rm(lockPath, { force: true });
       lockHandle = await open(lockPath, "wx", 0o600);
-      await lockHandle.writeFile(`${JSON.stringify({ pid: process.pid, port: configuredPort, fingerprint })}\n`, "utf8");
+      await lockHandle.writeFile(`${JSON.stringify({ pid: process.pid, port: configuredPort, fingerprint, startedAt: Date.now() })}\n`, "utf8");
     } else {
       throw error;
     }
