@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { acquireSessionLease, createLaunchSnapshot, DEFAULT_SETTINGS, FairAgentScheduler, WorkflowError } from "../src/index.js";
+import { atomicWriteFile } from "../src/io.js";
 import { hasLiveSessionLease, listRunIds, projectStorageKey, RunStore, runsDirectory, structuralPath } from "../src/persistence.js";
 import { decodeTestJsonRecord, isTestRecord } from "./support.js";
 
@@ -15,6 +16,72 @@ function run(cwd: string, sessionId = "session-a") {
   return { id: "run-a", workflowName: "x", cwd, sessionId, state: "running" as const, agents: [], agentSessions: [{ transport: "local", sessionId: "native-a", locator: { sessionFile: "/pi/sessions/native-a.jsonl" } }] };
 }
 function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> { return new Promise((resolve) => { const timer = setTimeout(() => { resolve(false); }, timeoutMs); promise.then(() => { clearTimeout(timer); resolve(true); }, () => { clearTimeout(timer); resolve(true); }); }); }
+
+function windowsFileHolder(target: string, releaseAfterMs?: number) {
+  const releaseScript = releaseAfterMs === undefined ? "[Console]::In.ReadLine() | Out-Null;" : `Start-Sleep -Milliseconds ${String(releaseAfterMs)};`;
+  const holder = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `$fs = [IO.FileStream]::new($env:REPRO_TARGET, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None); [Console]::WriteLine('ready'); [Console]::Out.Flush(); ${releaseScript} $fs.Dispose()`], { env: { ...process.env, REPRO_TARGET: target }, stdio: ["pipe", "pipe", "pipe"] });
+  const stdout = holder.stdout;
+  const stdin = holder.stdin;
+  stdout.setEncoding("utf8");
+  let output = "";
+  const ready = new Promise<void>((resolve, reject) => {
+    stdout.on("data", (chunk: string) => { output += chunk; if (output.includes("ready")) resolve(); });
+    holder.once("error", reject);
+    holder.once("exit", (code) => { if (!output.includes("ready")) reject(new Error(`Windows file holder exited before ready: ${String(code)}`)); });
+  });
+  let released = false;
+  const release = (): void => { if (released) return; released = true; if (holder.exitCode === null) stdin.end("\n"); };
+  return { holder, ready, release };
+}
+
+void test("retries atomic replacement while a Windows handle denies delete sharing", { skip: process.platform !== "win32", timeout: 10_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-rename-retry-"));
+  const target = join(root, "state.json");
+  writeFileSync(target, "old");
+  const { holder, ready, release } = windowsFileHolder(target);
+  let settled = false;
+  let operation: Promise<void> | undefined;
+  try {
+    await ready;
+    operation = atomicWriteFile(target, "new");
+    void operation.then(() => { settled = true; }, () => { settled = true; });
+    let temporaryPath: string | undefined;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const temporaryName = readdirSync(root).find((name) => name.startsWith("state.json.") && name.endsWith(".tmp"));
+      if (temporaryName !== undefined && statSync(join(root, temporaryName)).size === 3) { temporaryPath = join(root, temporaryName); break; }
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+    if (temporaryPath === undefined) throw new Error("Atomic write did not create its temporary file");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(settled, false);
+    release();
+    await operation;
+    assert.equal(readFileSync(target, "utf8"), "new");
+  } finally {
+    release();
+    if (operation !== undefined) await operation.catch(() => undefined);
+    if (holder.exitCode === null) await new Promise<void>((resolve) => { holder.once("exit", () => { resolve(); }); });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+void test("retries synchronous atomic replacement while a Windows handle denies delete sharing", { skip: process.platform !== "win32", timeout: 10_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-sync-rename-retry-"));
+  const target = join(root, "state.json");
+  writeFileSync(target, "old");
+  const { holder, ready, release } = windowsFileHolder(target, 200);
+  try {
+    await ready;
+    const writer = spawn(process.execPath, ["--input-type=module", "-e", `import { atomicWriteFile } from ${JSON.stringify(new URL("../src/io.js", import.meta.url).href)}; atomicWriteFile(process.env.REPRO_TARGET, "new", true);`], { env: { ...process.env, REPRO_TARGET: target }, stdio: ["ignore", "ignore", "pipe"] });
+    const exitCode = await new Promise<number | null>((resolve, reject) => { writer.once("error", reject); writer.once("exit", (code) => { resolve(code); }); });
+    assert.equal(exitCode, 0);
+    assert.equal(readFileSync(target, "utf8"), "new");
+  } finally {
+    release();
+    if (holder.exitCode === null) await new Promise<void>((resolve) => { holder.once("exit", () => { resolve(); }); });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 void test("session leases reject live owners, reclaim malformed or dead owners, and release only their own token", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-lease-"));

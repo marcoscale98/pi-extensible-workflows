@@ -4,8 +4,33 @@ import { renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { WorkflowError } from "./types.js";
+import { isNodeError } from "./utils.js";
 
 const execute = promisify(execFile);
+// ponytail: retry window is capped at 1.585s; use durable lock coordination if holders outlive it.
+const RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100, 200, 400, 800] as const;
+const syncSleepBuffer = new Int32Array(new SharedArrayBuffer(4));
+function retryableRenameError(error: unknown): boolean { return isNodeError(error, "EPERM") || isNodeError(error, "EBUSY") || isNodeError(error, "EACCES"); }
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { await rename(from, to); return; }
+    catch (error) {
+      const delayMs = RENAME_RETRY_DELAYS_MS[attempt];
+      if (!retryableRenameError(error) || delayMs === undefined) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+function renameSyncWithRetry(from: string, to: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try { renameSync(from, to); return; }
+    catch (error) {
+      const delayMs = RENAME_RETRY_DELAYS_MS[attempt];
+      if (!retryableRenameError(error) || delayMs === undefined) throw error;
+      Atomics.wait(syncSleepBuffer, 0, 0, delayMs);
+    }
+  }
+}
 export const gitIdentity = {
   GIT_AUTHOR_NAME: "pi-extensible-workflows", GIT_AUTHOR_EMAIL: "pi-extensible-workflows@localhost", GIT_COMMITTER_NAME: "pi-extensible-workflows", GIT_COMMITTER_EMAIL: "pi-extensible-workflows@localhost",
   GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
@@ -18,14 +43,14 @@ export function atomicWriteFile(path: string, content: string, sync = false): Pr
   if (sync) {
     try {
       writeFileSync(temporary, content, { encoding: "utf8", mode: 0o600 });
-      renameSync(temporary, path);
+      renameSyncWithRetry(temporary, path);
     } catch (error) {
       try { rmSync(temporary, { force: true }); } catch { /* Preserve the original write error. */ }
       throw error;
     }
     return;
   }
-  return writeFile(temporary, content, { encoding: "utf8", mode: 0o600 }).then(() => rename(temporary, path)).catch(async (error: unknown) => {
+  return writeFile(temporary, content, { encoding: "utf8", mode: 0o600 }).then(() => renameWithRetry(temporary, path)).catch(async (error: unknown) => {
     try { await rm(temporary, { force: true }); } catch { /* Preserve the original write error. */ }
     throw error;
   });
