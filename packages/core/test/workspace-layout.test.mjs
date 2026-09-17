@@ -23,8 +23,9 @@ test("the repository keeps the public package in the core workspace", () => {
   assert.equal(root.private, true);
   assert.deepEqual(root.workspaces, ["packages/cli", "packages/core", "packages/extensions/*"]);
   assert.deepEqual(root.pi.extensions, ["./packages/core/src/index.ts", "./packages/core/starter/index.ts", "./packages/core/subagents/index.ts", "./packages/core/trajectory/index.ts"]);
-  assert.equal(core.name, "pi-extensible-workflows");
-  assert.equal(core.version, root.version);
+  assert.equal(core.name, "@marcoscale98/pi-extensible-workflows");
+  assert.match(root.version, /^\d+\.\d+\.\d+-fork\.\d+$/);
+  assert.equal(root.version, core.version);
   assert.notEqual(core.private, true);
   assert.deepEqual(core.pi.extensions, ["./dist/src/index.js", "./dist/starter/index.js", "./dist/subagents/index.js", "./dist/trajectory/index.js"]);
   assert.deepEqual(core.exports, {
@@ -51,10 +52,16 @@ test("the repository keeps the public package in the core workspace", () => {
   assert.ok(core.files.includes("CHANGELOG.md"));
   assert.match(core.scripts.prepack, /stage-core-changelog\.mjs stage/);
   assert.match(core.scripts.postpack, /stage-core-changelog\.mjs clean/);
-  assert.equal(cli.name, "@piewf/cli");
+  assert.equal(cli.name, "@marcoscale98/piewf-cli");
   assert.equal(cli.version, root.version);
   assert.equal(cli.bin.piewf, "./dist/src/cli.js");
   assert.equal(cli.publishConfig.access, "public");
+  const herdr = readPackage(resolve(repositoryRoot, "packages/extensions/herdr/package.json"));
+  assert.equal(herdr.name, "@marcoscale98/piewf-herdr");
+  assert.equal(herdr.version, root.version);
+  assert.equal(herdr.publishConfig.access, "public");
+  assert.equal(cli.dependencies["@marcoscale98/pi-extensible-workflows"], root.version);
+  assert.equal(herdr.peerDependencies["@marcoscale98/pi-extensible-workflows"], "*");
 });
 
 test("pack staging does not overwrite a package-local changelog", () => {

@@ -4,8 +4,10 @@ import { spawnSync } from "node:child_process";
 import { builtinModules } from "node:module";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentDefinition, WorkflowCatalogFunction } from "pi-extensible-workflows";
+import { CORE_PACKAGE_NAME, CORE_PACKAGE_NAMES, type AgentDefinition, type WorkflowCatalogFunction } from "@marcoscale98/pi-extensible-workflows";
 import type { BuildFailure, BuildOptions, BuildResult } from "esbuild";
+
+export const CLI_PACKAGE_NAME = "@marcoscale98/piewf-cli";
 
 export interface PortableWorkflowSource { module: string; export: string }
 export interface PortableWorkflowManifest {
@@ -13,7 +15,7 @@ export interface PortableWorkflowManifest {
   version: 1 | 2;
   command: string;
   workflow: { name: string; description: string; input: Record<string, unknown>; output: Record<string, unknown> };
-  runtime: { pi: string; "@piewf/cli": string };
+  runtime: { pi: string; "@marcoscale98/piewf-cli": string };
   requirements: { roles: readonly string[]; aliases: readonly string[]; tools: readonly string[]; commands: readonly string[]; environment: readonly string[] };
   aliasTargets?: Readonly<Record<string, string>>;
   source?: Readonly<PortableWorkflowSource>;
@@ -191,36 +193,37 @@ function runnerSource(): string {
     "  const settings = agent.SettingsManager.create(process.cwd(), agentDir, { projectTrusted: false });",
     "  const manager = new agent.DefaultPackageManager({ cwd: process.cwd(), agentDir, settingsManager: settings });",
     "  const configured = manager.listConfiguredPackages();",
-    "  const roots = configured.filter((entry) => /^npm:@piewf\\/cli(?:@|$)/.test(entry.source)).map((entry) => entry.installedPath);",
-    "  roots.push(join(agentDir, 'npm', 'node_modules', '@piewf', 'cli'));",
+    `  const roots = configured.filter((entry) => new RegExp('^npm:' + ${JSON.stringify(CLI_PACKAGE_NAME)} + '(?:@|$)').test(entry.source)).map((entry) => entry.installedPath);`,
+    `  roots.push(join(agentDir, 'npm', 'node_modules', ...${JSON.stringify(CLI_PACKAGE_NAME.split('/'))}));`,
     "  return [...new Set(roots.filter((root) => typeof root === 'string' && existsSync(join(root, 'package.json'))))];",
     "}",
+    `function engineRange() { return manifest.runtime[${JSON.stringify(CLI_PACKAGE_NAME)}] ?? 'unknown'; }`,
     "async function findEngine(pi) {",
     "  for (const root of await engineCandidates(pi)) {",
     "    const version = packageVersion(root);",
-    "    if (typeof version === 'string' && satisfies(version, manifest.runtime['@piewf/cli'])) return { root: realpathSync(root), version };",
+    "    if (typeof version === 'string' && satisfies(version, engineRange())) return { root: realpathSync(root), version };",
     "  }",
     "  return undefined;",
     "}",
     "async function confirmInstall(pi, expected) {",
-    "  const spec = `npm:@piewf/cli@${installationVersion(expected)}`;",
-    "  if (!(process.stdin.isTTY && process.stderr.isTTY)) throw new Error(`The compatible @piewf/cli package is missing. Re-run '${manifest.command} setup --yes' to approve: ${pi} install ${spec}`);",
+    `  const spec = \`npm:${CLI_PACKAGE_NAME}@\${installationVersion(expected)}\`;`,
+    "  if (!(process.stdin.isTTY && process.stderr.isTTY)) throw new Error(`The compatible workflow CLI package is missing. Re-run '${manifest.command} setup --yes' to approve: ${pi} install ${spec}`);",
     "  const prompt = createInterface({ input: process.stdin, output: process.stderr });",
     "  try { const answer = await prompt.question(`Install ${spec} through Pi now? [y/N] `); return /^y(es)?$/i.test(answer.trim()); } finally { prompt.close(); }",
     "}",
     "async function ensureEngine(pi, allowInstall, approve) {",
-    "  const expected = manifest.runtime['@piewf/cli'];",
+    "  const expected = engineRange();",
     "  let engine = await findEngine(pi);",
     "  if (engine) return engine;",
-    "  if (!allowInstall) throw new Error(`Compatible @piewf/cli${expected === 'unknown' ? '' : `@${expected}`} is not installed through Pi. Run '${manifest.command} setup' first; no installation is performed during launch.`);",
-    "  if (expected === 'unknown') throw new Error('The bundle does not record a compatible @piewf/cli version. Re-export the bundle.');",
+    "  if (!allowInstall) throw new Error(`Compatible workflow CLI${expected === 'unknown' ? '' : `@${expected}`} is not installed through Pi. Run '${manifest.command} setup' first; no installation is performed during launch.`);",
+    "  if (expected === 'unknown') throw new Error('The bundle does not record a compatible workflow CLI version. Re-export the bundle.');",
     "  if (!approve && !(await confirmInstall(pi, expected))) throw new Error('Installation was not approved.');",
-    "  const spec = `npm:@piewf/cli@${installationVersion(expected)}`;",
-    "  if (spec.endsWith('@unknown')) throw new Error('The bundle does not record a compatible @piewf/cli version. Re-export the bundle.');",
+    `  const spec = \`npm:${CLI_PACKAGE_NAME}@\${installationVersion(expected)}\`;`,
+    "  if (spec.endsWith('@unknown')) throw new Error('The bundle does not record a compatible workflow CLI version. Re-export the bundle.');",
     "  const result = run(pi, ['install', spec]);",
     "  if (result.status !== 0) throw new Error(`Pi could not install ${spec}: ${result.stderr.trim() || 'installation failed'}`);",
     "  engine = await findEngine(pi);",
-    "  if (!engine) throw new Error(`Pi installed an incompatible @piewf/cli version; expected ${expected}.`);",
+    "  if (!engine) throw new Error(`Pi installed an incompatible workflow CLI version; expected ${expected}.`);",
     "  return engine;",
     "}",
     "function readJson(path) { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return {}; } }",
@@ -313,10 +316,10 @@ function runnerSource(): string {
     "}",
     "function assertSetupState(pi, engine) {",
     "  const state = readJson(join(bundleRoot, 'bundle-state.json'));",
-    "  if (state.format !== manifest.format || state.version !== manifest.version || typeof state.checkedAt !== 'string' || !satisfies(state.pi, manifest.runtime.pi) || !satisfies(state.engine, manifest.runtime['@piewf/cli'])) throw new Error(`Bundle setup is missing or stale. Run '${manifest.command} setup' before launching.`);",
+    "  if (state.format !== manifest.format || state.version !== manifest.version || typeof state.checkedAt !== 'string' || !satisfies(state.pi, manifest.runtime.pi) || !satisfies(state.engine, engineRange())) throw new Error(`Bundle setup is missing or stale. Run '${manifest.command} setup' before launching.`);",
     "}",
     "async function loadPayload(engine) {",
-    "  const engineIndex = pathToFileURL(createRequire(pathToFileURL(join(engine.root, 'dist', 'src', 'cli.js'))).resolve('pi-extensible-workflows')).href;",
+    `  const engineIndex = pathToFileURL(createRequire(pathToFileURL(join(engine.root, 'dist', 'src', 'cli.js'))).resolve(${JSON.stringify(CORE_PACKAGE_NAME)})).href;`,
     "  const api = await import(engineIndex);",
     "  globalThis.__pi_bundle_api = api;",
     "  const payload = await import(pathToFileURL(join(bundleRoot, 'payload', 'workflow.mjs')).href + '?bundle=' + String(Date.now()));",
@@ -336,7 +339,7 @@ function runnerSource(): string {
     "  saveState(pi, engine);",
     "  console.log('Bundle setup complete.');",
     "  console.log('Pi: ' + piVersion(pi));",
-    "  console.log('@piewf/cli: ' + engine.version);",
+    `  console.log(${JSON.stringify(CLI_PACKAGE_NAME)} + ': ' + engine.version);`,
     "}",
     "async function launch(argv) {",
     "  const pi = piCommand();",
@@ -412,7 +415,7 @@ function isPackageSpecifier(specifier: string): boolean {
 }
 
 function isAllowedExternal(specifier: string): boolean {
-  return nodeBuiltins.has(specifier) || packageName(specifier) === "pi-extensible-workflows";
+  return nodeBuiltins.has(specifier) || CORE_PACKAGE_NAMES.includes(packageName(specifier) as (typeof CORE_PACKAGE_NAMES)[number]);
 }
 const packageNamePattern = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 
@@ -556,7 +559,8 @@ function extensionPackageShim(paths: readonly string[], bundledSource: string): 
   });
   sources.push(bundledSource);
   for (const source of sources) {
-    for (const match of source.matchAll(/import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+["']pi-extensible-workflows["']/g)) {
+    const packagePattern = CORE_PACKAGE_NAMES.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    for (const match of source.matchAll(new RegExp(`import\\s+(?:type\\s+)?\\{([^}]+)\\}\\s+from\\s+["'](?:${packagePattern})["']`, "g"))) {
       for (const part of (match[1] ?? "").split(",")) {
         const imported = part.trim().split(/\s+as\s+/, 1)[0]?.trim();
         if (imported && /^[A-Za-z_$][\w$]*$/.test(imported)) importedNames.add(imported);
@@ -573,7 +577,7 @@ function baseManifest(input: PortableWorkflowBundleInput, version: 1 | 2): Porta
     version,
     command: input.command,
     workflow: { name: input.workflow.name, description: input.workflow.description, input: input.workflow.input, output: input.workflow.output },
-    runtime: { pi: input.piVersion?.trim() || "unknown", "@piewf/cli": engineVersion.trim() || "unknown" },
+    runtime: { pi: input.piVersion?.trim() || "unknown", [CLI_PACKAGE_NAME]: engineVersion.trim() || "unknown" },
     requirements: {
       roles: input.requirements?.roles ?? Object.keys(input.roles ?? {}),
       aliases: input.requirements?.aliases ?? [],
@@ -606,10 +610,13 @@ function writeBundleFiles(input: PortableWorkflowBundleInput, manifest: Portable
     if (copiedPayload) manifest.payload = copiedPayload;
     const extensionPaths = input.resources?.extensions ?? [];
     writeFileSync(join(payload, "extension.mjs"), bundledExtensionSource, { encoding: "utf8", mode: 0o600 });
-    const packageDirectory = join(payload, "node_modules", "pi-extensible-workflows");
-    mkdirSync(packageDirectory, { recursive: true });
-    writeFileSync(join(packageDirectory, "package.json"), '{"type":"module","exports":"./index.mjs"}\n', { encoding: "utf8", mode: 0o600 });
-    writeFileSync(join(packageDirectory, "index.mjs"), extensionPackageShim(extensionPaths, bundledExtensionSource), { encoding: "utf8", mode: 0o600 });
+    const shim = extensionPackageShim(extensionPaths, bundledExtensionSource);
+    for (const packageName of CORE_PACKAGE_NAMES) {
+      const packageDirectory = join(payload, "node_modules", ...packageName.split("/"));
+      mkdirSync(packageDirectory, { recursive: true });
+      writeFileSync(join(packageDirectory, "package.json"), '{"type":"module","exports":"./index.mjs"}\n', { encoding: "utf8", mode: 0o600 });
+      writeFileSync(join(packageDirectory, "index.mjs"), shim, { encoding: "utf8", mode: 0o600 });
+    }
     writeFileSync(join(temporary, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     writeFileSync(join(payload, "workflow.mjs"), workflowSource, { encoding: "utf8", mode: 0o600 });
     writeFileSync(join(payload, "runner.mjs"), runnerSource(), { encoding: "utf8", mode: 0o700 });

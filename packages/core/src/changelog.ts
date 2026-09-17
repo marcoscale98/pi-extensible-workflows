@@ -4,8 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { atomicJson, json } from "./io.js";
 import { object } from "./utils.js";
-
-const PACKAGE_NAME = "pi-extensible-workflows";
+import { isCorePackageName } from "./package-identity.js";
 const STATE_DIRECTORY = "pi-extensible-workflows";
 const STATE_FILE = "changelog-state.json";
 const MAX_NOTICE_CHARACTERS = 6_000;
@@ -16,7 +15,7 @@ type PackageMetadata = { directory: string; version: string };
 type ChangelogContext = Pick<ExtensionContext, "hasUI" | "mode"> & { ui: Pick<ExtensionContext["ui"], "notify"> };
 
 function packageMetadata(value: unknown, directory: string): PackageMetadata | undefined {
-  if (!object(value) || value.name !== PACKAGE_NAME || typeof value.version !== "string" || !value.version.trim()) return undefined;
+  if (!object(value) || !isCorePackageName(value.name) || typeof value.version !== "string" || !value.version.trim()) return undefined;
   return { directory, version: value.version.trim() };
 }
 

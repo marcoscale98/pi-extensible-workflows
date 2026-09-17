@@ -40,10 +40,10 @@ import {
   type WorkflowRoleDirectoryRegistration,
   type WorkflowSettings,
   type WorkflowSettingsSources,
-} from "pi-extensible-workflows";
-import type { AgentDefinition } from "pi-extensible-workflows";
-import { loadingRegistry, type WorkflowRegistryApi } from "pi-extensible-workflows";
-import { selectResourcesByLayers, unmatchedResourcePatterns, mergeWorkflowExtensionSettings } from "pi-extensible-workflows";
+} from "@marcoscale98/pi-extensible-workflows";
+import type { AgentDefinition } from "@marcoscale98/pi-extensible-workflows";
+import { loadingRegistry, type WorkflowRegistryApi } from "@marcoscale98/pi-extensible-workflows";
+import { selectResourcesByLayers, unmatchedResourcePatterns, mergeWorkflowExtensionSettings } from "@marcoscale98/pi-extensible-workflows";
 export type DoctorSeverity = "error" | "warning";
 export interface DoctorDiagnostic { severity: DoctorSeverity; code: string; message: string; source?: string; hint?: string }
 export interface DoctorRole { name: string; path: string; scope: "extension" | "global" | "project"; active: boolean; overrides?: string; overriddenBy?: string; extension?: WorkflowExtensionMetadata }

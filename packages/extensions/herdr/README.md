@@ -1,4 +1,4 @@
-# `@piewf/herdr`
+# `@marcoscale98/piewf-herdr`
 
 Connect workflow agents to Herdr panes. The extension adds contextual `/workflow` actions for live handoff and completed-session inspection, plus an optional mode that runs every workflow agent in Herdr.
 
@@ -7,13 +7,13 @@ Connect workflow agents to Herdr panes. The extension adds contextual `/workflow
 ## Requirements and installation
 
 - Node.js 22.19 or newer.
-- `pi-extensible-workflows` loaded in Pi.
+- `@marcoscale98/pi-extensible-workflows` loaded in Pi.
 - Pi running inside a Herdr-managed pane.
 - Trusted package code and project context.
 
 ```sh
-pi install npm:pi-extensible-workflows
-pi install npm:@piewf/herdr
+pi install npm:@marcoscale98/pi-extensible-workflows@fork
+pi install npm:@marcoscale98/piewf-herdr@fork
 ```
 
 The extension activates only when Herdr is available. It registers workflow attempt actions and a transport setup hook, not model-facing tools. Set `PI_CODING_AGENT_DIR` if the Pi agent directory is not `~/.pi/agent`.

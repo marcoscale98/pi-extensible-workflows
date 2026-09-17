@@ -13,21 +13,21 @@ Requirements:
 Install the core workflow extension for deterministic orchestration:
 
 ```sh
-pi install npm:pi-extensible-workflows
+pi install npm:@marcoscale98/pi-extensible-workflows@fork
 ```
 
 The core installation includes workflow orchestration, the `reviewLoop` starter, standalone subagent tools, and Trajectory. The starter ships `reviewLoop`, packaged `developer`/`reviewer`/`scout`/`oracle`/`researcher` roles, dynamic `developer-model`/`reviewer-model`/`scout-model`/`oracle-model`/`researcher-model` aliases, and slash-command prompts (`/scout`, `/parallel-scout`, `/oracle`, `/council`, `/review`, `/parallel-review`, `/review-loop`, `/deep-research`) that launch subagents or workflows with those roles. Global or project roles with the same name override packaged roles. Static settings `modelAliases` shadow the dynamic resolvers. `reviewLoop` cannot be overridden: a duplicate name is `GLOBAL_COLLISION`. Disable optional entries with Pi package filters `"-dist/starter/index.js"`, `"-dist/subagents/index.js"`, and `"-dist/trajectory/index.js"`; keep `dist/src/index.js` for workflow tools. Package prompts are declared in the package manifest and are not removed by the starter filter. The same package-root paths apply to `pi install "$PWD/packages/core"`. See `docs/extensions.html#bundled-filters`. Add companion packages only for the capability you need:
 
 ```sh
-pi install npm:@piewf/herdr
-pi install npm:@piewf/cli
+pi install npm:@marcoscale98/piewf-herdr@fork
+pi install npm:@marcoscale98/piewf-cli@fork
 ```
 
 | Package | Select it when |
 | --- | --- |
-| `pi-extensible-workflows` | The task needs workflows, the `reviewLoop` implementation-and-review starter, or one independent subagent run with a durable ID and lifecycle controls. |
-| `@piewf/herdr` | Core workflow agents need live handoff, completed-session inspection, or fully inspectable execution in Herdr. Core must also be loaded. |
-| `@piewf/cli` | A terminal needs doctor, inspection, headless registered-function or file-backed workflow execution, export, or bundle commands. |
+| `@marcoscale98/pi-extensible-workflows` | The task needs workflows, the `reviewLoop` implementation-and-review starter, or one independent subagent run with a durable ID and lifecycle controls. |
+| `@marcoscale98/piewf-herdr` | Core workflow agents need live handoff, completed-session inspection, or fully inspectable execution in Herdr. Core must also be loaded. |
+| `@marcoscale98/piewf-cli` | A terminal needs doctor, inspection, headless registered-function or file-backed workflow execution, export, or bundle commands. |
 
 For local development:
 
@@ -146,7 +146,7 @@ The model-facing surface is exactly:
 Background calls return an ID immediately. Foreground calls return a terminal envelope and do not produce a background completion follow-up. Do not poll a running ID; call `subagents_inspect({ id })` only when current state or output is needed. Cross-session retry starts fresh and does not restore the old native conversation.
 ## Herdr integration
 
-`@piewf/herdr` requires the core workflow extension and a Herdr-managed pane. It registers workflow attempt actions and a transport setup hook, not model-facing tools.
+`@marcoscale98/piewf-herdr` requires the core workflow extension and a Herdr-managed pane. It registers workflow attempt actions and a transport setup hook, not model-facing tools.
 
 - The live action hands a transferable running session to Herdr and later returns ownership to the local SDK.
 - The completed action opens a persisted completed, failed, or cancelled attempt for inspection.
@@ -157,7 +157,7 @@ See the [Herdr guide](herdr.html) for handoff ownership, interruption behavior, 
 
 ## Create an extension
 
-Use TypeScript or JavaScript as a normal Pi extension. The package import is `pi-extensible-workflows`.
+Use TypeScript or JavaScript as a normal Pi extension. Import the API from `@marcoscale98/pi-extensible-workflows`.
 
 Rules:
 
@@ -173,7 +173,7 @@ Minimal extension with a reusable function:
 
 ```ts
 import { Type } from "typebox";
-import { defineWorkflowFunction, registerWorkflowExtension } from "pi-extensible-workflows";
+import { defineWorkflowFunction, registerWorkflowExtension } from "@marcoscale98/pi-extensible-workflows";
 
 const greet = defineWorkflowFunction({
   description: "Return a greeting for one person.",

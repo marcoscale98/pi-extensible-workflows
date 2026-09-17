@@ -1,7 +1,7 @@
 import {
   registerWorkflowExtension,
   type WorkflowExtension,
-} from "pi-extensible-workflows";
+} from "@marcoscale98/pi-extensible-workflows";
 import { reviewLoop } from "./review-loop.js";
 
 const extension: WorkflowExtension = {
