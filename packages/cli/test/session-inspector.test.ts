@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { SessionEntry, SessionInfo } from "@earendil-works/pi-coding-agent";
-import { createLaunchSnapshot, inspectWorkflowScript } from "pi-extensible-workflows";
+import { createLaunchSnapshot, inspectWorkflowScript } from "@marcoscale98/pi-extensible-workflows";
 import { runCli } from "../src/cli.js";
-import { RunStore } from "pi-extensible-workflows/persistence";
+import { RunStore } from "@marcoscale98/pi-extensible-workflows/persistence";
 import { loadSessionReport, matchSession, renderInspector, resolveSession, transcriptLines, type InspectorViewState, type SessionReport } from "../src/session-inspector.js";
 
 const usage = (cost: number) => ({ input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15, cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } });

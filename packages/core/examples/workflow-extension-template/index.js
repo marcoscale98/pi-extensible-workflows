@@ -1,4 +1,4 @@
-import { registerWorkflowExtension } from "pi-extensible-workflows";
+import { registerWorkflowExtension } from "@marcoscale98/pi-extensible-workflows";
 
 const templateExtension = {
   version: "1.0.0",

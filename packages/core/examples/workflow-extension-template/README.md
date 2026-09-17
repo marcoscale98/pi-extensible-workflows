@@ -14,7 +14,7 @@ node --test packages/core/examples/workflow-extension-template/extension.test.mj
 ```
 
 For a published package, run the same test from this directory after installing
-`pi-extensible-workflows` in the surrounding project. Copy the directory into a
+`@marcoscale98/pi-extensible-workflows` in the surrounding project. Copy the directory into a
 trusted Pi extension location; Pi auto-discovers its `index.js` entry point.
 
 

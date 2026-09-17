@@ -1,4 +1,4 @@
-import { registerWorkflowExtension, type WorkflowExtension } from "pi-extensible-workflows";
+import { registerWorkflowExtension, type WorkflowExtension } from "@marcoscale98/pi-extensible-workflows";
 
 const extension: WorkflowExtension = {
   version: "1.0.0",

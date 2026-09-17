@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { InMemoryCredentialStore, InMemoryModelsStore, type Credential } from "@earendil-works/pi-ai";
 import { createEventBus, ModelRuntime, createAgentSessionFromServices, createAgentSessionServices, getAgentDir, hasTrustRequiringProjectResources, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { createLocalPiSession, prepareAgentSetupForInspection, selectResourcesByLayers, unmatchedResourcePatterns, validateAgentOptions, type AgentExecutionRoot, type AgentTransport, type JsonValue, type ModelSpec, DEFAULT_SETTINGS, canonicalPath, reachableTools, errorText, isNodeError, isObject, loadSettings, resolveAgentResourcePolicy, resolveWorkflowSettings, resolveModelReference, parseThinking, registeredWorkflowFunctions, workflowProjectSettingsPath, workflowSettingsPath, type AgentResourcePolicy, type WorkflowCatalogModelAlias, type WorkflowFunction, type WorkflowSettings, type WorkflowSettingsSources } from "pi-extensible-workflows";
-import { loadingRegistry, type WorkflowRegistryApi } from "pi-extensible-workflows";
+import { createLocalPiSession, prepareAgentSetupForInspection, selectResourcesByLayers, unmatchedResourcePatterns, validateAgentOptions, type AgentExecutionRoot, type AgentTransport, type JsonValue, type ModelSpec, DEFAULT_SETTINGS, canonicalPath, reachableTools, errorText, isNodeError, isObject, loadSettings, resolveAgentResourcePolicy, resolveWorkflowSettings, resolveModelReference, parseThinking, registeredWorkflowFunctions, workflowProjectSettingsPath, workflowSettingsPath, type AgentResourcePolicy, type WorkflowCatalogModelAlias, type WorkflowFunction, type WorkflowSettings, type WorkflowSettingsSources } from "@marcoscale98/pi-extensible-workflows";
+import { loadingRegistry, type WorkflowRegistryApi } from "@marcoscale98/pi-extensible-workflows";
 
 export type DoctorSeverity = "error" | "warning";
 export interface DoctorDiagnostic { severity: DoctorSeverity; code: string; message: string; source?: string; hint?: string }

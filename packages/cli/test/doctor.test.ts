@@ -14,7 +14,7 @@ import test from "node:test";
 import { doctor, doctorExitCode, formatDoctorReport, type DoctorPiState } from "../src/doctor.js";
 import { writePortableWorkflowBundle } from "../src/bundles.js";
 import { formatWorkflowCliHelp, parseDoctorCleanupArgs, parseScriptWorkflowCliArgs, parseWorkflowCliArgs, runCli } from "../src/cli.js";
-import { WorkflowRegistry } from "pi-extensible-workflows";
+import { WorkflowRegistry } from "@marcoscale98/pi-extensible-workflows";
 
 import { isCliTestBundleExtension, isCliTestBundleModule, readCliTestPackageMetadata, writeCliTestExtensionSource, type CliTestBundleExtension } from "./support.js";
 import { registerCliExtension } from "./fixtures/cli-workflow-extension.js";
@@ -392,16 +392,16 @@ void test("exported launchers are executable and delegate unchanged arguments", 
   assert.equal(lstatSync(destination).isSymbolicLink(), false);
   const launcher = readFileSync(destination, "utf8");
   assert.match(launcher, /^#!\/usr\/bin\/env node\n/);
-  assert.match(launcher, /import\.meta\.resolve\("@piewf\/cli"\)/);
-  assert.match(launcher, /@piewf\/cli/);
+  assert.match(launcher, /import\.meta\.resolve\("@marcoscale98\/piewf-cli"\)/);
+  assert.match(launcher, /@marcoscale98\/piewf-cli/);
   assert.match(output, /Exported .*cli-echo/);
   assert.match(warning, /not in PATH/);
 
-  const packageRoot = join(paths.agentDir, "npm", "node_modules", "@piewf/cli");
+  const packageRoot = join(paths.agentDir, "npm", "node_modules", "@marcoscale98/piewf-cli");
   const fallbackCli = join(packageRoot, "dist", "src");
   const indexUrl = pathToFileURL(join(process.cwd(), "../core", "dist", "src", "index.js")).href;
   mkdirSync(fallbackCli, { recursive: true });
-  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "@piewf/cli", version: "4.0.2" }));
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "@marcoscale98/piewf-cli", version: "4.0.2" }));
   writeFileSync(join(fallbackCli, "cli.js"), `import { registerWorkflowExtension } from ${JSON.stringify(indexUrl)};\nimport { runCli } from ${JSON.stringify(pathToFileURL(cliPath).href)};\nregisterWorkflowExtension({ version: "1.0.0", headline: "Real runner", functions: { cliEcho: { description: "Echo", input: { type: "object", properties: { issue: { type: "integer" } }, required: ["issue"], additionalProperties: false }, output: { type: "object", properties: { issue: { type: "integer" } }, required: ["issue"], additionalProperties: false }, run: (input) => ({ issue: input.issue }) } } });\nexport { runCli };\n`);
   const realOutput = execFileSync(destination, ["7"], { cwd: paths.cwd, env: { ...process.env, HOME: paths.root, PI_CODING_AGENT_DIR: paths.agentDir, PI_OFFLINE: "1" }, encoding: "utf8" });
   assert.equal(realOutput, '{"issue":7}\n');
@@ -618,7 +618,7 @@ void test("portable bundles name dependency packages and entry points by their p
 void test("portable bundles can load a selected workflow extension with its module state", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-bundle-extension-"));
   const extension = join(root, "workflow.mjs");
-  writeFileSync(extension, `import { registerWorkflowExtension } from "pi-extensible-workflows";\nconst suffix = "!";\nexport default function extension() { registerWorkflowExtension({ version: "1.0.0", headline: "Bundled extension", functions: { extensionSelected: { description: "Selected", input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false }, output: { type: "string" }, run(input) { return input.value + suffix; } } } }); }\n`);
+  writeFileSync(extension, `import { registerWorkflowExtension } from "@marcoscale98/pi-extensible-workflows";\nconst suffix = "!";\nexport default function extension() { registerWorkflowExtension({ version: "1.0.0", headline: "Bundled extension", functions: { extensionSelected: { description: "Selected", input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false }, output: { type: "string" }, run(input) { return input.value + suffix; } } } }); }\n`);
   const destination = join(root, "bundle");
   const selectedWorkflow = { name: "selected", version: "1.0.0", headline: "Bundle", description: "Bundle", input: { type: "object" }, output: { type: "string" } };
   const source = writeCliTestExtensionSource(join(root, "selected-source.mjs"), selectedWorkflow, 'run() { return "workflow"; }');
