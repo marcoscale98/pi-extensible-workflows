@@ -48,10 +48,8 @@ Requires Node.js 22.19 or newer. This is trusted Pi host code with the same file
 ## Install
 
 ```sh
-pi install npm:pi-extensible-workflows
+pi install npm:@marcoscale98/pi-extensible-workflows@fork
 ```
-
-For source installation and local development, see the [installation guide](https://vekexasia.github.io/pi-extensible-workflows/developers.html#installation).
 
 ## Quick start
 
@@ -84,8 +82,8 @@ The single core installation provides workflows, the `reviewLoop` starter for de
 
 ### Companion packages
 
-- [`@piewf/herdr`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/extensions/herdr) (`pi install npm:@piewf/herdr`): workflow-agent sessions in Herdr panes.
-- [`@piewf/cli`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/cli) (`npm install -g @piewf/cli`): `pi-role <role>` to start Pi as a role, and `piewf` for doctor, inspection, headless runs, export, and bundles.
+- [`@marcoscale98/piewf-herdr`](packages/extensions/herdr) (`pi install npm:@marcoscale98/piewf-herdr@fork`): workflow-agent sessions in Herdr panes.
+- [`@marcoscale98/piewf-cli`](packages/cli) (`npm install --global @marcoscale98/piewf-cli@fork`): `pi-role <role>` to start Pi as a role, and `piewf` for doctor, inspection, headless runs, export, and bundles.
 
 ## Development
 

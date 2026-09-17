@@ -7,7 +7,7 @@ import test from "node:test";
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../src");
 function source(name: string): string { return readFileSync(resolve(sourceRoot, name), "utf8"); }
 function importsFrom(text: string, symbol: string): boolean {
-  return new RegExp(`import\\s+(?:type\\s+)?(?:\\w+\\s*,\\s*)?\\{[^}]*\\b${symbol}\\b[^}]*\\}\\s+from\\s+["']pi-extensible-workflows["']`, "s").test(text);
+  return new RegExp(`import\\s+(?:type\\s+)?(?:\\w+\\s*,\\s*)?\\{[^}]*\\b${symbol}\\b[^}]*\\}\\s+from\\s+["']@marcoscale98/pi-extensible-workflows["']`, "s").test(text);
 }
 
 void test("the CLI reuses the core vocabularies and guards instead of restating them", () => {

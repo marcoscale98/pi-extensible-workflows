@@ -35,7 +35,7 @@
     <article class="prose">
       <p class="eyebrow">Herdr integration path</p>
       <h1>Open workflow-agent sessions in Herdr</h1>
-      <p class="lead"><code>@piewf/herdr</code> adds contextual <code>/workflow</code> actions for live handoff and completed-session inspection, plus an optional mode that runs every workflow agent in a dedicated Herdr workspace.</p>
+      <p class="lead"><code>@marcoscale98/piewf-herdr</code> adds contextual <code>/workflow</code> actions for live handoff and completed-session inspection, plus an optional mode that runs every workflow agent in a dedicated Herdr workspace.</p>
       <section id="overview">
         <h2>Overview</h2>
         <p>The extension complements <code>pi-extensible-workflows</code>. It registers trusted workflow attempt actions and a transport setup hook. It does not register model-facing tools.</p>
@@ -44,8 +44,8 @@
       <section id="installation">
         <h2>Installation and requirements</h2>
         <p>Use Node.js 22.19 or newer. Both packages are trusted Pi host code and run with the same filesystem and process access as Pi.</p>
-        <pre><code class="language-shell"><span class="tok-command">pi</span> install npm:pi-extensible-workflows
-<span class="tok-command">pi</span> install npm:@piewf/herdr</code></pre>
+        <pre><code class="language-shell"><span class="tok-command">pi</span> install npm:@marcoscale98/pi-extensible-workflows
+<span class="tok-command">pi</span> install npm:@marcoscale98/piewf-herdr</code></pre>
         <p>Requirements:</p>
         <ul>
           <li>The core workflow extension is loaded.</li>

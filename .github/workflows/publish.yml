@@ -42,7 +42,10 @@ jobs:
       - name: Verify package artifacts
         run: npm run test:packages -- "$RUNNER_TEMP/piewf-packages"
       - name: Publish missing packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then unset NODE_AUTH_TOKEN; fi
           publish() {
             workspace=$1
             name=$(node -p "require('./$workspace/package.json').name")
@@ -52,8 +55,8 @@ jobs:
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version is already published"
             else
-              case "$version" in *-*) tag=next;; *) tag=latest;; esac
-              npm publish "$RUNNER_TEMP/piewf-packages/$filename" --access public --tag "$tag"
+              case "$version" in *-fork.*) tag=fork;; *-*) tag=next;; *) tag=latest;; esac
+              npm publish "$RUNNER_TEMP/piewf-packages/$filename" --access public --tag "$tag" --provenance
             fi
           }
           publish packages/core

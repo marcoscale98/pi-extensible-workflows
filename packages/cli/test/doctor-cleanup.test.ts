@@ -4,8 +4,8 @@ import { mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { createLaunchSnapshot, DEFAULT_SETTINGS, type RunState } from "pi-extensible-workflows";
-import { acquireSessionLease, RunStore, structuralPath } from "pi-extensible-workflows/persistence";
+import { createLaunchSnapshot, DEFAULT_SETTINGS, type RunState } from "@marcoscale98/pi-extensible-workflows";
+import { acquireSessionLease, RunStore, structuralPath } from "@marcoscale98/pi-extensible-workflows/persistence";
 import { doctorCleanup } from "../src/doctor-cleanup.js";
 import { runCli } from "../src/cli.js";
 import { readCliTestPersistedRun, readCliTestSessionOwner } from "./support.js";

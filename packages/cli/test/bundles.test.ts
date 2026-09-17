@@ -14,7 +14,7 @@ void test("bundle loads extensions with aliased workflow API imports", async () 
   try {
     const extension = join(root, "aliased-extension.mjs");
     writeFileSync(extension, [
-      'import { registerWorkflowExtension as register } from "pi-extensible-workflows";',
+      'import { registerWorkflowExtension as register } from "@marcoscale98/pi-extensible-workflows";',
       "export default function extension() {",
       '  register({ version: "1.0.0", headline: "Aliased extension", functions: {} });',
       "}",
@@ -22,7 +22,7 @@ void test("bundle loads extensions with aliased workflow API imports", async () 
     ].join("\n"));
     const source = join(root, "source-extension.mjs");
     writeFileSync(source, [
-      'import { registerWorkflowExtension } from "pi-extensible-workflows";',
+      'import { registerWorkflowExtension } from "@marcoscale98/pi-extensible-workflows";',
       "export default function extension() {",
       '  registerWorkflowExtension({ version: "1.0.0", headline: "Source extension", functions: { "bundle-test": { description: "Bundle test", input: { type: "object" }, output: { type: "string" }, run: (input) => input } } });',
       "}",
@@ -39,6 +39,10 @@ void test("bundle loads extensions with aliased workflow API imports", async () 
       resources: { extensions: [extension] },
     });
 
+    const canonicalShim = readFileSync(join(destination, "payload", "node_modules", "pi-extensible-workflows", "index.mjs"), "utf8");
+    const scopedShim = readFileSync(join(destination, "payload", "node_modules", "@marcoscale98", "pi-extensible-workflows", "index.mjs"), "utf8");
+    assert.match(canonicalShim, /registerWorkflowExtension/);
+    assert.equal(scopedShim, canonicalShim);
     const registered: unknown[] = [];
     (globalThis as typeof globalThis & { __pi_bundle_api: unknown }).__pi_bundle_api = { registerWorkflowExtension: (value: unknown) => registered.push(value) };
     const payload = await import(pathToFileURL(join(destination, "payload", "workflow.mjs")).href) as BundlePayload;
@@ -63,7 +67,7 @@ void test("bundles an extension module with runtime and local lexical dependenci
     writeFileSync(extension, [
       'import { Type } from "typebox";',
       'import { suffix } from "./helper.mjs";',
-      'import { registerWorkflowExtension } from "pi-extensible-workflows";',
+      'import { registerWorkflowExtension } from "@marcoscale98/pi-extensible-workflows";',
       'const prefix = "bundle:";',
       "function label(value) { return prefix + value; }",
       "const input = Type.Object({ value: Type.String() });",
@@ -229,7 +233,7 @@ void test("bundle shim omits invalid emitted names", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-bundle-"));
   try {
     const extension = join(root, "invalid-extension.mjs");
-    writeFileSync(extension, 'import { "invalid-name" as validName } from "pi-extensible-workflows";\n');
+    writeFileSync(extension, 'import { "invalid-name" as validName } from "@marcoscale98/pi-extensible-workflows";\n');
     const source = join(root, "source-extension.mjs");
     writeFileSync(source, "export default function extension() {}\n");
     const destination = join(root, "bundle");
@@ -244,7 +248,9 @@ void test("bundle shim omits invalid emitted names", async () => {
     });
 
     const shim = readFileSync(join(destination, "payload", "node_modules", "pi-extensible-workflows", "index.mjs"), "utf8");
+    const scopedShim = readFileSync(join(destination, "payload", "node_modules", "@marcoscale98", "pi-extensible-workflows", "index.mjs"), "utf8");
     assert.equal(shim, "\n");
+    assert.equal(scopedShim, "\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -4,14 +4,14 @@ import { constants } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultPackageManager, DefaultResourceLoader, ProjectTrustStore, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { discoverRoles, loadRole, resolveRole, type ResolvedRole, type WorkflowRoleDirectoryInput } from "pi-extensible-workflows/roles";
-import { CONTEXT_FILE_SCOPES, WorkflowError, errorText, resourcePatternHasMagic, sameFilesystemPath, type AgentDefinition } from "pi-extensible-workflows";
+import { discoverRoles, loadRole, resolveRole, type ResolvedRole, type WorkflowRoleDirectoryInput } from "@marcoscale98/pi-extensible-workflows/roles";
+import { CONTEXT_FILE_SCOPES, WorkflowError, errorText, resourcePatternHasMagic, sameFilesystemPath, type AgentDefinition } from "@marcoscale98/pi-extensible-workflows";
 
 // Pi builtin tools stand in for the workflow session boundary; extension tool names selected by the role pass through.
 const PI_BUILTIN_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
 function starterRoleDirectories(): WorkflowRoleDirectoryInput[] {
-  const core = dirname(fileURLToPath(import.meta.resolve("pi-extensible-workflows")));
+  const core = dirname(fileURLToPath(import.meta.resolve("@marcoscale98/pi-extensible-workflows")));
   return [{ path: resolve(core, "../starter/roles"), extension: { version: "0.0.0", headline: "Starter roles" }, builtin: true }];
 }
 
