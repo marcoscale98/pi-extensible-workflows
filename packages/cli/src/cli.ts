@@ -8,12 +8,12 @@ import { ProjectTrustStore, SessionManager, SettingsManager, createAgentSessionF
 import { Value } from "typebox/value";
 import { doctor, doctorExitCode, formatDoctorReport, type DoctorOptions } from "./doctor.js";
 import { doctorCleanup, doctorCleanupExitCode, formatDoctorCleanupReport, type DoctorCleanupOptions } from "./doctor-cleanup.js";
-import workflowExtension, { errorText, formatWorkflowProgress, isNodeError, jsonValue, loadAgentDefinitions, object, registeredWorkflowFunctionSources, sameFilesystemPath, truncateWorkflowProgress, workflowCatalog, workflowSettingsPath, type JsonSchema, type JsonValue, type WorkflowExtensionAPI, type WorkflowProgressStyles } from "pi-extensible-workflows";
-import { portableEngineVersion, portablePiVersion, writePortableWorkflowBundle } from "./bundles.js";
+import workflowExtension, { errorText, formatWorkflowProgress, isNodeError, jsonValue, loadAgentDefinitions, object, registeredWorkflowFunctionSources, sameFilesystemPath, truncateWorkflowProgress, workflowCatalog, workflowSettingsPath, type JsonSchema, type JsonValue, type WorkflowExtensionAPI, type WorkflowProgressStyles } from "@marcoscale98/pi-extensible-workflows";
+import { CLI_PACKAGE_NAME, portableEngineVersion, portablePiVersion, writePortableWorkflowBundle } from "./bundles.js";
 import { runSessionInspector, transcriptFileLines, type InspectMode } from "./session-inspector.js";
-import { isPersistedRun, listPersistedSessionIds, listRunIds, type PersistedRun } from "pi-extensible-workflows/persistence";
-import { shareTrajectoryRun } from "pi-extensible-workflows/trajectory";
-import type { WorkflowCatalogFunction } from "pi-extensible-workflows";
+import { isPersistedRun, listPersistedSessionIds, listRunIds, type PersistedRun } from "@marcoscale98/pi-extensible-workflows/persistence";
+import { shareTrajectoryRun } from "@marcoscale98/pi-extensible-workflows/trajectory";
+import type { WorkflowCatalogFunction } from "@marcoscale98/pi-extensible-workflows";
 
 export interface CliOptions extends DoctorOptions { inspect?: (sessionId?: string, mode?: InspectMode, failedOnly?: boolean) => Promise<void>; transcript?: (sessionFile: string) => Promise<void>; stderr?: (text: string) => void; signal?: AbortSignal; trustOverride?: boolean; isTTY?: boolean; skillPaths?: readonly string[] }
 
@@ -391,10 +391,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 let cli;
-try { cli = await import(pathToFileURL(join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "npm", "node_modules", "@piewf/cli", "dist", "src", "cli.js")).href); } catch {}
-if (!cli) try { cli = await import(import.meta.resolve("@piewf/cli")); } catch {}
+try { cli = await import(pathToFileURL(join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "npm", "node_modules", ...${JSON.stringify(CLI_PACKAGE_NAME.split("/"))}, "dist", "src", "cli.js")).href); } catch {}
+if (!cli) try { cli = await import(import.meta.resolve(${JSON.stringify(CLI_PACKAGE_NAME)})); } catch {}
 if (cli) process.exitCode = await cli.runCli(["run", ${JSON.stringify(workflowName)}, ...process.argv.slice(2)]);
-else { const result = spawnSync("piewf", ["run", ${JSON.stringify(workflowName)}, ...process.argv.slice(2)], { stdio: "inherit" }); if (result.error) { console.error("Could not resolve @piewf/cli; install it or put piewf on PATH."); process.exitCode = 1; } else process.exitCode = result.status ?? 1; }
+else { const result = spawnSync("piewf", ["run", ${JSON.stringify(workflowName)}, ...process.argv.slice(2)], { stdio: "inherit" }); if (result.error) { console.error("Could not resolve the fork workflow CLI; install it or put piewf on PATH."); process.exitCode = 1; } else process.exitCode = result.status ?? 1; }
 `;
     writeFileSync(tempPath, source, { mode: 0o755 });
     chmodSync(tempPath, 0o755);

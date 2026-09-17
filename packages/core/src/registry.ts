@@ -7,6 +7,7 @@ import type { SubagentRunRequest, SubagentStatus } from "../subagents/src/contra
 import { byPriorityThenName, deepFreeze, errorCode, errorText, fail, jsonValue, MODEL_ALIAS_NAME, object, validWorkflowExtensionNamespace } from "./utils.js";
 import { loadSettings, resolveWorkflowSettings, validateSchema } from "./validation.js";
 import { canonicalPath } from "./paths.js";
+import { isCorePackageName } from "./package-identity.js";
 
 const RESERVED_GLOBALS = new Set(["agent", "shell", "prompt", "checkpoint", "parallel", "pipeline", "phase", "withWorktree", "log", "args", "Promise", "JSON", "Math", "Date", "eval", "Function", "WebAssembly", "process", "require", "module", "exports", "console", "fetch", "XMLHttpRequest", "WebSocket", "performance", "crypto", "setTimeout", "setInterval", "setImmediate", "queueMicrotask", "Intl", "SharedArrayBuffer", "Atomics", "globalThis", "global", "undefined", "NaN", "Infinity", "extensions", "workflow_catalog"]);
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
@@ -37,7 +38,7 @@ function isBuiltinRoleDirectory(path: string): boolean {
   const packageRoot = basename(distributionDirectory) === "dist" ? dirname(distributionDirectory) : distributionDirectory;
   try {
     const metadata: unknown = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
-    return object(metadata) && metadata.name === "pi-extensible-workflows";
+    return object(metadata) && isCorePackageName(metadata.name);
   } catch { return false; }
 }
 

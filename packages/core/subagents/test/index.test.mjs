@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, prepareAgentSetupForInspection, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
+import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, prepareAgentSetupForInspection, registerWorkflowExtension, resetWorkflowRegistry } from "@marcoscale98/pi-extensible-workflows";
 import extension, {
   createSubagentManager,
   createSubagentTools,

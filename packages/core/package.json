@@ -1,11 +1,11 @@
 {
-  "name": "pi-extensible-workflows",
-  "version": "5.14.1",
+  "name": "@marcoscale98/pi-extensible-workflows",
+  "version": "5.14.1-fork.1",
   "description": "Deterministic multi-agent workflow orchestration for Pi",
   "homepage": "https://vekexasia.github.io/pi-extensible-workflows/",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vekexasia/pi-extensible-workflows.git",
+    "url": "git+https://github.com/marcoscale98/pi-extensible-workflows.git",
     "directory": "packages/core"
   },
   "type": "module",

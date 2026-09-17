@@ -23,7 +23,7 @@ import {
   waitForHerdrPane,
   registerWorkflowExtension,
   workflowSettingsPath,
-} from "pi-extensible-workflows";
+} from "@marcoscale98/pi-extensible-workflows";
 import type {
   AgentAttemptAction,
   AgentAttemptActionContext,
@@ -47,7 +47,7 @@ import type {
   WorkflowRunContext,
   WorkflowSettings,
   HerdrExtensionSettings,
-} from "pi-extensible-workflows";
+} from "@marcoscale98/pi-extensible-workflows";
 
 type HerdrSettings = Pick<WorkflowSettings, "extensions" | "extensionSettings">;
 type HerdrConfig = HerdrExtensionSettings;

@@ -6,16 +6,16 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
-import { beginWorkflowExtensionLoading, loadingRegistry, registeredWorkflowFunctions, registeredWorkflowRoleDirectoryRegistrations, resetWorkflowRegistry, workflowCatalog } from "pi-extensible-workflows";
+import { beginWorkflowExtensionLoading, loadingRegistry, registeredWorkflowFunctions, registeredWorkflowRoleDirectoryRegistrations, resetWorkflowRegistry, workflowCatalog } from "@marcoscale98/pi-extensible-workflows";
 
 test("discovers the copied directory as a trusted Pi extension", async () => {
   const root = await mkdtemp(join(tmpdir(), "workflow-extension-template-"));
   try {
     const destination = join(root, ".pi", "extensions", "workflow-extension-template");
-    await mkdir(join(root, "node_modules"), { recursive: true });
-    const packageEntry = fileURLToPath(import.meta.resolve("pi-extensible-workflows"));
+    await mkdir(join(root, "node_modules", "@marcoscale98"), { recursive: true });
+    const packageEntry = fileURLToPath(import.meta.resolve("@marcoscale98/pi-extensible-workflows"));
     const packageRoot = join(dirname(packageEntry), "..", "..");
-    await symlink(packageRoot, join(root, "node_modules", "pi-extensible-workflows"), "dir");
+    await symlink(packageRoot, join(root, "node_modules", "@marcoscale98", "pi-extensible-workflows"), "dir");
     await cp(dirname(fileURLToPath(import.meta.url)), destination, { recursive: true });
     const result = await discoverAndLoadExtensions([], root, join(root, ".pi", "agent"));
     assert.equal(result.errors.length, 0);
