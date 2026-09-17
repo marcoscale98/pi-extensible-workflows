@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { CORE_PACKAGE_NAME } from "../src/package-identity.js";
 import { TestHarness } from "./harness.js";
 
 const enabled = process.env.HERDR_ENV === "1";
@@ -20,8 +21,8 @@ function installPackage(root: string, agentDir: string): void {
   const tarball = readdirSync(tarballs).find((name) => name.endsWith(".tgz"));
   assert.ok(tarball, "npm pack did not produce a package tarball");
   execFileSync("npm", ["install", "--prefix", npmRoot, "--ignore-scripts", "--omit=dev", "--legacy-peer-deps", join(tarballs, tarball)], { stdio: "pipe", timeout: 120_000 });
-  const packagePath = join(npmRoot, "node_modules", "pi-extensible-workflows");
-  assert.ok(existsSync(join(packagePath, "package.json")), "npm did not install pi-extensible-workflows");
+  const packagePath = join(npmRoot, "node_modules", CORE_PACKAGE_NAME);
+  assert.ok(existsSync(join(packagePath, "package.json")), `npm did not install ${CORE_PACKAGE_NAME}`);
   execFileSync("pi", ["install", packagePath], {
     cwd: root,
     env: { ...process.env, HOME: root, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0" },

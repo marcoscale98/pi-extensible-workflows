@@ -46,8 +46,8 @@
         <div class="table-wrap"><table>
           <thead><tr><th>Package</th><th>Use</th><th>Install</th></tr></thead>
           <tbody>
-            <tr><td><a href="developers.html"><code>pi-extensible-workflows</code></a></td><td>Deterministic workflows, the <code>reviewLoop</code> implementation-and-review starter, and durable standalone subagent tools.</td><td><code>pi install npm:pi-extensible-workflows</code></td></tr>
-            <tr><td><a href="herdr.html"><code>@piewf/herdr</code></a></td><td>Live handoff, completed-session inspection, and fully inspectable workflow agents in Herdr.</td><td><code>pi install npm:@piewf/herdr</code></td></tr>
+            <tr><td><a href="developers.html"><code>@marcoscale98/pi-extensible-workflows</code></a></td><td>Deterministic workflows, the <code>reviewLoop</code> implementation-and-review starter, and durable standalone subagent tools.</td><td><code>pi install npm:@marcoscale98/pi-extensible-workflows@fork</code></td></tr>
+            <tr><td><a href="herdr.html"><code>@marcoscale98/piewf-herdr</code></a></td><td>Live handoff, completed-session inspection, and fully inspectable workflow agents in Herdr.</td><td><code>pi install npm:@marcoscale98/piewf-herdr@fork</code></td></tr>
           </tbody>
         </table></div>
         <p>The core package includes the starter and Subagents tools. Herdr complements the core workflow extension and activates only in a Herdr-managed pane. Each shipped capability has a dedicated guide linked above.</p>
@@ -67,7 +67,7 @@
         <pre><code class="language-json"><span class="tok-punctuation">{</span>
   <span class="tok-property">"packages"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>
     <span class="tok-punctuation">{</span>
-      <span class="tok-property">"source"</span><span class="tok-punctuation">:</span> <span class="tok-string">"npm:pi-extensible-workflows"</span><span class="tok-punctuation">,</span>
+      <span class="tok-property">"source"</span><span class="tok-punctuation">:</span> <span class="tok-string">"npm:@marcoscale98/pi-extensible-workflows"</span><span class="tok-punctuation">,</span>
       <span class="tok-property">"extensions"</span><span class="tok-punctuation">:</span> <span class="tok-punctuation">[</span>
         <span class="tok-string">"-dist/starter/index.js"</span><span class="tok-punctuation">,</span>
         <span class="tok-string">"-dist/subagents/index.js"</span><span class="tok-punctuation">,</span>
@@ -106,12 +106,12 @@
       </section>
       <section id="start-here">
         <h2>Start here</h2>
-        <p>A workflow extension is trusted TypeScript or JavaScript loaded by Pi. Use one when a workflow capability should be named, discoverable, schema-validated, and reusable across launches. Put the file in a Pi extension location such as <code>~/.pi/agent/extensions/review-loop.ts</code>, then load it through Pi. The package import is <code>pi-extensible-workflows</code>.</p>
+        <p>A workflow extension is trusted TypeScript or JavaScript loaded by Pi. Use one when a workflow capability should be named, discoverable, schema-validated, and reusable across launches. Put the file in a Pi extension location such as <code>~/.pi/agent/extensions/review-loop.ts</code>, then load it through Pi. Import the API from <code>@marcoscale98/pi-extensible-workflows</code>.</p>
         <p>Extension code runs in the host with the same filesystem and process access as Pi. Workflow scripts are a separate sandbox: they have only the documented orchestration primitives and registered globals, cannot import modules, and cannot access the host process directly. Install and load only extension code you trust.</p>
         <p>For a complete copy-paste starting point, use the <a href="https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/core/examples/workflow-extension-template">workflow extension template</a> shipped in the package. It includes a registered function, a packaged role resolved from <code>import.meta.url</code>, a focused <code>node:test</code>, and clearly marked optional advanced alias and setup-hook examples.</p>
         <h3>Minimal extension</h3>
         <p>This complete extension registers one function. Export a default factory and register inside it, not at module top level.</p>
-        <pre><code class="language-typescript"><span class="tok-keyword">import</span> <span class="tok-punctuation">{</span> registerWorkflowExtension <span class="tok-punctuation">}</span> <span class="tok-keyword">from</span> <span class="tok-string">"pi-extensible-workflows"</span><span class="tok-punctuation">;</span>
+        <pre><code class="language-typescript"><span class="tok-keyword">import</span> <span class="tok-punctuation">{</span> registerWorkflowExtension <span class="tok-punctuation">}</span> <span class="tok-keyword">from</span> <span class="tok-string">"@marcoscale98/pi-extensible-workflows"</span><span class="tok-punctuation">;</span>
 <span class="tok-keyword">export</span> <span class="tok-keyword">default</span> <span class="tok-keyword">function</span> extension<span class="tok-punctuation">()</span> <span class="tok-punctuation">{</span>
   <span class="tok-function">registerWorkflowExtension</span><span class="tok-punctuation">({</span>
     <span class="tok-property">version</span><span class="tok-punctuation">:</span> <span class="tok-string">"1.0.0"</span><span class="tok-punctuation">,</span>
@@ -137,7 +137,7 @@
             <tr><td><code>version</code></td><td>string</td><td>Required strict semantic version, such as <code>1.0.0</code>.</td></tr>
             <tr><td><code>headline</code></td><td>string</td><td>Required non-empty short label shown in trusted catalog details.</td></tr>
             <tr><td><code>source</code></td><td>string</td><td>Optional module provenance, normally <code>import.meta.url</code>. Required when a workflow is portable-bundled; it identifies the module whose default extension factory is replayed in the bundle.</td></tr>
-            <tr><td><code>dependencies</code></td><td>array of package names</td><td>Optional package imports used by the extension module. Portable bundling inlines declared packages; undeclared third-party imports fail during bundling. Node builtins and <code>pi-extensible-workflows</code> remain external; declare every other package to inline it. Pi packages (<code>@earendil-works/*</code>) cannot be bundled; use the <code>pi-extensible-workflows</code> API instead.</td></tr>
+            <tr><td><code>dependencies</code></td><td>array of package names</td><td>Optional package imports used by the extension module. Portable bundling inlines declared packages; undeclared third-party imports fail during bundling. Node builtins and both core API specifiers (<code>@marcoscale98/pi-extensible-workflows</code> and the canonical <code>pi-extensible-workflows</code>) remain external; declare every other package to inline it. Pi packages (<code>@earendil-works/*</code>) cannot be bundled; use the core API instead.</td></tr>
             <tr><td><code>modelAliases</code></td><td>record of <code>WorkflowModelAlias</code></td><td>Optional named dynamic model resolvers. Alias names are case-sensitive and must match <code>[A-Za-z][A-Za-z0-9_-]*</code>; names are unique across extensions.</td></tr>
             <tr><td><code>validateSettings</code></td><td>callback</td><td>Optional validator for the complete effective <code>extensionSettings</code> object. It is called with source context for global, trusted project, effective launch, and role settings. Select the keys owned by this extension; namespaces are not registered or collision-checked by the core.</td></tr>
             <tr><td><code>agentSetupHooks</code></td><td>record of <code>AgentSetupHook</code></td><td>Optional trusted hooks. Hook names must be identifiers and unique across extensions.</td></tr>

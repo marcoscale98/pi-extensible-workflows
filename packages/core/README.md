@@ -15,7 +15,7 @@ The core installation includes workflow orchestration, the `reviewLoop` starter 
 Trajectory live monitoring is included in the package. Restart existing Pi processes after upgrading the package so their publisher protocol matches the detached Trajectory server.
 
 ```sh
-pi install npm:pi-extensible-workflows
+pi install npm:@marcoscale98/pi-extensible-workflows@fork
 ```
 
 ## Quick start

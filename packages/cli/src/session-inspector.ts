@@ -4,8 +4,8 @@ import { emitKeypressEvents } from "node:readline";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { highlightCode, initTheme, SessionManager, truncateToVisualLines, type SessionEntry, type SessionInfo } from "@earendil-works/pi-coding-agent";
-import { errorText, formatBudgetStatus, inspectWorkflowScript, parseThinking, type AgentSetupSummary, type ModelSpec, type StaticWorkflowCall } from "pi-extensible-workflows";
-import { listPersistedSessionIds, listRunIds, RunStore, type PersistedRun, type RunSummary } from "pi-extensible-workflows/persistence";
+import { errorText, formatBudgetStatus, inspectWorkflowScript, parseThinking, type AgentSetupSummary, type ModelSpec, type StaticWorkflowCall } from "@marcoscale98/pi-extensible-workflows";
+import { listPersistedSessionIds, listRunIds, RunStore, type PersistedRun, type RunSummary } from "@marcoscale98/pi-extensible-workflows/persistence";
 
 export interface ModelUsage { model: string; cost: number }
 export interface AttemptReport { attempt: number; prompt: string; model: string; thinking?: ModelSpec["thinking"]; cost: number; models: readonly ModelUsage[]; error?: string; setup?: AgentSetupSummary }

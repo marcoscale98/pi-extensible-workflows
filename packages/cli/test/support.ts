@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { isPersistedRun, type PersistedRun } from "pi-extensible-workflows/persistence";
+import { isPersistedRun, type PersistedRun } from "@marcoscale98/pi-extensible-workflows/persistence";
 
 export type CliTestPackageMetadata = { version?: string; bin?: Record<string, string> };
 
@@ -9,7 +9,7 @@ export type CliTestManifest = {
   version: 1 | 2;
   command: string;
   workflow: { name: string; input: Record<string, unknown>; output: Record<string, unknown> };
-  runtime: { pi: string; "@piewf/cli": string };
+  runtime: { pi: string; "@marcoscale98/piewf-cli"?: string };
   requirements: { roles: string[]; aliases: string[]; tools: string[]; commands: string[]; environment: string[] };
   source?: { module: string; export: string };
   bundler?: { esbuild: string };
@@ -64,7 +64,7 @@ function isPayload(value: unknown): value is NonNullable<CliTestManifest["payloa
 export function isCliTestManifest(value: unknown): value is CliTestManifest {
   if (!record(value) || value.format !== "pi-extensible-workflows-bundle" || (value.version !== 1 && value.version !== 2) || typeof value.command !== "string") return false;
   if (!record(value.workflow) || typeof value.workflow.name !== "string" || !record(value.workflow.input) || !record(value.workflow.output)) return false;
-  if (!record(value.runtime) || typeof value.runtime.pi !== "string" || typeof value.runtime["@piewf/cli"] !== "string") return false;
+  if (!record(value.runtime) || typeof value.runtime.pi !== "string" || typeof value.runtime["@marcoscale98/piewf-cli"] !== "string") return false;
   if (!record(value.requirements) || !stringArray(value.requirements.roles) || !stringArray(value.requirements.aliases) || !stringArray(value.requirements.tools) || !stringArray(value.requirements.commands) || !stringArray(value.requirements.environment)) return false;
   if (value.version === 2 && (!record(value.source) || typeof value.source.module !== "string" || typeof value.source.export !== "string" || !record(value.bundler) || typeof value.bundler.esbuild !== "string" || !stringArray(value.dependencies))) return false;
   return value.payload === undefined || isPayload(value.payload);
@@ -131,7 +131,7 @@ export function cliTestErrorOutput(error: unknown): string {
 
 export function writeCliTestExtensionSource(path: string, workflow: { name: string; description: string; input: Record<string, unknown>; output: Record<string, unknown> }, run: string): { module: string; export: string } {
   writeFileSync(path, [
-    'import { registerWorkflowExtension } from "pi-extensible-workflows";',
+    'import { registerWorkflowExtension } from "@marcoscale98/pi-extensible-workflows";',
     "export default function extension() {",
     `  registerWorkflowExtension({ version: "1.0.0", headline: "CLI test bundle", functions: { ${JSON.stringify(workflow.name)}: { description: ${JSON.stringify(workflow.description)}, input: ${JSON.stringify(workflow.input)}, output: ${JSON.stringify(workflow.output)}, ${run} } } });`,
     "}",

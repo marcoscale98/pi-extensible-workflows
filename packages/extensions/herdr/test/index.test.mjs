@@ -8,7 +8,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import extension, { breadcrumbLabel, createHerdrExtension, isFullyInspectableMode } from "../dist/index.js";
-import { WORKFLOW_BLOCKED_EVENT, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WORKFLOW_RUN_STATE_CHANGED_EVENT, createLiveSessionHandoff, loadingRegistry, localAgentTransport, resetWorkflowRegistry } from "pi-extensible-workflows";
+import { WORKFLOW_BLOCKED_EVENT, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WORKFLOW_RUN_STATE_CHANGED_EVENT, createLiveSessionHandoff, loadingRegistry, localAgentTransport, resetWorkflowRegistry } from "@marcoscale98/pi-extensible-workflows";
 
 const piRuntime = { executable: process.execPath, entrypoint: "/originating/pi-coding-agent/dist/cli.js" };
 function writeFixtureStream(res, id = "fixture") {

@@ -9,7 +9,7 @@ import { showChangelogNotice } from "../src/changelog.js";
 
 async function packageFixture(version: string, changelog: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "pi-extensible-workflows-changelog-package-"));
-  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "pi-extensible-workflows", version }));
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@marcoscale98/pi-extensible-workflows", version }));
   writeFileSync(join(root, "CHANGELOG.md"), changelog);
   return root;
 }

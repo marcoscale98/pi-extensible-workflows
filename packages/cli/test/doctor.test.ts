@@ -9,7 +9,7 @@ import test from "node:test";
 import { doctor, doctorExitCode, formatDoctorReport, type DoctorPiState } from "../src/doctor.js";
 import { writePortableWorkflowBundle } from "../src/bundles.js";
 import { formatWorkflowCliHelp, parseDoctorArgs, parseDoctorCleanupArgs, parseScriptWorkflowCliArgs, parseWorkflowCliArgs, runCli } from "../src/cli.js";
-import { registerWorkflowExtension, resetWorkflowRegistry, WorkflowRegistry } from "pi-extensible-workflows";
+import { registerWorkflowExtension, resetWorkflowRegistry, WorkflowRegistry } from "@marcoscale98/pi-extensible-workflows";
 import { cliTestErrorOutput, isCliTestBundleExtension, isCliTestBundleModule, readCliTestBundleState, readCliTestManifest, readCliTestPackageMetadata, writeCliTestExtensionSource, type CliTestBundleExtension } from "./support.js";
 import { registerCliExtension } from "./fixtures/cli-workflow-extension.js";
 
@@ -539,16 +539,16 @@ void test("exported launchers are executable and delegate unchanged arguments", 
   assert.equal(lstatSync(destination).isSymbolicLink(), false);
   const launcher = readFileSync(destination, "utf8");
   assert.match(launcher, /^#!\/usr\/bin\/env node\n/);
-  assert.match(launcher, /import\.meta\.resolve\("@piewf\/cli"\)/);
-  assert.match(launcher, /@piewf\/cli/);
+  assert.match(launcher, /import\.meta\.resolve\("@marcoscale98\/piewf-cli"\)/);
+  assert.match(launcher, /@marcoscale98\/piewf-cli/);
   assert.match(output, /Exported .*cli-echo/);
   assert.match(warning, /not in PATH/);
 
-  const packageRoot = join(paths.agentDir, "npm", "node_modules", "@piewf/cli");
+  const packageRoot = join(paths.agentDir, "npm", "node_modules", "@marcoscale98/piewf-cli");
   const fallbackCli = join(packageRoot, "dist", "src");
   const indexUrl = pathToFileURL(join(process.cwd(), "../core", "dist", "src", "index.js")).href;
   mkdirSync(fallbackCli, { recursive: true });
-  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "@piewf/cli", version: "4.0.2" }));
+  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "@marcoscale98/piewf-cli", version: "4.0.2" }));
   writeFileSync(join(fallbackCli, "cli.js"), `import { registerWorkflowExtension } from ${JSON.stringify(indexUrl)};\nimport { runCli } from ${JSON.stringify(pathToFileURL(cliPath).href)};\nregisterWorkflowExtension({ version: "1.0.0", headline: "Real runner", functions: { cliEcho: { description: "Echo", input: { type: "object", properties: { issue: { type: "integer" } }, required: ["issue"], additionalProperties: false }, output: { type: "object", properties: { issue: { type: "integer" } }, required: ["issue"], additionalProperties: false }, run: (input) => ({ issue: input.issue }) } } });\nexport { runCli };\n`);
   const realOutput = execFileSync(destination, ["7"], { cwd: paths.cwd, env: { ...process.env, HOME: paths.root, PI_CODING_AGENT_DIR: paths.agentDir, PI_OFFLINE: "1" }, encoding: "utf8" });
   assert.equal(realOutput, '{"issue":7}\n');
@@ -612,11 +612,11 @@ void test("portable bundle export writes a self-contained payload and external-r
   assert.equal(manifest.workflow.name, "cliEcho");
   assert.deepEqual(manifest.requirements, { roles: [], aliases: [], tools: [], commands: [], environment: [] });
   assert.notEqual(manifest.runtime.pi, "");
-  assert.notEqual(manifest.runtime["@piewf/cli"], "unknown");
+  assert.notEqual(manifest.runtime["@marcoscale98/piewf-cli"], "unknown");
   assert.equal(lstatSync(join(destination, "cli-echo")).mode & 0o111, 0o111);
   assert.match(readFileSync(join(destination, "cli-echo"), "utf8"), /payload\/runner\.mjs/);
   assert.match(readFileSync(join(destination, "payload", "workflow.mjs"), "utf8"), /registerWorkflowExtension/);
-  assert.match(readFileSync(join(destination, "payload", "runner.mjs"), "utf8"), /@piewf\/cli@/);
+  assert.match(readFileSync(join(destination, "payload", "runner.mjs"), "utf8"), /@marcoscale98\/piewf-cli/);
   assert.match(output, /Run .* setup/);
   writeFileSync(join(paths.agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "---\nmodel: openai/gpt:medium\n---\nReview the result");
   registerCliExtension();
@@ -880,21 +880,21 @@ void test("portable bundle setup resolves an external runtime, launches, and fai
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-bundle-e2e-"));
   const agentDir = join(root, "agent");
   const piRoot = join(root, "node_modules", "@earendil-works", "pi-coding-agent");
-  mkdirSync(join(agentDir, "npm", "node_modules", "@piewf"), { recursive: true });
+  mkdirSync(join(agentDir, "npm", "node_modules", "@marcoscale98"), { recursive: true });
   mkdirSync(join(piRoot, "dist", "core", "tools"), { recursive: true });
-  symlinkSync(process.cwd(), join(agentDir, "npm", "node_modules", "@piewf/cli"));
+  symlinkSync(process.cwd(), join(agentDir, "npm", "node_modules", "@marcoscale98/piewf-cli"));
   symlinkSync(join(process.cwd(), "../../node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js"), join(piRoot, "dist", "index.js"));
   symlinkSync(join(process.cwd(), "../../node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "tools", "index.js"), join(piRoot, "dist", "core", "tools", "index.js"));
   writeFileSync(join(piRoot, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "0.80.9" }));
   const piExecutable = join(piRoot, "dist", "pi");
   writeFileSync(piExecutable, "#!/usr/bin/env node\nif (process.argv[2] === \"--version\") console.log(\"0.82.0\");\n", { mode: 0o755 });
   chmodSync(piExecutable, 0o755);
-  writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:@piewf/cli"] }));
+  writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:@marcoscale98/piewf-cli"] }));
   const workflow = { name: "e2e", version: "1.0.0", headline: "Bundle", description: "Bundle e2e", input: { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false }, output: { type: "integer" } };
   const environment = { ...process.env, PATH: `${join(piRoot, "dist")}:${process.env.PATH ?? ""}`, HOME: root, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
   const sourcePath = join(root, "e2e-extension.mjs");
   writeFileSync(sourcePath, [
-    'import { registerWorkflowExtension } from "pi-extensible-workflows";',
+    'import { registerWorkflowExtension } from "@marcoscale98/pi-extensible-workflows";',
     'import { Type } from "typebox";',
     "const increment = 1;",
     "function normalize(value) { return value + increment - 1; }",
@@ -917,7 +917,7 @@ void test("portable bundle setup resolves an external runtime, launches, and fai
   const v1Bundle = await create("v1-e2e", { roles: [], aliases: [], tools: [], commands: [], environment: [] });
   rmSync(join(v1Bundle, "payload", "extension.mjs"));
   rmSync(join(v1Bundle, "payload", "node_modules"), { recursive: true });
-  writeFileSync(join(v1Bundle, "manifest.json"), JSON.stringify({ format: "pi-extensible-workflows-bundle", version: 1, command: "v1-e2e", workflow, runtime: { pi: ">=0.82.0 <0.83.0", "@piewf/cli": ">=5.0.0 <6.0.0" }, requirements: { roles: [], aliases: [], tools: [], commands: [], environment: [] } }, null, 2));
+  writeFileSync(join(v1Bundle, "manifest.json"), JSON.stringify({ format: "pi-extensible-workflows-bundle", version: 1, command: "v1-e2e", workflow, runtime: { pi: ">=0.82.0 <0.83.0", "@marcoscale98/piewf-cli": ">=5.0.0 <6.0.0" }, requirements: { roles: [], aliases: [], tools: [], commands: [], environment: [] } }, null, 2));
   writeFileSync(join(v1Bundle, "payload", "workflow.mjs"), [
     "const run = async function run(input) { return input.value; };",
     "export async function register(registerWorkflowExtension) {",
@@ -984,17 +984,18 @@ if (args[0] === "--version") console.log("0.82.0");
 else if (args[0] !== "install") process.exit(2);
 else if (process.env.BUNDLE_INSTALL_MODE === "fail") { console.error("fake install failed"); process.exit(23); }
 else {
-  const target = join(process.env.PI_CODING_AGENT_DIR, "npm", "node_modules", "@piewf", "cli");
+  const target = join(process.env.PI_CODING_AGENT_DIR, "npm", "node_modules", "@marcoscale98", "piewf-cli");
   rmSync(target, { recursive: true, force: true });
   cpSync(process.env.BUNDLE_ENGINE_SOURCE, target, { recursive: true });
   rmSync(join(target, "node_modules"), { recursive: true, force: true }); // fixture builds its own node_modules; drop whatever the engine source copied
   mkdirSync(join(target, "node_modules"), { recursive: true });
-  symlinkSync(process.env.BUNDLE_CORE_SOURCE, join(target, "node_modules", "pi-extensible-workflows"));
+  mkdirSync(join(target, "node_modules", "@marcoscale98"), { recursive: true });
+  symlinkSync(process.env.BUNDLE_CORE_SOURCE, join(target, "node_modules", "@marcoscale98", "pi-extensible-workflows"));
   mkdirSync(join(target, "node_modules", "@earendil-works"), { recursive: true });
   symlinkSync(process.env.BUNDLE_AGENT_SOURCE, join(target, "node_modules", "@earendil-works", "pi-coding-agent"));
   symlinkSync(process.env.BUNDLE_TYPEBOX_SOURCE, join(target, "node_modules", "typebox"));
   symlinkSync(process.env.BUNDLE_PI_AI_SOURCE, join(target, "node_modules", "@earendil-works", "pi-ai"));
-  if (process.env.BUNDLE_INSTALL_MODE === "incompatible") writeFileSync(join(target, "package.json"), JSON.stringify({ name: "@piewf/cli", version: "3.0.0" }));
+  if (process.env.BUNDLE_INSTALL_MODE === "incompatible") writeFileSync(join(target, "package.json"), JSON.stringify({ name: "@marcoscale98/piewf-cli", version: "3.0.0" }));
 }` , { mode: 0o755 });
   chmodSync(piExecutable, 0o755);
   const workflow = { name: "install", version: "1.0.0", headline: "Bundle", description: "Bundle install", input: { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false }, output: { type: "integer" } };
@@ -1006,7 +1007,7 @@ else {
   const installed = await create("installed");
   const success = runSetup(installed, "success");
   assert.equal(success.status, 0, String(success.stderr));
-  const installedPackage = readCliTestPackageMetadata(join(agentDir, "npm", "node_modules", "@piewf", "cli", "package.json"));
+  const installedPackage = readCliTestPackageMetadata(join(agentDir, "npm", "node_modules", "@marcoscale98", "piewf-cli", "package.json"));
   const packageMetadata = readCliTestPackageMetadata(join(process.cwd(), "package.json"));
    assert.equal(installedPackage.version, packageMetadata.version);
   assert.ok(existsSync(join(installed, "bundle-state.json")));
@@ -1027,7 +1028,7 @@ else {
 void test("portable bundles can load a selected workflow extension with its module state", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-bundle-extension-"));
   const extension = join(root, "workflow.mjs");
-  writeFileSync(extension, `import { registerWorkflowExtension } from "pi-extensible-workflows";\nconst suffix = "!";\nexport default function extension() { registerWorkflowExtension({ version: "1.0.0", headline: "Bundled extension", functions: { extensionSelected: { description: "Selected", input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false }, output: { type: "string" }, run(input) { return input.value + suffix; } } } }); }\n`);
+  writeFileSync(extension, `import { registerWorkflowExtension } from "@marcoscale98/pi-extensible-workflows";\nconst suffix = "!";\nexport default function extension() { registerWorkflowExtension({ version: "1.0.0", headline: "Bundled extension", functions: { extensionSelected: { description: "Selected", input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false }, output: { type: "string" }, run(input) { return input.value + suffix; } } } }); }\n`);
   const destination = join(root, "bundle");
   const selectedWorkflow = { name: "selected", version: "1.0.0", headline: "Bundle", description: "Bundle", input: { type: "object" }, output: { type: "string" } };
   const source = writeCliTestExtensionSource(join(root, "selected-source.mjs"), selectedWorkflow, 'run() { return "workflow"; }');

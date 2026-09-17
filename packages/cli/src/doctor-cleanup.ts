@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { AGENT_STATES as CORE_AGENT_STATES, BUDGET_DIMENSIONS as CORE_BUDGET_DIMENSIONS, BUDGET_EVENT_TYPES as CORE_BUDGET_EVENT_TYPES, HARD_TERMINAL_RUN_STATES, RUN_STATES, errorText, isNodeError, isThinkingLevel, jsonValue, object, validateBudget, validateModelAliases, validateSchema, type AgentState, type ModelSpec, type RunState } from "pi-extensible-workflows";
-import { acquireSessionLease, hasLiveSessionLease, projectSessionsDirectory, RunStore, type PersistedRun, type SessionLease } from "pi-extensible-workflows/persistence";
+import { AGENT_STATES as CORE_AGENT_STATES, BUDGET_DIMENSIONS as CORE_BUDGET_DIMENSIONS, BUDGET_EVENT_TYPES as CORE_BUDGET_EVENT_TYPES, HARD_TERMINAL_RUN_STATES, RUN_STATES, errorText, isNodeError, isThinkingLevel, jsonValue, object, validateBudget, validateModelAliases, validateSchema, type AgentState, type ModelSpec, type RunState } from "@marcoscale98/pi-extensible-workflows";
+import { acquireSessionLease, hasLiveSessionLease, projectSessionsDirectory, RunStore, type PersistedRun, type SessionLease } from "@marcoscale98/pi-extensible-workflows/persistence";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const REQUIRED_RUN_FILES = ["workflow.js", "state.json", "snapshot.json", "journal.json", "ownership.json", "worktrees.json", "borrowed-worktrees.json", "system-prompts.json"] as const;
