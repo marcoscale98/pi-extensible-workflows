@@ -73,7 +73,7 @@ The single core installation provides workflows, the `reviewLoop` starter for de
 ### Companion packages
 
 - [`@marcoscale98/piewf-herdr`](packages/extensions/herdr) (`pi install npm:@marcoscale98/piewf-herdr@fork`): workflow-agent sessions in Herdr panes.
-- [`@marcoscale98/piewf-cli`](packages/cli) (`pi install npm:@marcoscale98/piewf-cli@fork`): the `piewf` command-line interface.
+- [`@marcoscale98/piewf-cli`](packages/cli) (`npm install --global @marcoscale98/piewf-cli@fork`): the standalone `piewf` command-line interface.
 
 ## Development
 

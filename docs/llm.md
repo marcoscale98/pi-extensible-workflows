@@ -20,7 +20,7 @@ The core installation includes workflow orchestration, the `reviewLoop` starter,
 
 ```sh
 pi install npm:@marcoscale98/piewf-herdr@fork
-pi install npm:@marcoscale98/piewf-cli@fork
+npm install --global @marcoscale98/piewf-cli@fork
 ```
 
 | Package | Select it when |
