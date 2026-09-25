@@ -1,11 +1,11 @@
-# @piewf/cli
+# @marcoscale98/piewf-cli
 
 Terminal commands for [pi-extensible-workflows](https://github.com/vekexasia/pi-extensible-workflows): `piewf` operates workflows without a roles dependency.
 
 Requires Node.js 22.19 or newer and the `pi` command on `PATH`. This is trusted host code with the same filesystem and process access as Pi.
 
 ```sh
-npm install -g @piewf/cli
+npm install --global @marcoscale98/piewf-cli@fork
 ```
 
 ## Optional roles

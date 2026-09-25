@@ -57,6 +57,7 @@ import type { RuntimeAgentProgress, RuntimeUsage } from "./runtime/agent-runner.
 import { defaultWorkflowResultSchema } from "./runtime/workflow-result.js";
 import { isCoreAgentOption, validateAgentOptions, validateSchema } from "./validation.js";
 import { canonicalPath, extensionIdentity, piResourceContains, piResourcePath, sameFilesystemPath } from "./paths.js";
+import { isCorePackageName } from "./package-identity.js";
 import { canonicalExtensionSelector, validateContextFileScopes, validateSelectorList, validateWorkflowExtensionSettings } from "./settings.js";
 import { agentIdentityPath } from "./execution.js";
 import type { RunStore } from "./persistence.js";
@@ -205,7 +206,7 @@ function isWorkflowHostEntry(path: string): boolean {
     if (existsSync(packageMetadataPath)) {
       try {
         const metadata: unknown = JSON.parse(readFileSync(packageMetadataPath, "utf8"));
-        if (typeof metadata !== "object" || metadata === null || !("name" in metadata) || metadata.name !== "pi-extensible-workflows") return false;
+        if (typeof metadata !== "object" || metadata === null || !("name" in metadata) || !isCorePackageName(metadata.name)) return false;
         return WORKFLOW_HOST_ENTRY_PATHS.some((entry) => canonicalPath(join(packageRoot, entry)) === entryPath);
       } catch { return false; }
     }
