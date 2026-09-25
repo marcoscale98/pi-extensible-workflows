@@ -69,7 +69,7 @@ Runs are backgrounded by default; set `foreground: true` to wait for the final v
 The same roles that workflows use can also start a plain Pi session, without a workflow:
 
 ```sh
-npm install -g @piewf/cli
+npm install --global @marcoscale98/piewf-cli@fork
 pi-role reviewer                 # Pi with the reviewer role's model, tools, skills, and prompt
 pi-role scout -p "Where is the retry logic?"
 ```

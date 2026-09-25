@@ -9,6 +9,7 @@ import type { DefaultResourceLoader, ModelRuntime } from "@earendil-works/pi-cod
 import { createLocalPiSession, FairAgentScheduler, flushExtensionProviders, localAgentTransport, prepareAgentSetupForInspection, WorkflowAgentExecutor, type AgentExecutionRoot, type AgentProgress, type SessionInput } from "../src/agent-execution.js";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { WorkflowError, type AgentExecutionResult, type AgentToolCallProgress } from "../src/index.js";
+import { canonicalPath } from "../src/paths.js";
 import type { AgentResourcePolicy } from "../src/types.js";
 import type { RunStore } from "../src/persistence.js";
 import { testTransport, type TestPiSessionEvent } from "./test-transport.js";
@@ -2285,8 +2286,8 @@ void test("setup hooks canonicalize relative extension narrowing", async () => {
   try {
     session = await createLocalPiSession(prepared.setup.sessionInput);
     const extensionPaths = session.herdrResourcePaths?.extensions ?? [];
-    assert.ok(extensionPaths.includes(keptExtension));
-    assert.equal(extensionPaths.includes(disabledExtension), false);
+    assert.ok(extensionPaths.includes(canonicalPath(keptExtension)));
+    assert.equal(extensionPaths.includes(canonicalPath(disabledExtension)), false);
   } finally {
     await session?.dispose();
     rmSync(rootDir, { recursive: true, force: true });

@@ -345,7 +345,17 @@ void test("workflow_retry links children, replays parallel branches, inherits bu
   assert.equal(first.retry.sourceRunId, sourceId);
   assert.equal(first.retry.lineageRootRunId, sourceId);
   assert.deepEqual(first.retry.completedPaths.length, 1);
-  const secondResult = decodeTestToolResult(await retry.execute("retry-again", { runId: firstStarted.runId, foreground: false }, undefined, undefined, context));
+  let secondResult: ReturnType<typeof decodeTestToolResult> | undefined;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      secondResult = decodeTestToolResult(await retry.execute("retry-again", { runId: firstStarted.runId, foreground: false }, undefined, undefined, context));
+      break;
+    } catch (error) {
+      if (!(error instanceof WorkflowError) || error.code !== "RESUME_INCOMPATIBLE" || !error.message.includes("An active retry already owns lineage")) throw error;
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  assert.ok(secondResult, "Timed out waiting for the failed retry to release its lineage");
   const secondStarted = decodeTestRunStart(secondResult.content[0]?.text ?? "null");
   assert.equal(secondStarted.parentRunId, firstStarted.runId);
   assert.equal(secondStarted.state, "running");

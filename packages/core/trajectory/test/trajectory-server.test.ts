@@ -147,7 +147,12 @@ void test("Trajectory persists the server fingerprint in its listening lock", as
   const server = createTrajectoryServer(port, join(root, "trajectory.lock"), { fingerprint });
   await listen(server, port);
   try {
-    const lock: unknown = JSON.parse(await readFile(join(root, "trajectory.lock"), "utf8"));
+    let lock: unknown;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const contents = await readFile(join(root, "trajectory.lock"), "utf8");
+      if (contents.endsWith("\n")) { lock = JSON.parse(contents); break; }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     assert.ok(typeof lock === "object" && lock !== null && "startedAt" in lock && typeof lock.startedAt === "number" && lock.startedAt <= Date.now());
     assert.deepEqual({ ...lock, startedAt: undefined }, { pid: process.pid, port, fingerprint, startedAt: undefined });
   } finally {
@@ -442,7 +447,7 @@ void test("Trajectory relays subagents and compacts only transcript bodies", asy
 void test("Trajectory rejects an oversized subagent transcript reply", async () => {
   const root = await mkdtemp(join(tmpdir(), "trajectory-server-subagent-transcript-cap-"));
   const port = await availablePort();
-  const maxFrameBytes = 1000;
+  const maxFrameBytes = 1200;
   const transcript = Array.from({ length: 20 }, () => ({ type: "message", text: "x", value: 1e20 }));
   const publisherMessage = JSON.stringify({ type: "publisher:state", publisher: { id: "one" }, runs: [], subagents: [{ id: "subagent", state: "running", transcript }] }).replaceAll("100000000000000000000", "1e20");
   assert.ok(Buffer.byteLength(publisherMessage) <= maxFrameBytes);

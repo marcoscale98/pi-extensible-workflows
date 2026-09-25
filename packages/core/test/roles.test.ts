@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { discoverRoles, loadRole, parseRoleMarkdown, resolveRole } from "pi-extensible-workflows/roles";
+import { canonicalPath } from "../src/paths.js";
+import { discoverRoles, loadRole, parseRoleMarkdown, resolveRole } from "@marcoscale98/pi-extensible-workflows/roles";
 
 function directory(root: string, ...parts: string[]): string {
   const path = join(root, ...parts);
@@ -92,14 +93,14 @@ Role prompt`, true, rolePath));
   assert.deepEqual(resolved.model, { provider: "other", model: "override", thinking: "low" });
   assert.deepEqual(resolved.tools, ["read", "grep"]);
   assert.deepEqual(resolved.selectedSkills, ["global-skill", "project-skill", "foo", "bar"]);
-  assert.deepEqual(resolved.selectedExtensions, [keep]);
+  assert.deepEqual(resolved.selectedExtensions, [canonicalPath(keep)]);
   assert.deepEqual(resolved.unmatchedSkills, ["missing-*"]);
   assert.deepEqual(resolved.unmatchedExtensions, [`!${join(cwd, "missing-extension")}`]);
   assert.deepEqual(resolved.contextFiles, ["cwd"]);
   assert.deepEqual(resolved.systemPrompt, { mode: "override", text: "Role prompt" });
   assert.deepEqual(resolved.extensionSettings, { acme: { enabled: true } });
   assert.deepEqual(resolved.selectorLayers.skills, [["global-*"], ["project-*"], ["foo*", "!foobar"], ["bar", "missing-*"]]);
-  assert.deepEqual(resolved.selectorLayers.extensions[2], ["**/*.mjs", join(dirname(rolePath), "keep.mjs"), `!${join(dirname(rolePath), "skip.mjs")}`]);
+  assert.deepEqual(resolved.selectorLayers.extensions[2], ["**/*.mjs", canonicalPath(join(dirname(rolePath), "keep.mjs")), `!${canonicalPath(join(dirname(rolePath), "skip.mjs"))}`]);
   const suppliedDefinitions = discoverRoles(options);
   assert.deepEqual(resolveRole("full", { ...options, definitions: suppliedDefinitions }).selectorLayers.extensions[2], resolved.selectorLayers.extensions[2]);
   const withoutCandidates = resolveRole(undefined, { cwd, selectorSources: { global: {}, project: {} } });
