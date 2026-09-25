@@ -54,15 +54,15 @@
       </section>
       <section id="pi-role">
         <h2>Launch Pi with a role</h2>
-        <p><code>pi-role</code>, shipped by <code>@piewf/cli</code>, starts a regular Pi session with a role's model, tools, skills, extensions, and system prompt. No workflow, no subagent: the same role file, applied to the Pi you type into.</p>
-        <pre><code class="language-shell"><span class="tok-command">npm</span> install -g @piewf/cli
+        <p><code>pi-role</code>, shipped by <code>@marcoscale98/piewf-cli</code>, starts a regular Pi session with a role's model, tools, skills, extensions, and system prompt. No workflow, no subagent: the same role file, applied to the Pi you type into.</p>
+        <pre><code class="language-shell"><span class="tok-command">npm</span> install --global @marcoscale98/piewf-cli@fork
 <span class="tok-command">pi-role</span>                            <span class="tok-punctuation"># list the available roles</span>
 <span class="tok-command">pi-role</span> reviewer                   <span class="tok-punctuation"># interactive Pi as the reviewer role</span>
 <span class="tok-command">pi-role</span> scout -p "Where is the retry logic?"
 <span class="tok-command">pi-role</span> developer --continue       <span class="tok-punctuation"># resume the last session</span>
 <span class="tok-command">pi-role</span> reviewer --approve         <span class="tok-punctuation"># trust the project: its roles apply</span>
-<span class="tok-command">npx</span> -p @piewf/cli pi-role oracle   <span class="tok-punctuation"># without installing</span></code></pre>
-        <p>Every argument after the role name is forwarded to Pi unchanged. <code>pi-role</code> sees the bundled starter roles, global roles, and, in a trusted project, project roles; roles contributed by workflow extensions are only visible inside workflows. Requires the <code>pi</code> command on <code>PATH</code>. After <code>pi install npm:@piewf/cli</code> the binary lives in <code>~/.pi/agent/npm/node_modules/.bin/pi-role</code>, which is not on <code>PATH</code>; prefer <code>npm install -g</code>.</p>
+<span class="tok-command">npx</span> -p @marcoscale98/piewf-cli@fork pi-role oracle   <span class="tok-punctuation"># without installing</span></code></pre>
+        <p>Every argument after the role name is forwarded to Pi unchanged. <code>pi-role</code> sees the bundled starter roles, global roles, and, in a trusted project, project roles; roles contributed by workflow extensions are only visible inside workflows. Requires the <code>pi</code> command on <code>PATH</code>. Install the CLI globally to put the binary on <code>PATH</code>.</p>
         <h3>What the role becomes</h3>
         <div class="table-wrap"><table>
           <thead><tr><th>Role field</th><th>Pi arguments</th></tr></thead>
@@ -80,7 +80,7 @@
       </section>
       <section id="api">
         <h2>Standalone roles API</h2>
-        <p>The <code>pi-extensible-workflows/roles</code> subpath exposes role discovery without creating a workflow or host. Use <code>discoverRoles({ cwd, agentDir, projectTrusted, extensionRoleDirectories })</code> to load the active definitions, <code>loadRole(name, options)</code> to load one validated role, and <code>resolveRole(name, options)</code> to obtain its effective model, prompt mode, context scopes, selector layers, selected resources, and unmatched selectors. Optional <code>resources</code>, <code>rootTools</code>, <code>knownModels</code>, <code>availableModels</code>, and <code>modelAliases</code> provide the runtime boundaries needed for matching and model resolution; without them, selector layers are returned, while selected resources and tools remain unknown rather than being inferred.</p>
+        <p>The <code>@marcoscale98/pi-extensible-workflows/roles</code> subpath exposes role discovery without creating a workflow or host. Use <code>discoverRoles({ cwd, agentDir, projectTrusted, extensionRoleDirectories })</code> to load the active definitions, <code>loadRole(name, options)</code> to load one validated role, and <code>resolveRole(name, options)</code> to obtain its effective model, prompt mode, context scopes, selector layers, selected resources, and unmatched selectors. Optional <code>resources</code>, <code>rootTools</code>, <code>knownModels</code>, <code>availableModels</code>, and <code>modelAliases</code> provide the runtime boundaries needed for matching and model resolution; without them, selector layers are returned, while selected resources and tools remain unknown rather than being inferred.</p>
       </section>
       <section id="files">
         <h2>Role files</h2>
@@ -135,10 +135,10 @@ Focus on correctness and regressions.</code></pre>
       </section>
       <section id="doctor">
         <h2>Inspect a role</h2>
-        <pre><code class="language-shell"><span class="tok-command">npx</span> -p @piewf/cli piewf doctor --role reviewer
-<span class="tok-command">npx</span> -p @piewf/cli piewf doctor --role reviewer --prompt <span class="tok-string">"Review the current change"</span>
-<span class="tok-command">npx</span> -p @piewf/cli piewf doctor --role reviewer --json
-<span class="tok-command">npx</span> -p @piewf/cli piewf doctor ./roles/reviewer.md</code></pre>
+        <pre><code class="language-shell"><span class="tok-command">npx</span> -p @marcoscale98/piewf-cli@fork piewf doctor --role reviewer
+<span class="tok-command">npx</span> -p @marcoscale98/piewf-cli@fork piewf doctor --role reviewer --prompt <span class="tok-string">"Review the current change"</span>
+<span class="tok-command">npx</span> -p @marcoscale98/piewf-cli@fork piewf doctor --role reviewer --json
+<span class="tok-command">npx</span> -p @marcoscale98/piewf-cli@fork piewf doctor ./roles/reviewer.md</code></pre>
         <p>The role inspection is read-only. The positional form <code>piewf doctor reviewer</code> is equivalent to <code>--role reviewer</code>. Both resolve the active role and report its effective resources and prepared prompt. A role ending in <code>.md</code> is read as a role file instead, relative to the current working directory, so you can check a role before installing it. The optional probe prompt is useful when prompt hooks depend on the agent request. Add <code>--json</code> to emit the structured report for machine consumers; either role form includes <code>roleTarget</code> and includes <code>roleInspection</code> when inspection succeeds.</p>
         <p>Role discovery is fail-closed: invalid frontmatter or the rejected legacy selector in any packaged or global role file, or in any trusted-project role file, blocks the complete role set. See the <a href="developers.html#operations">doctor reference</a> for diagnostics and exit behavior. At runtime, a missing named role fails with <code>UNKNOWN_AGENT_TYPE</code> and <code>Unknown agent role: &lt;name&gt;</code>.</p>
         <p>See <a href="developers.html#tool-api">workflow tool usage</a>, <a href="developers.html#settings">settings</a> for model aliases and global selectors, and <a href="extensions.html#resources">extension resources</a> for packaged role directories.</p>
