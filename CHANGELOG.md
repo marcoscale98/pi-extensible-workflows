@@ -1,6 +1,8 @@
 # Changelog
 ## Unreleased
 
+## [5.17.2] - 2026-09-28
+
 ### Breaking changes
 
 - `subagents_inspect({})` lists only the runs of the current Pi session, matching `/subagents` and Trajectory. Pass `scope: "all"` to list every stored run as before. Lookup by `id` still resolves runs from any session ([#305](https://github.com/vekexasia/pi-extensible-workflows/pull/305)).
