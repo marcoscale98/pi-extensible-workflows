@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, extname, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { InMemoryCredentialStore, InMemoryModelsStore, type Credential } from "@earendil-works/pi-ai";
 import {
   ModelRuntime,
@@ -476,10 +476,29 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   if (diagnostics.some(({ code, source }) => source !== undefined && rolePaths.has(source) && (code === "ROLE_FRONTMATTER" || code === "AGENT_RESOURCE_SELECTOR_MIGRATION"))) diagnostics.push(diagnostic("error", "ROLE_LOAD_BLOCKED", "Workflow role loading is blocked because the runtime rejects the complete role set when any active role file is invalid.", undefined, "Fix the reported role file before launching workflows."));
   let roleInspection: DoctorRoleInspection | undefined;
   if (options.role !== undefined) {
-    const activeRole = roles.find(({ name, active }) => name === options.role && active);
-    const definition = activeRole ? definitions.get(options.role) : undefined;
-    if (!activeRole || !definition) diagnostics.push(diagnostic("error", "ROLE_NOT_FOUND", `Active role not found: ${options.role}`, options.role));
-    else {
+    let target: { name: string; path: string; definition: AgentDefinition } | undefined;
+    //NOTE: installed role names drop ".md", so a target ending in ".md" is a role file path.
+    if (options.role.endsWith(".md")) {
+      const path = resolve(cwd, options.role);
+      if (!existsSync(path) || !statSync(path).isFile()) diagnostics.push(diagnostic("error", "ROLE_FILE_NOT_FOUND", `Role file not found: ${path}`, path));
+      else {
+        const name = basename(path, ".md");
+        const found: DoctorDiagnostic[] = [];
+        const definition = inspectRole(path, activeTools, knownModels, availableModels, found, aliases, dynamicAliases, settingsPath);
+        if (definition) validateDoctorExtensionSettings(registry, mergeWorkflowExtensionSettings(settings.extensionSettings, definition.extensionSettings), "role", cwd, pi.trust.trusted, path, found, name);
+        // Discovery already reported an installed file; add only what is new.
+        const known = new Set(diagnostics.map((item) => JSON.stringify(item)));
+        diagnostics.push(...found.filter((item) => !known.has(JSON.stringify(item))));
+        if (definition) target = { name, path, definition };
+      }
+    } else {
+      const activeRole = roles.find(({ name, active }) => name === options.role && active);
+      const definition = activeRole ? definitions.get(options.role) : undefined;
+      if (!activeRole || !definition) diagnostics.push(diagnostic("error", "ROLE_NOT_FOUND", `Active role not found: ${options.role}`, options.role));
+      else target = { name: options.role, path: activeRole.path, definition };
+    }
+    if (target) {
+      const { name, path, definition } = target;
       const rootReference = pi.model ? `${pi.model.provider}/${pi.model.model}` : pi.availableModels[0] ?? pi.knownModels[0];
       if (!rootReference) diagnostics.push(diagnostic("error", "ROLE_INSPECTION_MODEL", "Cannot inspect a role because Pi has no registered model"));
       else {
@@ -491,9 +510,9 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
             const dynamic = await registry.resolveModelAliases({ cwd, projectTrusted: pi.trust.trusted, rootModel, knownModels, availableModels, signal: new AbortController().signal });
             roleAliases = { ...aliases, ...dynamic };
           }
-          roleInspection = await inspectRoleSession(cwd, agentDir, options.role, definition, activeRole.path, resourcePolicy, rootModel, [...activeTools], roleAliases, knownModels, availableModels, settingsPath, settings.extensionSettings, options.prompt ?? "", registry.agentSetupHooks(), diagnostics);
+          roleInspection = await inspectRoleSession(cwd, agentDir, name, definition, path, resourcePolicy, rootModel, [...activeTools], roleAliases, knownModels, availableModels, settingsPath, settings.extensionSettings, options.prompt ?? "", registry.agentSetupHooks(), diagnostics);
           if (roleInspection) diagnostics.push(...roleInspection.setup.diagnostics);
-        } catch (error) { diagnostics.push(diagnostic("error", "ROLE_INSPECTION_MODEL", errorText(error), activeRole.path)); }
+        } catch (error) { diagnostics.push(diagnostic("error", "ROLE_INSPECTION_MODEL", errorText(error), path)); }
       }
     }
   }
