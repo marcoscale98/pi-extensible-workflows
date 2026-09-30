@@ -1,6 +1,8 @@
 # Changelog
 ## Unreleased
 
+## [5.18.0] - 2026-09-30
+
 ### Breaking changes
 
 - `pi-extensible-workflows` and `@piewf/herdr` require Pi 0.99.0 or later; their `@earendil-works/pi-coding-agent` peer dependency is now `>=0.99.0`. `@piewf/cli` bundles Pi 0.99.1.
