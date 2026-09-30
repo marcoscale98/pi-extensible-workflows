@@ -97,8 +97,9 @@ export interface WorkflowExtensionSettingsValidatorContext { source: WorkflowExt
 export type WorkflowExtensionSettingsValidator = (settings: Readonly<WorkflowExtensionSettings>, context: Readonly<WorkflowExtensionSettingsValidatorContext>) => void;
 export interface WorkflowSessionStartEvent { type: "session_start"; reason: "startup" | "reload" | "new" | "resume" | "fork"; previousSessionFile?: string; settings: Readonly<WorkflowExtensionSettings> }
 export interface WorkflowRetentionSettings { olderThanDays?: number; maxTerminalRuns?: number }
-export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; retention?: Readonly<WorkflowRetentionSettings> }
-export type WorkflowSettingsOverrides = Partial<Omit<WorkflowSettings, "backgroundWidget">>;
+export type CodemodeToolsSetting = "all" | "read-only" | "none";
+export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; codemodeTools?: CodemodeToolsSetting; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; retention?: Readonly<WorkflowRetentionSettings> }
+export type WorkflowSettingsOverrides = Partial<Omit<WorkflowSettings, "backgroundWidget" | "codemodeTools">>;
 export interface WorkflowSettingsSources { concurrency: string; modelAliases: string; skills?: string; extensions?: string; tools?: string; extensionSettings?: string; retention?: string }
 export interface WorkflowSettingsResolution { globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; global: Readonly<WorkflowSettings>; project: Readonly<WorkflowSettingsOverrides>; effective: Readonly<WorkflowSettings>; sources: Readonly<WorkflowSettingsSources> }
 export interface AgentResourceSelectors { skills?: readonly string[]; extensions?: readonly string[]; tools?: readonly string[] }

@@ -9,6 +9,7 @@
 
 - Global model aliases appear in `/model` and `--model` as virtual models named `workflow/<alias>`, for example `workflow/cheap-model`. The alias target is read from settings on every request, and workflow agents and subagents that inherit the session model run on that target. The thinking level selected in `/model` replaces the one in the alias. Project and extension-provided aliases are not listed, and new aliases need `/reload`.
 - Workflow agents and standalone subagents load Pi's built-in `codemode`, `tool-search`, and `mcp` extensions, so they can reach the MCP servers from `mcp.json` through `codemode` or `tool_search`. `-builtin:<name>` in Pi settings still disables them. Workflow extension selectors name them `builtin:codemode`, `builtin:tool-search`, and `builtin:mcp`; a selector list that starts with `!*` needs `builtin:*` or those names to keep them.
+- The global `codemodeTools` workflow setting limits which workflow and subagent tools Pi `codemode` scripts may call: `"all"` (default), `"read-only"` (`workflow_status`, `workflow_catalog`, and `subagents_inspect`), or `"none"`. The model still calls every tool directly. Changes apply after `/reload`.
 - The agent tool ceiling includes the parent session's tools that only codemode scripts call or `tool_search` loads, such as MCP tools with the default exposure. Role and call tool selectors still restrict them.
 
 ### Fixes

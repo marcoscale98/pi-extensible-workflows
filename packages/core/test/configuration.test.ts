@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeF
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { decodeLaunchSnapshot } from "../src/decoders.js";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { testExtensionApi } from "./support.js";
 import workflowExtension, { createLaunchSnapshot, DEFAULT_SETTINGS, formatNavigatorDashboard, formatNavigatorRun, loadAgentDefinitions, loadSettings, mergeWorkflowExtensionSettings, parseRoleMarkdown, preflight, registerWorkflowExtension, resourcePatternMatches, resolveAgentResourcePolicy, resolveModelReference, resolveWorkflowSettings, RunStore, runWorkflow, saveModelAliases, selectResourcesByLayers, structuralPath, validateModelAliases, WorkflowAgentExecutor, WORKFLOW_RUN_COMPLETED_EVENT, WORKFLOW_RUN_RESUMED_EVENT, WORKFLOW_RUN_STARTED_EVENT, WorkflowError, WorkflowRegistry } from "../src/index.js";
@@ -422,6 +422,22 @@ void test("global model aliases are selectable virtual models", () => {
   assert.deepEqual(definitions[0]?.route({ thinkingLevel: "high" }, ctx), { model: gpt, thinkingLevel: "high" });
   const executor = new WorkflowAgentExecutor({ cwd: agentDir, model: { provider: "workflow", model: "cheap-model", thinking: "high" }, tools: new Set(), knownModels: new Set(["openai/gpt", "workflow/cheap-model"]), modelAliases: { "cheap-model": "openai/gpt:low" } });
   assert.deepEqual(executor.resolve({ label: "inherited", workflowName: "test" }).model, { provider: "openai", model: "gpt", thinking: "high" });
+});
+void test("codemodeTools keeps workflow tools away from codemode scripts", () => {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-codemode-tools-"));
+  const path = join(agentDir, "pi-extensible-workflows", "settings.json");
+  mkdirSync(dirname(path), { recursive: true });
+  const exposures = (codemodeTools?: string) => {
+    writeFileSync(path, JSON.stringify(codemodeTools === undefined ? {} : { codemodeTools }));
+    const tools: Record<string, unknown> = {};
+    workflowExtension(testExtensionApi({ registerTool: (tool) => { tools[tool.name] = (tool as { exposure?: unknown }).exposure; } }), agentDir, undefined, undefined, agentDir);
+    return { workflow: tools.workflow, status: tools.workflow_status, stop: tools.workflow_stop };
+  };
+  assert.deepEqual(exposures(), { workflow: undefined, status: undefined, stop: undefined });
+  assert.deepEqual(exposures("read-only"), { workflow: "model-only", status: undefined, stop: "model-only" });
+  assert.deepEqual(exposures("none"), { workflow: "model-only", status: "model-only", stop: "model-only" });
+  writeFileSync(path, JSON.stringify({ codemodeTools: "some" }));
+  assert.throws(() => loadSettings(path), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_SETTINGS" && error.message.includes("codemodeTools"));
 });
 void test("workflow TUI manages aliases without runs and preserves settings", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-alias-tui-"));

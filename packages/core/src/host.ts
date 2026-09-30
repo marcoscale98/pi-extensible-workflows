@@ -14,7 +14,7 @@ import { retainTerminalRuns } from "./retention.js";
 import type { PersistedRun, WorktreeReference } from "./persistence.js";
 import { validateBudget, WorkflowBudgetRuntime } from "./budget.js";
 import { SerialLane, asWorkflowError, createLaunchSnapshot, errorCode, errorText, fail, isNodeError, jsonValue, mergeWorkflowExtensionSettings, modelAliasErrorName, modelCapability, object, parseModelReference, positiveInteger, reachableTools, resolveModelReference, VIRTUAL_MODEL_PROVIDER, sanitizeDisplayText, validateModelAliases } from "./utils.js";
-import { loadSettings, preflight, resolveAgentResourcePolicy, resolveWorkflowSettings, validateCheckpoint, validateModelAliasAvailability, validateWorkflowLaunchWithRegistry, workflowProjectSettingsPath, workflowSettingsPath } from "./validation.js";
+import { loadCodemodeToolsSetting, loadSettings, preflight, resolveAgentResourcePolicy, resolveWorkflowSettings, validateCheckpoint, validateModelAliasAvailability, validateWorkflowLaunchWithRegistry, workflowProjectSettingsPath, workflowSettingsPath, workflowToolExposure } from "./validation.js";
 import { loadAgentDefinitions, loadProjectAgentDefinitions } from "./roles.js";
 import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIfIdle, retainWorkflowRegistry, type WorkflowRegistryApi } from "./registry.js";
 import { agentHandleTurnPath, agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
@@ -317,6 +317,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     registerAliasVirtualModels(pi, Object.keys(globalSettings.modelAliases ?? {}), workflowSettingsPath(extensionAgentDir));
   } catch { /* Keep the optional UI enabled; the launch path reports settings errors. */ }
   const backgroundWidgetController = backgroundWidget(pi, backgroundWidgetEnabled);
+  const codemodeTools = loadCodemodeToolsSetting(extensionAgentDir);
   const logBridge = (store: RunStore, lifecycle: RunLifecycle, workflowName: string) => async (message: string) => {
     const timestamp = Date.now();
     const bounded = utf8Prefix(message, DELIVERY_LIMIT_BYTES);
@@ -854,6 +855,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       label,
       description,
       parameters,
+      ...workflowToolExposure(name, codemodeTools),
       async execute(_id, params, signal: AbortSignal, _onUpdate, ctx) {
         try {
           const result = await run(params, signal, ctx);
@@ -913,6 +915,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     if (!catalog.functions.length && !hasAliases && !hasSettings) return;
     pi.registerTool({
       name: "workflow_catalog",
+      ...workflowToolExposure("workflow_catalog", codemodeTools),
       label: "Workflow Catalog",
       description: "List reusable workflow functions and model aliases; pass `name` to load one entry in full",
       parameters: Type.Object({ name: Type.Optional(Type.String({ description: "Registered function or model alias name for full detail" })) }, { additionalProperties: false }),
@@ -1431,7 +1434,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       return textBlock(isPartial ? "Workflow starting..." : runDetails?.preview ?? (content?.type === "text" ? content.text : "Workflow finished"));
     },
   };
-  pi.registerTool(workflowTool);
+  pi.registerTool({ ...workflowTool, ...workflowToolExposure(workflowTool.name, codemodeTools) });
   registerWorkflowNavigator({ pi, home, clipboard, extensionAgentDir, runs, terminalRunStates, hardTerminalRunStates: HARD_TERMINAL_RUN_STATES, ensureSessionLease, coordinateRunMutation, answerCheckpoint, recovery, stopWorkflowRun, moveForegroundToBackground: deliveryController.moveForegroundToBackground, isForegroundAttached: deliveryController.isForegroundAttached, liveAgents, registry, projectTrusted, resumeHostContext, resumeSelectedWorkflow, reportBlocked: reportWorkflowBlocked, trajectoryProvider, setNavigatorOpen: (open) => { if (open) backgroundWidgetController.suspend(); else backgroundWidgetController.resume(); } });
   pi.on("session_shutdown", async () => {
     try {

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { defineTool, getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
-import { WorkflowError, loadingRegistry, reachableTools } from "../../src/index.js";
+import { WorkflowError, loadCodemodeToolsSetting, loadingRegistry, reachableTools, workflowToolExposure } from "../../src/index.js";
 import { clearSubagentManager, setSubagentManager } from "../../src/subagent-manager-handle.js";
 import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentStatus, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
@@ -174,7 +174,8 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
   const appendEntry = pi.appendEntry;
   const widget = createSubagentBackgroundWidget({ ...(appendEntry === undefined ? {} : { appendEntry: (customType, data) => { appendEntry.call(pi, customType, data); } }), ...(pi.registerEntryRenderer === undefined ? {} : { registerEntryRenderer: pi.registerEntryRenderer.bind(pi) }) });
   const extension = createSubagentsExtension(options, activeTools, notify, (status, request) => { widget.update(status, request); const registry = loadingRegistry(); if (typeof registry.observeSubagentStatus === "function") registry.observeSubagentStatus(status, request); }, onResourceWarning);
-  for (const tool of extension.tools) pi.registerTool(tool);
+  const codemodeTools = loadCodemodeToolsSetting(options.managerDependencies?.agentDir);
+  for (const tool of extension.tools) pi.registerTool({ ...tool, ...workflowToolExposure(tool.name, codemodeTools) });
   if (pi.registerCommand !== undefined) registerSubagentNavigator(pi.registerCommand.bind(pi), extension.manager, storageDirectory(options), options.clipboard);
   if (pi.on !== undefined) {
     setSubagentManager(extension.manager);
