@@ -14,7 +14,8 @@ export const DEFAULT_SETTINGS: Readonly<WorkflowSettings> = Object.freeze({ conc
 export function workflowSettingsPath(agentDir = getAgentDir()): string { return join(agentDir, ROLE_DIRECTORY, "settings.json"); }
 export function workflowProjectSettingsPath(cwd: string): string { return join(cwd, ".pi", ROLE_DIRECTORY, "settings.json"); }
 function normalizedResourcePath(value: string, settingsPath: string): string {
-  if (value === "*") return value;
+  // Built-in extensions are named `builtin:<name>`, not by a path.
+  if (value === "*" || value.startsWith("builtin:")) return value;
   let expanded = value === "~" ? homedir() : value.startsWith("~/") || value.startsWith("~\\") ? join(homedir(), value.slice(2)) : value;
   if (expanded.startsWith("file://")) expanded = fileURLToPath(expanded);
   const resolved = resolve(dirname(settingsPath), expanded);

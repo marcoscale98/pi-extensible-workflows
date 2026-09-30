@@ -1,6 +1,25 @@
 # Changelog
 ## Unreleased
 
+### Breaking changes
+
+- `pi-extensible-workflows` and `@piewf/herdr` require Pi 0.99.0 or later; their `@earendil-works/pi-coding-agent` peer dependency is now `>=0.99.0`. `@piewf/cli` bundles Pi 0.99.1.
+
+### New capabilities
+
+- Global model aliases appear in `/model` and `--model` as virtual models named `workflow/<alias>`, for example `workflow/cheap-model`. The alias target is read from settings on every request, and workflow agents and subagents that inherit the session model run on that target. The thinking level selected in `/model` replaces the one in the alias. Project and extension-provided aliases are not listed, and new aliases need `/reload`.
+- Workflow agents and standalone subagents load Pi's built-in `codemode`, `tool-search`, and `mcp` extensions, so they can reach the MCP servers from `mcp.json` through `codemode` or `tool_search`. `-builtin:<name>` in Pi settings still disables them. Workflow extension selectors name them `builtin:codemode`, `builtin:tool-search`, and `builtin:mcp`; a selector list that starts with `!*` needs `builtin:*` or those names to keep them.
+- The agent tool ceiling includes the parent session's tools that only codemode scripts call or `tool_search` loads, such as MCP tools with the default exposure. Role and call tool selectors still restrict them.
+
+### Fixes
+
+- Prompt inspection in `piewf doctor` and role inspection renders the system prompt again on Pi 0.99, including changes made by `before_agent_start` handlers.
+- An agent that asks for a model of Pi's built-in `llama.cpp` provider fails with an error that explains why: Pi does not expose that extension to extension sessions. Declare the server as a provider in `models.json` instead.
+
+### Internal
+
+- Build and test against Pi 0.99.1. Package verification ignores three `brace-expansion` advisories that come from the `npm-shrinkwrap.json` of `@earendil-works/pi-coding-agent@0.99.1`.
+
 ## [5.17.2] - 2026-09-28
 
 ### Breaking changes

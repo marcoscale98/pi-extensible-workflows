@@ -153,6 +153,24 @@ export function resolveModelReference(value: string, aliases: Readonly<Record<st
   };
   return resolveReference(value, []);
 }
+type ToolSource = { getActiveTools(): string[]; getAllTools?(): readonly { name: string; exposure?: string }[] };
+/**
+ * Tools a session can reach, and so the ceiling for its agents: the declared tools plus the ones
+ * only codemode scripts call or tool_search loads, such as MCP tools with the default exposure.
+ * Agent sessions allow tools by name, so leaving these out would make them unreachable there.
+ */
+export function reachableTools(pi: ToolSource): string[] {
+  const undeclared = pi.getAllTools?.().filter(({ exposure }) => exposure === "codemode" || exposure === "deferred").map(({ name }) => name) ?? [];
+  return [...new Set([...pi.getActiveTools(), ...undeclared])];
+}
+/** Provider of the virtual models that expose workflow model aliases in `/model`. */
+export const VIRTUAL_MODEL_PROVIDER = "workflow";
+/** Child sessions do not load the workflow extension, so they receive the alias target instead of its virtual model. */
+export function physicalModel(spec: ModelSpec, aliases: Readonly<Record<string, string>> = {}, knownModels?: ReadonlySet<string>, settingsPath?: string): ModelSpec {
+  if (spec.provider !== VIRTUAL_MODEL_PROVIDER || !modelAliasName(spec.model, aliases)) return spec;
+  const target = resolveModelReference(spec.model, aliases, knownModels, settingsPath);
+  return spec.thinking === undefined ? target : { ...target, thinking: spec.thinking };
+}
 export function modelCapability(value: string | ModelSpec, aliases?: Readonly<Record<string, string>>, knownModels?: ReadonlySet<string>, settingsPath?: string): string {
   const parsed = typeof value === "string" ? resolveModelReference(value, aliases, knownModels, settingsPath) : value;
   return `${parsed.provider}/${parsed.model}`;

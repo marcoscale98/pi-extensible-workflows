@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import { join } from "node:path";
 import { createExtensionRuntime, ExtensionRunner, ModelRegistry, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
-import type { AgentEndEvent, AgentStartEvent, ExtensionAPI, ExtensionContext, InlineExtension, SessionShutdownEvent, SessionStartEvent, TurnEndEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentEndEvent, AgentStartEvent, ExtensionAPI, ExtensionContext, ExtensionToolContext, InlineExtension, SessionShutdownEvent, SessionStartEvent, TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import {
   WORKFLOW_BLOCKED_EVENT,
   WORKFLOW_RUN_COMPLETED_EVENT,
@@ -153,7 +153,7 @@ function materializeSessionForHandoff(session: HerdrSession, prepared: Readonly<
   catch (error) { if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error; }
 }
 
-async function createBridgeContext(session: HerdrSession, prepared: Readonly<PreparedAgentSession>): Promise<(signal: AbortSignal, abort: () => void) => ExtensionContext> {
+async function createBridgeContext(session: HerdrSession, prepared: Readonly<PreparedAgentSession>): Promise<(signal: AbortSignal, abort: () => void) => ExtensionToolContext> {
   const reference = session.reference;
   const path = sessionPath(reference);
   const sessionManager = path && existsSync(path) ? SessionManager.open(path, undefined, prepared.cwd) : SessionManager.inMemory(prepared.cwd, { id: reference.sessionId });
@@ -170,7 +170,9 @@ async function createBridgeContext(session: HerdrSession, prepared: Readonly<Pre
   const runner = new ExtensionRunner([], createExtensionRuntime(), prepared.cwd, sessionManager, modelRegistry);
   runner.setUIContext(undefined, "tui");
   const baseContext = runner.createContext();
-  return (signal, abort) => new Proxy(baseContext, {
+  // NOTE: bridged tools run outside the live session, so nested tool calls have no tool set to route through.
+  const toolContext: ExtensionToolContext = Object.assign(baseContext, { tools: [], executeTool: () => Promise.reject(new Error("Herdr bridged tools cannot call other tools")) });
+  return (signal, abort) => new Proxy(toolContext, {
     get(target, property, receiver) {
       const current = session.getHerdrModelContext?.();
       if (property === "model") return current?.model ?? model;

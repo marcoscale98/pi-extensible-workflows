@@ -8,7 +8,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { DefaultResourceLoader, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createLocalPiSession, FairAgentScheduler, flushExtensionProviders, localAgentTransport, prepareAgentSetupForInspection, WorkflowAgentExecutor, type AgentExecutionRoot, type AgentProgress, type SessionInput } from "../src/agent-execution.js";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
-import { WorkflowError, type AgentExecutionResult, type AgentToolCallProgress } from "../src/index.js";
+import { reachableTools, WorkflowError, type AgentExecutionResult, type AgentToolCallProgress } from "../src/index.js";
 import type { AgentResourcePolicy } from "../src/types.js";
 import type { RunStore } from "../src/persistence.js";
 import { testTransport, type TestPiSessionEvent } from "./test-transport.js";
@@ -1173,7 +1173,7 @@ void test("bare no-policy local sessions exclude the workflow host and retain co
   try {
     const session = await createLocalPiSession({ cwd, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], sessionLabel: "no-policy-extensions" });
     try {
-      assert.deepEqual(session.getResourceInspection().extensions, [realpathSync(benignExtension), realpathSync(join(process.cwd(), "dist/trajectory/index.js"))]);
+      assert.deepEqual(session.getResourceInspection().extensions, [realpathSync(benignExtension), realpathSync(join(process.cwd(), "dist/trajectory/index.js")), "builtin:codemode", "builtin:tool-search", "builtin:mcp"]);
       assert.deepEqual(readFileSync(lifecycleFile, "utf8").trim().split("\n"), ["start:startup"]);
     } finally {
       await session.dispose();
@@ -2435,7 +2435,7 @@ void test("filters excluded native extensions before factories and skills before
   const loaded = (session as typeof session & { resourceLoader: { getSkills(): { skills: Array<{ name: string }> }; getExtensions(): { extensions: Array<{ resolvedPath: string }> } } }).resourceLoader;
   const resourcePaths = session.herdrResourcePaths;
   assert.ok(resourcePaths);
-  assert.deepEqual(resourcePaths.extensions, [realpathSync(allowedExtension)]);
+  assert.deepEqual(resourcePaths.extensions, [realpathSync(allowedExtension), "builtin:codemode", "builtin:tool-search", "builtin:mcp"]);
   assert.ok(resourcePaths.skills.includes(realpathSync(join(skillsDir, "kept-skill", "SKILL.md"))));
   assert.equal(resourcePaths.skills.some((path) => path.includes("disabled-skill")), false);
   assert.equal(existsSync(disabledMarker), false);
@@ -2476,6 +2476,38 @@ void test("filters excluded native extensions before factories and skills before
   await parent.dispose();
 });
 
+void test("agent sessions load Pi built-in extensions under settings and workflow selectors", async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-builtins-"));
+  const agentDir = join(rootDir, "agent");
+  mkdirSync(join(agentDir, "extensions"), { recursive: true });
+  writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+  writeFileSync(join(agentDir, "auth.json"), "{}");
+  const extensions = async (resourcePolicy?: AgentResourcePolicy) => {
+    const session = await createLocalPiSession({ cwd: rootDir, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: ["read"], sessionLabel: "builtins", ...(resourcePolicy ? { resourcePolicy } : {}) });
+    try { return session.herdrResourcePaths?.extensions; } finally { await session.dispose(); }
+  };
+  assert.deepEqual(await extensions(), ["builtin:codemode", "builtin:tool-search", "builtin:mcp"]);
+  const selectors = { skills: [], extensions: ["!*", "builtin:mcp"] };
+  assert.deepEqual(await extensions({ globalSettingsPath: "/workflow/settings.json", projectSettingsPath: "/project/.pi/pi-extensible-workflows/settings.json", projectTrusted: false, global: selectors, project: { skills: [], extensions: [] }, effective: selectors, unmatchedSkills: [], unmatchedExtensions: [], selectorSources: { global: selectors, project: {} } }), ["builtin:mcp"]);
+  writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ extensions: ["-builtin:mcp"] }));
+  assert.deepEqual(await extensions(), ["builtin:codemode", "builtin:tool-search"]);
+  assert.deepEqual(reachableTools({ getActiveTools: () => ["read"], getAllTools: () => [{ name: "read", exposure: "direct" }, { name: "mcp__a__b", exposure: "codemode" }, { name: "mcp__a__c", exposure: "deferred" }, { name: "gone", exposure: "hidden" }] }), ["read", "mcp__a__b", "mcp__a__c"]);
+});
+void test("prompt inspection renders before_agent_start system prompt changes", async () => {
+  const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-prompt-inspection-"));
+  const agentDir = join(rootDir, "agent");
+  mkdirSync(join(agentDir, "extensions"), { recursive: true });
+  writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: {} }));
+  writeFileSync(join(agentDir, "auth.json"), "{}");
+  const session = await createLocalPiSession({ cwd: rootDir, agentDir, model: { provider: "openai-codex", model: "gpt-5.6-sol" }, tools: [], sessionLabel: "prompt-inspection", extensionFactories: [(pi) => { pi.on("before_agent_start", () => ({ systemPrompt: "Forced by extension" })); }] });
+  try {
+    const inspection = await session.preparePrompt("hello");
+    assert.deepEqual(inspection.diagnostics, []);
+    assert.equal(inspection.systemPrompt, "Forced by extension");
+  } finally {
+    await session.dispose();
+  }
+});
 void test("treats role system prompt bodies as literal content", async () => {
   const rootDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-literal-system-prompt-"));
   const agentDir = join(rootDir, "agent");
@@ -2543,7 +2575,7 @@ void test("applies ordered minimatch resource selectors and records concrete mat
   const skillNames = loaded.getSkills().skills.map(({ name }) => name);
   assert.ok(skillNames.includes("kept-skill"));
   assert.equal(skillNames.includes("disabled-skill"), false);
-  assert.deepEqual(loaded.getExtensions().extensions.map(({ resolvedPath }) => resolve(resolvedPath)), [resolve(allowedExtension)]);
+  assert.deepEqual(loaded.getExtensions().extensions.map(({ resolvedPath }) => resolvedPath.startsWith("builtin:") ? resolvedPath : resolve(resolvedPath)), [resolve(allowedExtension), "builtin:codemode", "builtin:tool-search", "builtin:mcp"]);
   assert.deepEqual(resourcePolicy.selectedSkills, ["kept-skill"]);
   await session.dispose();
 });

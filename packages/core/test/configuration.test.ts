@@ -409,6 +409,20 @@ void test("validates and resolves portable model aliases", () => {
   assert.throws(() => { saveModelAliases(path, { "reviewer-model": "anthropic/opus:high" }); }, (error: unknown) => error instanceof WorkflowError && error.code === "CONFIG_ERROR");
   assert.equal(readFileSync(path, "utf8"), malformed);
 });
+void test("global model aliases are selectable virtual models", () => {
+  const agentDir = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-virtual-"));
+  mkdirSync(join(agentDir, "pi-extensible-workflows"), { recursive: true });
+  writeFileSync(join(agentDir, "pi-extensible-workflows", "settings.json"), JSON.stringify({ modelAliases: { "cheap-model": "openai/gpt:low" } }));
+  type Definition = { provider: string; id: string; route: (request: { thinkingLevel: string }, ctx: unknown) => { model: unknown; thinkingLevel: string } };
+  const definitions: Definition[] = [];
+  workflowExtension(Object.assign(testExtensionApi(), { registerVirtualModel: (definition: Definition) => { definitions.push(definition); } }), agentDir, undefined, undefined, agentDir);
+  assert.deepEqual(definitions.map(({ provider, id }) => `${provider}/${id}`), ["workflow/cheap-model"]);
+  const gpt = { provider: "openai", id: "gpt" };
+  const ctx = { cwd: agentDir, isProjectTrusted: () => false, modelRegistry: { getAll: () => [gpt], find: (provider: string, id: string) => provider === "openai" && id === "gpt" ? gpt : undefined } };
+  assert.deepEqual(definitions[0]?.route({ thinkingLevel: "high" }, ctx), { model: gpt, thinkingLevel: "high" });
+  const executor = new WorkflowAgentExecutor({ cwd: agentDir, model: { provider: "workflow", model: "cheap-model", thinking: "high" }, tools: new Set(), knownModels: new Set(["openai/gpt", "workflow/cheap-model"]), modelAliases: { "cheap-model": "openai/gpt:low" } });
+  assert.deepEqual(executor.resolve({ label: "inherited", workflowName: "test" }).model, { provider: "openai", model: "gpt", thinking: "high" });
+});
 void test("workflow TUI manages aliases without runs and preserves settings", async () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-alias-tui-"));
   const cwd = join(home, "project");

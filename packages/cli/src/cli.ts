@@ -352,7 +352,7 @@ async function createWorkflowRuntime(options: WorkflowIo, shutdownHandlers: Shut
     registerCommand() {},
     getThinkingLevel: () => services.settingsManager.getDefaultThinkingLevel() ?? "medium",
     getActiveTools: () => activeTools,
-    on(name: string, handler: unknown) { if (name === "session_shutdown" && typeof handler === "function") shutdownHandlers.push(handler as ShutdownHandler); },
+    on(name: string, handler: unknown) { if (name === "session_shutdown" && typeof handler === "function") shutdownHandlers.push(handler as ShutdownHandler); return () => {}; },
     appendEntry() {},
     sendMessage() {},
     events: { emit() {} },

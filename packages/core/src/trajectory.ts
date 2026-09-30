@@ -244,7 +244,8 @@ export function withPiToolDescriptionsForTools(tools: readonly string[], cwd: st
 function canonicalExtensionSelector(selector: string, base: string): string {
   const negated = selector.startsWith("!");
   const body = negated ? selector.slice(1) : selector;
-  if (body === "*" || body === "**" || body.startsWith("**/")) return selector;
+  // Built-in extensions are named `builtin:<name>`, not by a path.
+  if (body === "*" || body === "**" || body.startsWith("**/") || body.startsWith("builtin:")) return selector;
   const resolved = resolve(base, body);
   if (resourcePatternHasMagic(body)) return `${negated ? "!" : ""}${resolved}`;
   return `${negated ? "!" : ""}${canonicalPath(resolved)}`;

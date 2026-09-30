@@ -13,7 +13,7 @@ import { acquireSessionLease, isPersistedRun, listPersistedSessionIds, listRunId
 import { retainTerminalRuns } from "./retention.js";
 import type { PersistedRun, WorktreeReference } from "./persistence.js";
 import { validateBudget, WorkflowBudgetRuntime } from "./budget.js";
-import { SerialLane, asWorkflowError, createLaunchSnapshot, errorCode, errorText, fail, isNodeError, jsonValue, mergeWorkflowExtensionSettings, modelAliasErrorName, modelCapability, object, parseModelReference, positiveInteger, sanitizeDisplayText, validateModelAliases } from "./utils.js";
+import { SerialLane, asWorkflowError, createLaunchSnapshot, errorCode, errorText, fail, isNodeError, jsonValue, mergeWorkflowExtensionSettings, modelAliasErrorName, modelCapability, object, parseModelReference, positiveInteger, reachableTools, resolveModelReference, VIRTUAL_MODEL_PROVIDER, sanitizeDisplayText, validateModelAliases } from "./utils.js";
 import { loadSettings, preflight, resolveAgentResourcePolicy, resolveWorkflowSettings, validateCheckpoint, validateModelAliasAvailability, validateWorkflowLaunchWithRegistry, workflowProjectSettingsPath, workflowSettingsPath } from "./validation.js";
 import { loadAgentDefinitions, loadProjectAgentDefinitions } from "./roles.js";
 import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIfIdle, retainWorkflowRegistry, type WorkflowRegistryApi } from "./registry.js";
@@ -23,7 +23,7 @@ import { showChangelogNotice } from "./changelog.js";
 import { createTrajectoryRunLoader, createTrajectoryRunMetadataLoader, createTrajectorySubagentLoader, createTrajectorySubagentMetadataLoader, createTrajectoryTranscriptLoader, type TrajectoryActionRequest, type TrajectoryActionResult, type TrajectorySubagent } from "./trajectory.js";
 import { getTrajectoryHost, type TrajectoryPublisherProvider } from "./trajectory-host-handle.js";
 import { getSubagentManager } from "./subagent-manager-handle.js";
-import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, WORKFLOW_BLOCKED_EVENT, WorkflowError, isContextFileScope, isExternallyEndedRunState, isHardTerminalRunState, roleNameOf, type AgentAccounting, type AgentIdentity, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type LiveSessionHandoff, type HardTerminalRunState, type ModelSpec, type PreparedAgentSession, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowAgentSession, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
+import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, THINKING_LEVELS, WORKFLOW_BLOCKED_EVENT, WorkflowError, isContextFileScope, isExternallyEndedRunState, isHardTerminalRunState, roleNameOf, type AgentAccounting, type AgentIdentity, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type LiveSessionHandoff, type HardTerminalRunState, type ModelSpec, type PreparedAgentSession, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowAgentSession, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import type { SubagentManagerContext, SubagentRunRequest, SubagentStatus } from "../subagents/src/contracts.js";
 import {
   SETTLED_AGENT_STATES,
@@ -59,7 +59,7 @@ import {
   type WorkflowLogEntry,
 } from "./host-delivery.js";
 
-export type WorkflowExtensionAPI = Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "getThinkingLevel" | "on" | "registerCommand" | "registerTool" | "sendMessage"> & Pick<BackgroundWidgetAPI, "events" | "registerEntryRenderer" | "registerShortcut">;
+export type WorkflowExtensionAPI = Pick<ExtensionAPI, "appendEntry" | "getActiveTools" | "getThinkingLevel" | "on" | "registerCommand" | "registerTool" | "sendMessage"> & Partial<Pick<ExtensionAPI, "getAllTools">> & Pick<BackgroundWidgetAPI, "events" | "registerEntryRenderer" | "registerShortcut">;
 
 export {
   agentBreadcrumb,
@@ -261,6 +261,26 @@ function resumeHostContext(ctx: unknown): { model: { provider: string; id: strin
   const model = object(ctx) && object(ctx.model) && typeof ctx.model.provider === "string" && typeof ctx.model.id === "string" ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
   return { model, modelRegistry: contextHostCapabilities(ctx).modelRegistry, deliveryContext: completionContext(ctx) };
 }
+type AliasVirtualModel = { provider: string; id: string; name: string; thinkingLevels: readonly string[]; route: (request: { thinkingLevel: string }, ctx: ExtensionContext) => { model: Model<Api>; thinkingLevel: string } };
+/** Lists workflow model aliases in `/model` as virtual models; needs a Pi host with `registerVirtualModel`. */
+function registerAliasVirtualModels(pi: unknown, names: readonly string[], settingsPath: string): void {
+  const register = object(pi) ? asFn(pi.registerVirtualModel) : undefined;
+  if (!register) return;
+  for (const name of names) {
+    const definition: AliasVirtualModel = {
+      provider: VIRTUAL_MODEL_PROVIDER, id: name, name: `${name} (workflow alias)`, thinkingLevels: THINKING_LEVELS,
+      route: (request, ctx) => {
+        // Settings are read per request so alias edits apply without a reload.
+        const aliases = resolveWorkflowSettings(ctx.cwd, projectTrusted(ctx), settingsPath).effective.modelAliases ?? {};
+        const target = resolveModelReference(name, aliases, new Set(ctx.modelRegistry.getAll().map((model) => `${model.provider}/${model.id}`)), settingsPath);
+        const model = ctx.modelRegistry.find(target.provider, target.model);
+        if (!model) throw new WorkflowError("UNKNOWN_MODEL", `Unknown model alias ${name} resolved to ${target.provider}/${target.model}`);
+        return { model, thinkingLevel: request.thinkingLevel };
+      },
+    };
+    Reflect.apply(register, pi, [definition]);
+  }
+}
 async function resolveLaunchAliases(registry: WorkflowRegistryApi, staticAliases: Readonly<Record<string, string>>, context: Readonly<WorkflowModelAliasResolverContext>, availableModels: ReadonlySet<string>, knownModels: ReadonlySet<string>, settingsPath: string): Promise<{ aliases: Readonly<Record<string, string>>; dynamicNames: readonly string[] }> {
   const dynamic = typeof registry.resolveModelAliases === "function" ? await registry.resolveModelAliases(context, new Set(Object.keys(staticAliases))) : {};
   const dynamicNames = Object.keys(dynamic);
@@ -290,7 +310,12 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     return textBlock(data ? `Warning: ${data.message}` : "");
   });
   let backgroundWidgetEnabled = true;
-  try { backgroundWidgetEnabled = loadSettings(workflowSettingsPath(extensionAgentDir)).backgroundWidget ?? true; } catch { /* Keep the optional UI enabled; the launch path reports settings errors. */ }
+  try {
+    const globalSettings = loadSettings(workflowSettingsPath(extensionAgentDir));
+    backgroundWidgetEnabled = globalSettings.backgroundWidget ?? true;
+    // Registered at load, before Pi resolves --model and restores the session model. Project aliases need project trust, which is unknown here.
+    registerAliasVirtualModels(pi, Object.keys(globalSettings.modelAliases ?? {}), workflowSettingsPath(extensionAgentDir));
+  } catch { /* Keep the optional UI enabled; the launch path reports settings errors. */ }
   const backgroundWidgetController = backgroundWidget(pi, backgroundWidgetEnabled);
   const logBridge = (store: RunStore, lifecycle: RunLifecycle, workflowName: string) => async (message: string) => {
     const timestamp = Date.now();
@@ -921,7 +946,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     return { definitions, capture: (role: string, model: ModelSpec) => captured.capture(role, model) };
   };
   const activeSnapshotTools = (tools: readonly string[], active: ReadonlySet<string> | "session") => active === "session"
-    ? new Set(tools.filter((tool) => pi.getActiveTools().includes(tool) && tool !== "workflow_catalog"))
+    ? new Set(tools.filter((tool) => reachableTools(pi).includes(tool) && tool !== "workflow_catalog"))
     : new Set(tools.filter((tool) => active.has(tool) || tool === "workflow_catalog"));
   const resumeLaunchPrologue = async (input: {
     snapshot: Readonly<LaunchSnapshot>;
@@ -935,7 +960,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     blockedAliasTargets?: Readonly<Record<string, string>>;
     withPreflight: boolean;
   }) => {
-    const active = new Set(pi.getActiveTools().filter((tool) => !INTERNAL_WORKFLOW_TOOLS.includes(tool)));
+    const active = new Set(reachableTools(pi).filter((tool) => !INTERNAL_WORKFLOW_TOOLS.includes(tool)));
     const missing = input.snapshot.tools.filter((tool) => tool !== "workflow_catalog").find((tool) => !active.has(tool));
     if (missing) throw new WorkflowError("RESUME_INCOMPATIBLE", `Required tool is unavailable: ${missing}`);
     const settingsPath = workflowSettingsPath(extensionAgentDir);
@@ -1192,7 +1217,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const inventory = modelInventory(rootModel, modelRegistry);
       const knownModels = inventory.knownModels;
       const availableModels = inventory.availableModels;
-      const rootTools = pi.getActiveTools().filter((name) => !INTERNAL_WORKFLOW_TOOLS.includes(name));
+      const rootTools = reachableTools(pi).filter((name) => !INTERNAL_WORKFLOW_TOOLS.includes(name));
       const trustedProject = projectTrusted(ctx);
       const launchCwd = typeof ctx.cwd === "string" ? ctx.cwd : process.cwd();
       const launch = workflowLaunchSettings(launchCwd, trustedProject, settingsPath, params.concurrency);
