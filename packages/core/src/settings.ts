@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ToolAnnotations } from "@earendil-works/pi-coding-agent";
 import type { AgentResourcePolicy, AgentResourceSelectors, AgentResourceSelectorSet, ContextFileScope, JsonValue, WorkflowExtensionSettings, WorkflowRetentionSettings, WorkflowSettings, WorkflowSettingsOverrides, WorkflowSettingsResolution, WorkflowSettingsSources } from "./types.js";
 import { isContextFileScope } from "./types.js";
 import { annotateModelAliasError, deepFreeze, errorText, fail, isNodeError, jsonValue, modelCapability, object, positiveInteger, resourcePatternHasMagic, unknownModel, validateModelAliases, validateResourcePattern, validWorkflowExtensionNamespace } from "./utils.js";
@@ -133,12 +133,14 @@ function parseSettings(path: string, partial: boolean): Readonly<WorkflowSetting
 export function loadSettings(path = workflowSettingsPath()): Readonly<WorkflowSettings> { return parseSettings(path, false); }
 const READ_ONLY_WORKFLOW_TOOLS: ReadonlySet<string> = new Set(["workflow_status", "workflow_catalog", "subagents_inspect"]);
 /**
- * Exposure of a workflow or subagent tool under the global `codemodeTools` setting. `model-only`
- * keeps the model's direct access and stops codemode scripts from calling the tool. Tools are
- * registered once at load, so the setting is global and applies after a reload.
+ * Exposure and annotations of a workflow or subagent tool. Under the global `codemodeTools` setting,
+ * `model-only` keeps the model's direct access and stops codemode scripts from calling the tool.
+ * Tools are registered once at load, so the setting is global and applies after a reload.
+ * Read-only tools carry `readOnlyHint` so permission extensions need not confirm them.
  */
-export function workflowToolExposure(name: string, codemodeTools: WorkflowSettings["codemodeTools"]): { exposure?: "model-only" } {
-  return codemodeTools === "none" || (codemodeTools === "read-only" && !READ_ONLY_WORKFLOW_TOOLS.has(name)) ? { exposure: "model-only" } : {};
+export function workflowToolExposure(name: string, codemodeTools: WorkflowSettings["codemodeTools"]): { exposure?: "model-only"; annotations?: ToolAnnotations } {
+  const readOnly = READ_ONLY_WORKFLOW_TOOLS.has(name);
+  return { ...(codemodeTools === "none" || (codemodeTools === "read-only" && !readOnly) ? { exposure: "model-only" as const } : {}), ...(readOnly ? { annotations: { readOnlyHint: true } } : {}) };
 }
 /** The `codemodeTools` setting at load time. Invalid settings keep the default; launches report them. */
 export function loadCodemodeToolsSetting(agentDir?: string): WorkflowSettings["codemodeTools"] {

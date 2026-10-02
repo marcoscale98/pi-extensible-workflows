@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { defineTool, getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
-import { WorkflowError, loadCodemodeToolsSetting, loadingRegistry, reachableTools, workflowToolExposure } from "../../src/index.js";
+import { WorkflowError, loadCodemodeToolsSetting, loadingRegistry, reachableTools, workflowToolExposure, type JsonValue } from "../../src/index.js";
 import { clearSubagentManager, setSubagentManager } from "../../src/subagent-manager-handle.js";
 import type { SubagentIdRequest, SubagentInspectRequest, SubagentManager, SubagentManagerContext, SubagentNotification, SubagentsExtension, SubagentsExtensionOptions, SubagentRunRequest, SubagentStatus, SubagentSteerRequest } from "./contracts.js";
 import { createSubagentManager } from "./manager.js";
@@ -9,10 +9,13 @@ import { registerSubagentNavigator } from "./navigator.js";
 import { createSubagentBackgroundWidget, renderSubagentCall, renderSubagentControlCall, renderSubagentControlResult, renderSubagentInspectCall, renderSubagentInspectResult, renderSubagentResult } from "./view.js";
 import {
   normalizeSubagentRunRequest,
+  SUBAGENT_STATUS_OUTPUT,
   SUBAGENTS_ID_PARAMETERS,
+  SUBAGENTS_INSPECT_OUTPUT,
   SUBAGENTS_INSPECT_PARAMETERS,
   SUBAGENTS_RETRY_PARAMETERS,
   SUBAGENTS_RUN_PARAMETERS,
+  SUBAGENTS_STEER_OUTPUT,
   SUBAGENTS_STEER_PARAMETERS,
   SUBAGENTS_STOP_PARAMETERS,
 } from "./contracts.js";
@@ -55,7 +58,7 @@ function serialize(value: unknown): string {
 }
 
 function toolResult(value: unknown): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text: serialize(value) }], details: value };
+  return { content: [{ type: "text", text: serialize(value) }], details: value, structuredContent: value as JsonValue };
 }
 
 function managerContext(toolCallId: string, signal: AbortSignal | undefined, onUpdate: ((value: AgentToolResult<unknown>) => void) | undefined, context: ExtensionContext): SubagentManagerContext {
@@ -78,6 +81,7 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
         "Do not poll a running ID; use subagents_inspect({ id }) when you need its current status or terminal result.",
       ],
       parameters: SUBAGENTS_RUN_PARAMETERS,
+      outputSchema: SUBAGENT_STATUS_OUTPUT,
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.run(validateSubagentRunRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
       },
@@ -89,6 +93,7 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       label: "Subagents Inspect",
       description: "Inspect durable subagent runs. Omit id for ordered run summaries of the current session (scope all for every session), or provide id for detailed status, progress, activity, accounting, tool calls, timestamps, worktree metadata, and a terminal value or error when available.",
       parameters: SUBAGENTS_INSPECT_PARAMETERS,
+      outputSchema: SUBAGENTS_INSPECT_OUTPUT,
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.inspect(validateSubagentInspectRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
       },
@@ -100,6 +105,7 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       label: "Subagents Steer",
       description: "Send a message to a running subagent. The message is queued safely if its steering handler is not ready; settled runs cannot be steered.",
       parameters: SUBAGENTS_STEER_PARAMETERS,
+      outputSchema: SUBAGENTS_STEER_OUTPUT,
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.steer(validateSubagentSteerRequest(params), managerContext(toolCallId, signal, onUpdate, context)));
       },
@@ -111,6 +117,7 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       label: "Subagents Stop",
       description: "Stop one running subagent, abort its active session, persist state \"stopped\", and clean its worktree without affecting sibling runs.",
       parameters: SUBAGENTS_STOP_PARAMETERS,
+      outputSchema: SUBAGENT_STATUS_OUTPUT,
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.stop(validateSubagentIdRequest(params, "subagents_stop"), managerContext(toolCallId, signal, onUpdate, context)));
       },
@@ -122,6 +129,7 @@ export function createSubagentTools(manager: SubagentManager): readonly ToolDefi
       label: "Subagents Retry",
       description: "Start a fresh run from a failed or stopped subagent's persisted request. The new run gets a new ID and preserves its original background or foreground mode.",
       parameters: SUBAGENTS_RETRY_PARAMETERS,
+      outputSchema: SUBAGENT_STATUS_OUTPUT,
       async execute(toolCallId, params, signal, onUpdate, context) {
         return toolResult(await manager.retry(validateSubagentIdRequest(params, "subagents_retry"), managerContext(toolCallId, signal, onUpdate, context)));
       },

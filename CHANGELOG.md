@@ -1,6 +1,15 @@
 # Changelog
 ## Unreleased
 
+### New capabilities
+
+- Workflow and subagent tools declare an `outputSchema` and return `structuredContent`, so Pi `codemode` scripts receive objects instead of JSON text. For example, `await tools.workflow_status({ runId })` resolves to `{ runId, workflowName, state, agents, ... }`. A completed foreground `workflow`, `workflow_retry`, or `workflow_resume` call resolves with the full `value`, even when the model sees only a result descriptor. Inside workflow agents, the child agent tools `agent` and `get_subagent_result` do the same, and Herdr-bridged tools keep their `outputSchema`.
+- `workflow_status`, `workflow_catalog`, and `subagents_inspect` carry the `readOnlyHint` tool annotation, so permission extensions that read annotations can skip confirming them.
+
+### Internal
+
+- Build and test against Pi 1.0.0.
+
 ## [5.18.0] - 2026-09-30
 
 ### Breaking changes

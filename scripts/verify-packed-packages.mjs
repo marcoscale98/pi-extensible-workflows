@@ -84,7 +84,7 @@ try {
   if (launch.error) throw launch.error;
   if (launch.status !== 0 || launchArgs.includes("--model") || !launchArgs.includes("--append-system-prompt") || launchArgs.slice(-3, -1).join(" ") !== "-p hello" || !(launch.stderr ?? "").includes("developer-model")) throw new Error(`Standalone pi-role launch smoke test failed (${String(launch.status)}):\n${launch.stdout ?? ""}${launch.stderr ?? ""}`);
   // ponytail: npm audit has no per-advisory ignore. These brace-expansion advisories come from the
-  // npm-shrinkwrap.json of @earendil-works/pi-coding-agent@0.99.1, which pins 5.0.9 (fixed in 5.0.12)
+  // npm-shrinkwrap.json of @earendil-works/pi-coding-agent@1.0.0, which pins 5.0.9 (fixed in 5.0.12)
   // and cannot be overridden by a dependent. Drop them once Pi ships an updated shrinkwrap.
   const ignoredAdvisories = new Set(["https://github.com/advisories/GHSA-q2hr-2g5m-vwhr", "https://github.com/advisories/GHSA-qhr7-859c-m2p7", "https://github.com/advisories/GHSA-6j4f-fj2g-mc7p"]);
   const audit = spawnSync("npm", ["audit", "--prefix", installRoot, "--omit=dev", "--json"], { encoding: "utf8", timeout: 60_000 });

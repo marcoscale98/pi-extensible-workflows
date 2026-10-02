@@ -222,8 +222,8 @@ async function createToolBridge(session: HerdrSession, prepared: Readonly<Prepar
   const definitions: HerdrToolDefinition[] = [...(prepared.customTools ?? []), ...(prepared.resultTool ? [prepared.resultTool] : [])];
   const bridgeContext = definitions.length ? await createBridgeContext(session, prepared) : undefined;
   const specs = definitions.map((definition: HerdrToolDefinition) => {
-    const { name, label, description, promptSnippet, promptGuidelines, parameters, renderShell, executionMode } = definition;
-    return { name, label, description, ...(promptSnippet === undefined ? {} : { promptSnippet }), ...(promptGuidelines === undefined ? {} : { promptGuidelines }), parameters, ...(renderShell === undefined ? {} : { renderShell }), ...(executionMode === undefined ? {} : { executionMode }) };
+    const { name, label, description, promptSnippet, promptGuidelines, parameters, outputSchema, renderShell, executionMode } = definition;
+    return { name, label, description, ...(promptSnippet === undefined ? {} : { promptSnippet }), ...(promptGuidelines === undefined ? {} : { promptGuidelines }), parameters, ...(outputSchema === undefined ? {} : { outputSchema }), ...(renderShell === undefined ? {} : { renderShell }), ...(executionMode === undefined ? {} : { executionMode }) };
   });
   // NOTE: mkdtemp creates the directory 0700, so only this user can connect to the socket regardless of umask.
   const bridgeDirectory = mkdtempSync(join(tmpdir(), "pi-herdr-tools-"));

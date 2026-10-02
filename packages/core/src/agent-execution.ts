@@ -1419,6 +1419,7 @@ export class FairAgentScheduler {
     const agentTool = defineTool({
       name: "agent", label: "Child Agent", description: "Start a direct child agent",
       parameters: Type.Object({ prompt: Type.String(), label: Type.String(), tools: Type.Optional(Type.Array(Type.String())), skills: Type.Optional(Type.Array(Type.String())), extensions: Type.Optional(Type.Array(Type.String())), model: Type.Optional(Type.String()), role: Type.Optional(Type.String()), contextFiles: Type.Optional(Type.Array(Type.String())), outputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())), retries: Type.Optional(Type.Integer({ minimum: 0 })), timeoutMs: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])) }, { additionalProperties: true }),
+      outputSchema: Type.Object({ id: Type.String() }),
       execute: async (_id, params) => {
         if (!isChildAgentToolParams(params)) throw new WorkflowError("INVALID_METADATA", "Invalid child agent parameters");
         validateAgentOptions(params);
@@ -1429,13 +1430,14 @@ export class FairAgentScheduler {
         Reflect.deleteProperty(agentOptions, "prompt");
         const options: ScheduledAgentOptions = { label: params.label, requestedLabel: params.label, cwd: parent.options.cwd, tools, agentOptions, ...(params.skills ? { skills: params.skills } : {}), ...(params.extensions ? { extensions: params.extensions } : {}), ...(params.model ? { model: params.model } : {}), ...(params.role ? { role: params.role } : {}), ...(params.contextFiles ? { contextFiles: params.contextFiles } : {}), ...(outputSchema === undefined ? {} : { schema: outputSchema }), ...(params.retries === undefined ? {} : { retries: params.retries }), ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }) };
         const child = this.spawn(parent.runId, params.prompt, options, parentId);
-        return { content: [{ type: "text" as const, text: JSON.stringify({ id: child.id }) }], details: { id: child.id } };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ id: child.id }) }], details: { id: child.id }, structuredContent: { id: child.id } };
       },
     });
     const resultTool = defineTool({
       name: "get_subagent_result", label: "Child Result", description: "Wait for a direct child and return its result once; repeated retrieval fails with AGENT_RESULT_COLLECTED",
       parameters: Type.Object({ id: Type.String() }),
-      execute: async (_id, params) => { const value = await this.result(parentId, params.id); if (!value.ok && value.error.code === "BUDGET_EXHAUSTED") throw new WorkflowError("BUDGET_EXHAUSTED", value.error.message); return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value }; }
+      outputSchema: Type.Object({ id: Type.String(), ok: Type.Boolean(), value: Type.Optional(Type.Unknown()), error: Type.Optional(Type.Object({ code: Type.String(), message: Type.String() })) }),
+      execute: async (_id, params) => { const value = await this.result(parentId, params.id); if (!value.ok && value.error.code === "BUDGET_EXHAUSTED") throw new WorkflowError("BUDGET_EXHAUSTED", value.error.message); return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value, structuredContent: value }; }
     });
     const steerTool = defineTool({
       name: "steer_subagent", label: "Steer Child", description: "Steer a running direct child",

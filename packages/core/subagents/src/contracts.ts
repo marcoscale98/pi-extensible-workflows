@@ -61,6 +61,24 @@ export const SUBAGENTS_RETRY_PARAMETERS = Type.Object({
   id: Type.String({ description: "Failed or stopped subagent ID to retry" }),
 }, { additionalProperties: false });
 
+// Structured results codemode scripts receive instead of the JSON text; nested records stay loose so they cannot drift from persistence.
+export const SUBAGENT_STATUS_OUTPUT = Type.Object({
+  id: Type.String(),
+  state: Type.String(),
+  sessionId: Type.Optional(Type.String()),
+  startedAt: Type.Optional(Type.Number()),
+  finishedAt: Type.Optional(Type.Number()),
+  attempts: Type.Optional(Type.Number()),
+  attemptDetails: Type.Optional(Type.Array(Type.Unknown())),
+  worktree: Type.Optional(Type.Object({ path: Type.String(), branch: Type.String() })),
+  error: Type.Optional(Type.Object({ code: Type.String(), message: Type.String() })),
+  progress: Type.Optional(Type.Unknown()),
+  value: Type.Optional(Type.Unknown()),
+});
+// One run when id is given, otherwise the ordered run summaries; the summaries stay short in the codemode description.
+export const SUBAGENTS_INSPECT_OUTPUT = Type.Union([SUBAGENT_STATUS_OUTPUT, Type.Array(Type.Object({ id: Type.String(), state: Type.String() }))]);
+export const SUBAGENTS_STEER_OUTPUT = Type.Object({ id: Type.String(), accepted: Type.Boolean() });
+
 export type SubagentRunRequest = Static<typeof SUBAGENTS_RUN_PARAMETERS>;
 export function normalizeSubagentRunRequest(value: unknown): SubagentRunRequest {
   if (!Value.Check(SUBAGENTS_RUN_PARAMETERS, value)) throw new WorkflowError("INVALID_METADATA", "Invalid subagents_run parameters");

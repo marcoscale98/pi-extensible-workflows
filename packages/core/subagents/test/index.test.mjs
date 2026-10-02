@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { Value } from "typebox/value";
 import { WORKFLOW_AGENT_STALL_THRESHOLD_MS, WorkflowError, prepareAgentSetupForInspection, registerWorkflowExtension, resetWorkflowRegistry } from "pi-extensible-workflows";
 import extension, {
   createSubagentManager,
@@ -71,8 +72,12 @@ test("registers five namespaced subagent tools and delegates to an injected mana
   assert.equal(Object.isFrozen(SUBAGENTS_RUN_PARAMETERS), false);
   assert.deepEqual(tools.map(({ name }) => name), toolNames);
   const result = await tools[0].execute("call-1", { prompt: "inspect" }, undefined, undefined, testContext());
-  assert.deepEqual(result, { content: [{ type: "text", text: '{"id":"agent-1","state":"queued"}' }], details: { id: "agent-1", state: "queued" } });
+  assert.deepEqual(result, { content: [{ type: "text", text: '{"id":"agent-1","state":"queued"}' }], details: { id: "agent-1", state: "queued" }, structuredContent: { id: "agent-1", state: "queued" } });
   assert.deepEqual(calls[0], ["run", { prompt: "inspect", mode: "background" }]);
+  const structured = await Promise.all([tools[1].execute("call-2", { id: "agent-1" }, undefined, undefined, testContext()), tools[2].execute("call-3", { id: "agent-1", message: "go" }, undefined, undefined, testContext()), tools[3].execute("call-4", { id: "agent-1" }, undefined, undefined, testContext()), tools[4].execute("call-5", { id: "agent-1" }, undefined, undefined, testContext())]);
+  for (const [index, { structuredContent }] of [result, ...structured].entries()) assert.ok(Value.Check(tools[index].outputSchema, structuredContent), `${tools[index].name} structured content matches its outputSchema`);
+  assert.ok(Value.Check(tools[1].outputSchema, [{ id: "agent-1", state: "running" }]), "listing inspections match the inspect outputSchema");
+  assert.deepEqual(tools.map(({ annotations }) => annotations?.readOnlyHint === true), [false, true, false, false, false]);
 });
 test("publishes the manager handle for a session and clears it on shutdown", async () => {
   const manager = { async run() {}, async inspect() {}, async steer() {}, async stop() {}, async retry() {} };

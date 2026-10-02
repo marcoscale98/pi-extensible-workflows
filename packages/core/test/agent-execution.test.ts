@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { createServer } from "node:http";
 import test from "node:test";
 import { Type } from "@earendil-works/pi-ai";
+import { Value } from "typebox/value";
 import type { DefaultResourceLoader, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createLocalPiSession, FairAgentScheduler, flushExtensionProviders, localAgentTransport, prepareAgentSetupForInspection, WorkflowAgentExecutor, type AgentExecutionRoot, type AgentProgress, type SessionInput } from "../src/agent-execution.js";
 import { AgentSession } from "@earendil-works/pi-coding-agent";
@@ -2131,6 +2132,25 @@ void test("child tool validates raw input and preserves extension options", asyn
   const childId = ((response as { details: { id: string } }).details).id;
   const child = scheduler.snapshot().find(({ id }) => id === childId);
   assert.deepEqual(child?.options.agentOptions, { label: "child", providerOptions: { temperature: 0.2 }, timeoutMs: null });
+  scheduler.cancel(parent.id);
+  await parent.result;
+});
+void test("child agent tools return structured content for codemode scripts", async () => {
+  const scheduler = new FairAgentScheduler(async ({ prompt, signal }) => {
+    if (prompt !== "parent") return "done";
+    await new Promise<void>((resolve) => { signal.addEventListener("abort", () => { resolve(); }, { once: true }); });
+    throw new WorkflowError("CANCELLED", "cancelled");
+  }, 2);
+  scheduler.addRun("run", 2);
+  const parent = scheduler.spawn("run", "parent", { label: "parent", cwd: "/repo", tools: ["agent"] });
+  const [agentTool, resultTool] = scheduler.toolsFor(parent.id);
+  assert.ok(agentTool?.outputSchema && resultTool?.outputSchema);
+  const spawned = await executeTool(agentTool, "call", { prompt: "child", label: "child" }) as { details: { id: string }; structuredContent?: unknown };
+  assert.deepEqual(spawned.structuredContent, { id: spawned.details.id });
+  assert.ok(Value.Check(agentTool.outputSchema, spawned.structuredContent));
+  const collected = await executeTool(resultTool, "collect", { id: spawned.details.id }) as { structuredContent?: unknown };
+  assert.deepEqual(collected.structuredContent, { id: spawned.details.id, ok: true, value: "done" });
+  assert.ok(Value.Check(resultTool.outputSchema, collected.structuredContent));
   scheduler.cancel(parent.id);
   await parent.result;
 });

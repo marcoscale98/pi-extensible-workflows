@@ -117,6 +117,13 @@ function mainAgentError(error: unknown): WorkflowError {
   Object.assign(presented, typed);
   return presented;
 }
+/** The structured counterpart of {@link completionControlContent}: the result without the persisted run, with the full value. */
+function completionControlValue(result: Readonly<Record<string, unknown>>, controlRunId?: string): Record<string, unknown> {
+  const record: Record<string, unknown> = { ...(controlRunId === undefined ? {} : { runId: controlRunId }), ...result };
+  delete record.run;
+  delete record.completion;
+  return record;
+}
 function completionControlContent(result: unknown, controlRunId?: string): string {
   const record = object(result) ? { ...result } : undefined;
   if (record && controlRunId !== undefined && record.runId === undefined) record.runId = controlRunId;
@@ -174,6 +181,21 @@ export const WORKFLOW_TOOL_PARAMETERS = Type.Object({
 }, { additionalProperties: false });
 export const WORKFLOW_STATUS_PARAMETERS = Type.Object({ runId: Type.String({ description: "Workflow run ID visible in the current project" }) }, { additionalProperties: false });
 export const WORKFLOW_RETRY_PARAMETERS = Type.Object({ runId: Type.String({ description: "Explicit failed workflow run ID" }), expectedState: Type.Optional(Type.String({ description: "Persisted source state observed before recovery" })), foreground: Type.Optional(Type.Boolean({ description: "Override the source launch mode for this recovery" })) });
+// Structured results codemode scripts receive instead of the JSON text; nested records stay loose so they cannot drift from persistence.
+const WORKFLOW_ERROR_OUTPUT = Type.Object({ code: Type.String(), message: Type.String() });
+const WORKFLOW_LAUNCH_OUTPUT = Type.Object({ runId: Type.String(), state: Type.String(), detached: Type.Optional(Type.Boolean()), value: Type.Optional(Type.Unknown()) });
+const WORKFLOW_STATUS_OUTPUT = Type.Object({ runId: Type.String(), workflowName: Type.String(), state: Type.String(), error: Type.Optional(WORKFLOW_ERROR_OUTPUT), failedAt: Type.Optional(Type.String()), budget: Type.Optional(Type.Unknown()), usage: Type.Optional(Type.Unknown()), phase: Type.Optional(Type.String()), delivery: Type.Optional(Type.Object({ mode: Type.String(), state: Type.String() })), agents: Type.Array(Type.Object({ id: Type.String(), label: Type.Optional(Type.String()), path: Type.String(), state: Type.String(), lastEventAt: Type.Optional(Type.Number()), accounting: Type.Optional(Type.Unknown()) })) });
+const WORKFLOW_STOP_OUTPUT = Type.Object({ runId: Type.String(), state: Type.String(), stopped: Type.Boolean(), reason: Type.Optional(Type.String()) });
+const WORKFLOW_RECOVERY_OUTPUT = Type.Object({ state: Type.String(), runId: Type.Optional(Type.String()), parentRunId: Type.Optional(Type.String()), proposalId: Type.Optional(Type.String()), value: Type.Optional(Type.Unknown()) });
+const WORKFLOW_RESPOND_OUTPUT = Type.Object({ state: Type.String(), approved: Type.Boolean(), reason: Type.String(), accepted: Type.Optional(Type.Boolean()), runId: Type.Optional(Type.String()), value: Type.Optional(Type.Unknown()) });
+const WORKFLOW_CATALOG_ALIAS_OUTPUT = Type.Object({ name: Type.String(), kind: Type.String(), provenance: Type.String(), version: Type.Optional(Type.String()), headline: Type.Optional(Type.String()) });
+// The index without a name; with one, the function, the model alias, or { error }.
+const WORKFLOW_CATALOG_OUTPUT = Type.Union([
+  Type.Object({ functions: Type.Array(Type.Object({ name: Type.String(), description: Type.String(), input: Type.Unknown() })), modelAliasEntries: Type.Optional(Type.Array(WORKFLOW_CATALOG_ALIAS_OUTPUT)), settings: Type.Optional(Type.Unknown()) }),
+  Type.Object({ name: Type.String(), version: Type.String(), headline: Type.String(), description: Type.String(), input: Type.Unknown(), output: Type.Unknown() }),
+  WORKFLOW_CATALOG_ALIAS_OUTPUT,
+  Type.Object({ error: Type.Object({ code: Type.String(), name: Type.String(), message: Type.String() }) }),
+]);
 
 function workflowToolUpdate(run: PersistedRun): WorkflowToolUpdate {
   //NOTE: renderers read details.run; the partial text stays O(1) so high-frequency updates never format the whole tree.
@@ -848,18 +870,20 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     label: string,
     description: string,
     parameters: P,
-    run: (params: Static<P>, signal: AbortSignal, ctx: unknown) => Promise<{ text: string; details: unknown }>,
+    outputSchema: TSchema,
+    run: (params: Static<P>, signal: AbortSignal, ctx: unknown) => Promise<{ text: string; details: unknown; structured: unknown }>,
   ) => {
     pi.registerTool({
       name,
       label,
       description,
       parameters,
+      outputSchema,
       ...workflowToolExposure(name, codemodeTools),
       async execute(_id, params, signal: AbortSignal, _onUpdate, ctx) {
         try {
           const result = await run(params, signal, ctx);
-          return { content: [{ type: "text" as const, text: result.text }], details: result.details };
+          return { content: [{ type: "text" as const, text: result.text }], details: result.details, structuredContent: result.structured as JsonValue };
         } catch (error) {
           throw mainAgentError(error);
         }
@@ -874,15 +898,18 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     "Workflow Respond",
     "Approve or reject one pending workflow checkpoint or budget decision",
     Type.Object({ runId: Type.String(), name: Type.Optional(Type.String()), proposalId: Type.Optional(Type.String()), approved: Type.Boolean() }, { additionalProperties: false }),
+    WORKFLOW_RESPOND_OUTPUT,
     async (params, signal, ctx) => {
       if (params.proposalId) {
         const result = await recovery.answerBudgetDecision(params.runId, params.proposalId, params.approved, false, ctx, signal);
-        if (!result) { const denied = { state: "budget_exhausted" as const, approved: false, reason: "proposal_not_pending" }; return { text: JSON.stringify(denied), details: denied }; }
-        return { text: completionControlContent(result, params.runId), details: { ...result, reason: params.approved ? "approved" : "rejected" } };
+        if (!result) { const denied = { state: "budget_exhausted" as const, approved: false, reason: "proposal_not_pending" }; return { text: JSON.stringify(denied), details: denied, structured: denied }; }
+        const reason = params.approved ? "approved" : "rejected";
+        return { text: completionControlContent(result, params.runId), details: { ...result, reason }, structured: { ...completionControlValue(result, params.runId), reason } };
       }
       if (!params.name) throw new WorkflowError("INVALID_METADATA", "workflow_respond requires name or proposalId");
       const accepted = await answerCheckpoint(params.runId, params.name, params.approved);
-      return { text: accepted ? "Checkpoint response accepted." : "Checkpoint is not awaiting a response.", details: { accepted, state: accepted ? "checkpoint_answered" : "not_pending", approved: params.approved, reason: "checkpoint" } };
+      const details = { accepted, state: accepted ? "checkpoint_answered" : "not_pending", approved: params.approved, reason: "checkpoint" };
+      return { text: accepted ? "Checkpoint response accepted." : "Checkpoint is not awaiting a response.", details, structured: details };
     },
   );
   registerControlTool(
@@ -890,9 +917,10 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     "Workflow Stop",
     "Stop an active workflow run by ID",
     Type.Object({ runId: Type.String() }, { additionalProperties: false }),
+    WORKFLOW_STOP_OUTPUT,
     async (params) => {
       const result = await stopWorkflowRun(params.runId);
-      return { text: JSON.stringify(result), details: result };
+      return { text: JSON.stringify(result), details: result, structured: result };
     },
   );
   registerControlTool(
@@ -900,9 +928,10 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     "Workflow Status",
     "Read a compact summary of a workflow run in the current project",
     WORKFLOW_STATUS_PARAMETERS,
+    WORKFLOW_STATUS_OUTPUT,
     async (params, _signal, ctx) => {
       const result = await workflowStatusRun(params.runId, ctx);
-      return { text: JSON.stringify(result), details: result };
+      return { text: JSON.stringify(result), details: result, structured: result };
     },
   );
   let catalogRegistered = false;
@@ -916,13 +945,14 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     pi.registerTool({
       name: "workflow_catalog",
       ...workflowToolExposure("workflow_catalog", codemodeTools),
+      outputSchema: WORKFLOW_CATALOG_OUTPUT,
       label: "Workflow Catalog",
       description: "List reusable workflow functions and model aliases; pass `name` to load one entry in full",
       parameters: Type.Object({ name: Type.Optional(Type.String({ description: "Registered function or model alias name for full detail" })) }, { additionalProperties: false }),
       async execute(_id, params = {}) {
         const context = { cwd, projectTrusted: trustedProject, globalSettingsPath: workflowSettingsPath(extensionAgentDir) };
         const result = params.name === undefined ? registry.catalogIndex(context) : registry.catalogDetail(params.name, context);
-        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result, structuredContent: result as unknown as JsonValue };
       },
       renderCall(args, theme) {
         const title = theme.fg("toolTitle", theme.bold("workflow_catalog"));
@@ -1086,9 +1116,10 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     "Workflow Retry",
     "Retry a failed workflow run by replaying its completed structural operations",
     WORKFLOW_RETRY_PARAMETERS,
+    WORKFLOW_RECOVERY_OUTPUT,
     async (params, signal, ctx) => {
       const result = await recovery.retryWorkflowRun(params.runId, ctx, signal, params.foreground, params.expectedState);
-      return { text: completionControlContent(result), details: result };
+      return { text: completionControlContent(result), details: result, structured: completionControlValue(result) };
     },
   );
   registerControlTool(
@@ -1096,9 +1127,10 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     "Workflow Resume",
     "Resume an exhausted workflow with unchanged or patched aggregate budgets",
     Type.Object({ runId: Type.String(), expectedState: Type.Optional(Type.String({ description: "Persisted source state observed before recovery" })), budget: Type.Optional(Type.Unknown()), foreground: Type.Optional(Type.Boolean({ description: "Override the source launch mode for this recovery" })) }, { additionalProperties: false }),
+    WORKFLOW_RECOVERY_OUTPUT,
     async (params, signal, ctx) => {
       const result = await recovery.resumeWorkflowRun(params.runId, params.budget, ctx, signal, params.foreground, true, params.expectedState);
-      return { text: completionControlContent(result), details: result };
+      return { text: completionControlContent(result), details: result, structured: completionControlValue(result) };
     },
   );
   const deliverStaleTerminal = async (store: RunStore, run: PersistedRun): Promise<void> => {
@@ -1200,6 +1232,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     description: WORKFLOW_TOOL_DESCRIPTION,
     promptSnippet: WORKFLOW_TOOL_PROMPT_SNIPPET,
     parameters: WORKFLOW_TOOL_PARAMETERS,
+    outputSchema: WORKFLOW_LAUNCH_OUTPUT,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       let resolveDetached: ((result: ForegroundDetachResult) => void) | undefined;
       let foregroundStore: RunStore | undefined;
@@ -1207,7 +1240,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const detachedResult = params.foreground ? new Promise<ForegroundDetachResult>((resolve) => { resolveDetached = resolve; }) : undefined;
       const detachedToolResult = (run: PersistedRun) => {
         const detached = { runId: run.id, state: "running" as const, detached: true as const };
-        return { content: [{ type: "text" as const, text: JSON.stringify(detached) }], details: { ...detached, run, preview: `Moved workflow ${run.id} to background.` } };
+        return { content: [{ type: "text" as const, text: JSON.stringify(detached) }], details: { ...detached, run, preview: `Moved workflow ${run.id} to background.` }, structuredContent: detached };
       };
       try {
       const headless = object(ctx) && ctx.headless === true;
@@ -1330,7 +1363,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         }, async (error: unknown) => {
           await deliveryController.deliverTerminal(store, deliverFailureContent(error), true);
         });
-        return { content: [{ type: "text" as const, text: JSON.stringify({ runId, state: "running" }) }], details: { runId, preview: `Started workflow ${runId}.` } };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ runId, state: "running" }) }], details: { runId, preview: `Started workflow ${runId}.` }, structuredContent: { runId, state: "running" } };
       }
       void completion.then(async (result) => {
         await deliveryController.deliverDetachedTerminal(toolCallId, completionContent("background", result));
@@ -1355,7 +1388,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       }
       deliveryController.foregroundDeliveries.delete(toolCallId);
       const run = (await store.load()).run;
-      return { content: [{ type: "text" as const, text: foregroundDelivery.content }, ...(foregroundDelivery.inlined ? [{ type: "text" as const, text: `Workflow run ID: ${runId}` }] : [])], details: { runId, value, run } };
+      return { content: [{ type: "text" as const, text: foregroundDelivery.content }, ...(foregroundDelivery.inlined ? [{ type: "text" as const, text: `Workflow run ID: ${runId}` }] : [])], details: { runId, value, run }, structuredContent: { runId, state: "completed", value } };
       } catch (error) {
         if (params.foreground && foregroundStore && completionInstalled) {
           const claim = await deliveryController.claimForegroundDelivery(foregroundStore, toolCallId);
