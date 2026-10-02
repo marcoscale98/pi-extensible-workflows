@@ -4,7 +4,7 @@ import { copyFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type, type Api, type Model, type Static, type TSchema } from "@earendil-works/pi-ai";
-import { copyToClipboard, getAgentDir, ModelSelectorComponent, type ExtensionAPI, type ExtensionContext, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { copyToClipboard, getAgentDir, ModelSelectorComponent, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext, type ModelRuntime, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { FairAgentScheduler, getAgentAttempts, WorkflowAgentExecutor, localAgentTransport, type AgentActivity, type AgentAttempt, type AgentDefinition, type AgentExecutionRoot, type AgentProgress, type AgentProviderFailure, type AgentProviderRecovery } from "./agent-execution.js";
 import { RunLifecycle, WorkflowEventPublisher, hostSessionContext, nextNamedOccurrence, withWorkflowFunctions, withoutActiveShells, workflowRunContext, type WorkflowEventSink, type WorkflowRunRecord, type WorkflowToolUpdate } from "./host-runtime.js";
 import { createWorkflowRecovery, persistedFailure, type ModelRegistryCapability } from "./host-recovery.js";
@@ -17,13 +17,14 @@ import { SerialLane, asWorkflowError, createLaunchSnapshot, errorCode, errorText
 import { loadCodemodeToolsSetting, loadSettings, preflight, resolveAgentResourcePolicy, resolveWorkflowSettings, validateCheckpoint, validateModelAliasAvailability, validateWorkflowLaunchWithRegistry, workflowProjectSettingsPath, workflowSettingsPath, workflowToolExposure } from "./validation.js";
 import { loadAgentDefinitions, loadProjectAgentDefinitions } from "./roles.js";
 import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIfIdle, retainWorkflowRegistry, type WorkflowRegistryApi } from "./registry.js";
-import { agentHandleTurnPath, agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath } from "./execution.js";
+import { agentHandleTurnPath, agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath, toolIdentityPath } from "./execution.js";
+import { prepareScriptToolLoadout, scriptTool, scriptToolContext, scriptToolValue, validateScriptToolReferences } from "./script-tools.js";
 import backgroundWidget, { type BackgroundWidgetAPI } from "./background-widget.js";
 import { showChangelogNotice } from "./changelog.js";
 import { createTrajectoryRunLoader, createTrajectoryRunMetadataLoader, createTrajectorySubagentLoader, createTrajectorySubagentMetadataLoader, createTrajectoryTranscriptLoader, type TrajectoryActionRequest, type TrajectoryActionResult, type TrajectorySubagent } from "./trajectory.js";
 import { getTrajectoryHost, type TrajectoryPublisherProvider } from "./trajectory-host-handle.js";
 import { getSubagentManager } from "./subagent-manager-handle.js";
-import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, THINKING_LEVELS, WORKFLOW_BLOCKED_EVENT, WorkflowError, isContextFileScope, isExternallyEndedRunState, isHardTerminalRunState, roleNameOf, type AgentAccounting, type AgentIdentity, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type LiveSessionHandoff, type HardTerminalRunState, type ModelSpec, type PreparedAgentSession, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type WorkflowAgentSession, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
+import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, THINKING_LEVELS, WORKFLOW_BLOCKED_EVENT, WorkflowError, isContextFileScope, isExternallyEndedRunState, isHardTerminalRunState, roleNameOf, type AgentAccounting, type AgentIdentity, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type LiveSessionHandoff, type HardTerminalRunState, type ModelSpec, type PreparedAgentSession, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type ToolIdentity, type WorkflowAgentSession, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import type { SubagentManagerContext, SubagentRunRequest, SubagentStatus } from "../subagents/src/contracts.js";
 import {
   SETTLED_AGENT_STATES,
@@ -166,7 +167,7 @@ export function formatWorkflowPreview(args: { script?: unknown; scriptPath?: unk
   return [`workflow ${name}`, typeof args.description === "string" && args.description.trim() ? args.description.trim() : ""].filter(Boolean).join("\n");
 }
 export const WORKFLOW_TOOL_LABEL = "Workflow";
-export const WORKFLOW_TOOL_DESCRIPTION = "Run a deterministic JavaScript workflow with a named inline or file-backed parallel-to-summary path by default"
+export const WORKFLOW_TOOL_DESCRIPTION = "Run a deterministic JavaScript workflow with a named inline or file-backed parallel-to-summary path by default. Scripts call this session's tools as `await tools.<name>(args)`, outside withWorktree: a tool resolves to its text unless its description gives a `tools.<name>(args)` result shape, and failures reject"
 export const WORKFLOW_TOOL_PROMPT_SNIPPET = "Run a deterministic, resumable JavaScript workflow. Prefer a named inline script that fans out independent work with parallel(...), awaits the keyed results before interpolating them into one summarizing agent(...), and returns. Provide exactly one of script or scriptPath and a non-empty name. Registered catalog functions are available as globals inside the script; call them there, for example return await someFunction(args). Advanced controls include registered functions, outputSchema, budgets, checkpoints, worktrees, retry/resume, CLI export, and pipelines. Runs are in the background by default; completion arrives as a follow-up message. Set foreground: true when the caller must wait for the final value. Manage runs from the interactive /workflow picker; use workflow_status, workflow_resume, workflow_retry, workflow_stop, and workflow_respond for explicit tool controls. If a foreground call detaches before its result is accepted, its terminal success or failure is promoted to one follow-up message. Foreground results include the completed run ID. Recovery inherits the source launch mode; legacy snapshots without launchMode recover in the background. Set foreground: true or false on workflow_resume/workflow_retry to override it; foreground recovery waits for terminal value and run details, while background recovery returns immediately and delivers completion or failure as a follow-up. After failure follow-ups, especially CANCELLED or interrupted runs, call workflow_status({ runId }) before recovery or replacement work, then pass its state as expectedState to workflow_retry/workflow_resume so recovery cannot act on a state that changed. Recovery map: agent(..., { retries }) reruns one agent call in the same run for transient failures; workflow_retry({ runId, expectedState?, foreground? }) replays a failed run into a child; workflow_resume({ runId, expectedState?, budget?, foreground? }) continues a budget_exhausted run; parentRunId on a new launch only borrows named worktrees and never replays or resumes."
 export const WORKFLOW_TOOL_PARAMETERS = Type.Object({
   name: Type.String({ description: "Required non-empty workflow name" }),
@@ -279,9 +280,9 @@ function modelInventory(root: ModelSpec | undefined, registry: ModelRegistryCapa
   if (rootName) { knownModels.add(rootName); availableModels.add(rootName); }
   return { knownModels, availableModels };
 }
-function resumeHostContext(ctx: unknown): { model: { provider: string; id: string } | undefined; modelRegistry: ModelRegistryCapability | undefined; deliveryContext: CompletionDeliveryContext } {
+function resumeHostContext(ctx: unknown): { model: { provider: string; id: string } | undefined; modelRegistry: ModelRegistryCapability | undefined; deliveryContext: CompletionDeliveryContext; toolContext: ExtensionToolContext | undefined } {
   const model = object(ctx) && object(ctx.model) && typeof ctx.model.provider === "string" && typeof ctx.model.id === "string" ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
-  return { model, modelRegistry: contextHostCapabilities(ctx).modelRegistry, deliveryContext: completionContext(ctx) };
+  return { model, modelRegistry: contextHostCapabilities(ctx).modelRegistry, deliveryContext: completionContext(ctx), toolContext: scriptToolContext(ctx) };
 }
 type AliasVirtualModel = { provider: string; id: string; name: string; thinkingLevels: readonly string[]; route: (request: { thinkingLevel: string }, ctx: ExtensionContext) => { model: Model<Api>; thinkingLevel: string } };
 /** Lists workflow model aliases in `/model` as virtual models; needs a Pi host with `registerVirtualModel`. */
@@ -618,6 +619,38 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         });
         runs.get(store.runId)?.update?.(workflowToolUpdate(withLiveActivities(stopped)));
       }
+    } finally { await lifecycle.leave(); }
+  };
+  /** A script `tools.<id>(args)` call: replayed from the journal, otherwise run through the session's tool pipeline and journaled. */
+  const toolForRun = async (store: RunStore, lifecycle: RunLifecycle, context: ExtensionToolContext | undefined, identifier: string, args: Readonly<Record<string, JsonValue>>, signal: AbortSignal, identity: ToolIdentity): Promise<JsonValue> => {
+    await lifecycle.enter();
+    try {
+      const path = toolIdentityPath(identifier, args, identity);
+      const replayed = await store.replay(path);
+      if (replayed) return replayed.value;
+      if (!context) fail("UNKNOWN_TOOL", `tools.${identifier} needs a run launched or recovered by a Pi tool call; runs resumed from /workflow or at session start, and headless launches, only replay journaled tool calls`);
+      // Rendering is best-effort: it must never lose or mask a completed call.
+      const render = async () => { try { const update = runs.get(store.runId)?.update; if (update) update(workflowToolUpdate(withLiveActivities((await store.load()).run))); } catch { /* best-effort progress */ } };
+      let value: JsonValue;
+      try {
+        const tool = scriptTool(context, identifier);
+        if (!tool) fail("UNKNOWN_TOOL", `tools.${identifier} is not a tool this session can call`);
+        const cancelled = (): boolean => signal.aborted;
+        if (cancelled()) fail("CANCELLED", "Workflow cancelled");
+        const finished = liveAgents.toolStarted(store.runId, tool.name);
+        try {
+          await render();
+          const outcome = await context.executeTool(tool.name, args, { signal });
+          if (cancelled()) fail("CANCELLED", "Workflow cancelled");
+          value = scriptToolValue(tool, outcome);
+        } finally { finished(); }
+      } catch (error) {
+        // A stale context throws plain errors from ctx.tools; report them as tool failures.
+        throw error instanceof WorkflowError ? error : new WorkflowError("TOOL_FAILED", `tools.${identifier}: ${errorText(error)}`);
+      }
+      await store.complete(path, value);
+      await render();
+      return value;
     } finally { await lifecycle.leave(); }
   };
   const lifecycleFor = (store: RunStore, state: RunState, metadata: WorkflowMetadata) => new RunLifecycle(state, async (next, previous, reason) => {
@@ -1060,7 +1093,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     };
   };
   const recovery = createWorkflowRecovery({
-    pi, home, runs, scheduler, eventPublisher, persistRunState, projectTrusted, resumeHostContext, ensureSessionLease, coordinateRunMutation, createAgentExecutor, activeSnapshotTools, frozenResourcePolicy, resolveLaunchPrologue: resumeLaunchPrologue, resumeRoles, workflowAgentHandler, shellForRun, resolveWorktree, checkpointBridge, phaseBridge, logBridge, lifecycleFor, createProviderErrorRecovery, cleanupTerminalRun, deliver: (content) => { deliver(pi, content); }, deliverTerminal: deliveryController.deliverTerminal, workflowToolUpdate, registry, modelSpec,
+    pi, home, runs, scheduler, eventPublisher, persistRunState, projectTrusted, resumeHostContext, ensureSessionLease, coordinateRunMutation, createAgentExecutor, activeSnapshotTools, frozenResourcePolicy, resolveLaunchPrologue: resumeLaunchPrologue, resumeRoles, workflowAgentHandler, shellForRun, toolForRun, resolveWorktree, checkpointBridge, phaseBridge, logBridge, lifecycleFor, createProviderErrorRecovery, cleanupTerminalRun, deliver: (content) => { deliver(pi, content); }, deliverTerminal: deliveryController.deliverTerminal, workflowToolUpdate, registry, modelSpec,
   });
   const resumeSelectedWorkflow = async (runId: string, foreground: boolean, context: unknown, budgetPatch?: unknown): Promise<{ workflowName: string; state: "running" | "completed" | "awaiting_approval"; attached: boolean; value?: JsonValue }> => {
     const run = runs.get(runId);
@@ -1233,6 +1266,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     promptSnippet: WORKFLOW_TOOL_PROMPT_SNIPPET,
     parameters: WORKFLOW_TOOL_PARAMETERS,
     outputSchema: WORKFLOW_LAUNCH_OUTPUT,
+    prepareLoadout: prepareScriptToolLoadout,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       let resolveDetached: ((result: ForegroundDetachResult) => void) | undefined;
       let foregroundStore: RunStore | undefined;
@@ -1268,6 +1302,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       if (trustedProject && launch.resolution.project.extensionSettings !== undefined) registry.validateExtensionSettings(launch.resolution.project.extensionSettings, { source: "project", cwd: ctx.cwd, projectTrusted: true, settingsPath: launch.resolution.projectSettingsPath });
       const validated = validateWorkflowLaunchWithRegistry(params, { cwd: ctx.cwd, agentDir: extensionAgentDir, projectTrusted: trustedProject, availableModels, rootTools: new Set(rootTools), modelAliases, knownModels, settingsPath, ...(settings.extensionSettings === undefined ? {} : { extensionSettings: settings.extensionSettings }) }, registry);
       const { script, checked, agentDefinitions, projectAgentDefinitions, roleNames } = validated;
+      const toolContext = scriptToolContext(ctx);
+      validateScriptToolReferences(script, toolContext);
       await ensureSessionLease(ctx.cwd, ctx.sessionManager.getSessionId());
       const runId = randomUUID();
       const args = params.args ?? null;
@@ -1324,7 +1360,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       runs.set(runId, runRecord);
       if (params.foreground && onUpdate) onUpdate(workflowToolUpdate((await store.load()).run));
       scheduler.addRun(runId, settings.concurrency, () => runs.get(runId)?.budget.checkAgentLaunch(), settings.extensionSettings);
-      const execution = runWorkflow(script, args, withWorkflowFunctions({ shell: (command, options, signal, identity) => shellForRun(store, checked.metadata, lifecycle, command, options, signal, identity), agent: workflowAgentHandler(store, checked.metadata, lifecycle, executor, ctx.cwd, runId, (role, model) => capturedRoles.capture(role, model)), worktree: async (owner) => resolveWorktree(store, checked.metadata, owner), checkpoint: checkpointBridge(runId, store, checked.metadata, () => runs.get(runId)?.foreground ?? foregroundAttached, ctx.hasUI ? ctx.ui : undefined, headless), phase: phaseBridge(store, checked.metadata, lifecycle), log: logBridge(store, lifecycle, checked.metadata.name) }, store, runContext, registry, settings.extensionSettings), runController.signal);
+      const execution = runWorkflow(script, args, withWorkflowFunctions({ tool: (identifier, toolArgs, signal, identity) => toolForRun(store, lifecycle, toolContext, identifier, toolArgs, signal, identity), shell: (command, options, signal, identity) => shellForRun(store, checked.metadata, lifecycle, command, options, signal, identity), agent: workflowAgentHandler(store, checked.metadata, lifecycle, executor, ctx.cwd, runId, (role, model) => capturedRoles.capture(role, model)), worktree: async (owner) => resolveWorktree(store, checked.metadata, owner), checkpoint: checkpointBridge(runId, store, checked.metadata, () => runs.get(runId)?.foreground ?? foregroundAttached, ctx.hasUI ? ctx.ui : undefined, headless), phase: phaseBridge(store, checked.metadata, lifecycle), log: logBridge(store, lifecycle, checked.metadata.name) }, store, runContext, registry, settings.extensionSettings), runController.signal);
       runRecord.execution = execution;
       await eventPublisher.runStarted(store, checked.metadata);
       const finish = execution.result.then(async (value) => {
@@ -1497,6 +1533,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
 type LiveAgentState = { session?: WorkflowAgentSession; prepared?: Readonly<PreparedAgentSession>; handoff?: LiveSessionHandoff; activity?: AgentActivity; lastEventAt?: number };
 class LiveAgentRegistry {
   readonly #byRun = new Map<string, Map<string, LiveAgentState>>();
+  readonly #tools = new Map<string, Set<{ name: string; startedAt: number }>>();
   get(runId: string, agentId: string): Readonly<LiveAgentState> | undefined { return this.#byRun.get(runId)?.get(agentId); }
   setSession(runId: string, agentId: string, session?: WorkflowAgentSession): void {
     if (session) this.#state(runId, agentId).session = session;
@@ -1513,17 +1550,26 @@ class LiveAgentRegistry {
   setEventTime(runId: string, agentId: string, timestamp?: number): void {
     if (timestamp !== undefined) this.#state(runId, agentId).lastEventAt = timestamp;
   }
-  deleteRun(runId: string): void { this.#byRun.delete(runId); }
-  /** Overlays live activity and freshness onto a persisted run; returns the input when nothing is live. */
+  /** Marks a script tool call in flight until the returned callback runs. */
+  toolStarted(runId: string, name: string): () => void {
+    const call = { name, startedAt: Date.now() };
+    const calls = this.#tools.get(runId) ?? new Set<{ name: string; startedAt: number }>();
+    this.#tools.set(runId, calls.add(call));
+    return () => { calls.delete(call); if (!calls.size && this.#tools.get(runId) === calls) this.#tools.delete(runId); };
+  }
+  deleteRun(runId: string): void { this.#byRun.delete(runId); this.#tools.delete(runId); }
+  /** Overlays live activity, freshness, and script tool calls onto a persisted run; returns the input when nothing is live. */
   overlay(run: PersistedRun): PersistedRun {
+    const tools = this.#tools.get(run.id);
+    const withTools = tools?.size ? { ...run, activeTools: [...tools].map((call) => ({ ...call })) } : run;
     const agents = this.#byRun.get(run.id);
-    if (!agents?.size) return run;
+    if (!agents?.size) return withTools;
     const next = run.agents.map((agent) => {
       const live = agents.get(agent.id);
       if (!live || (live.activity === undefined && live.lastEventAt === undefined)) return agent;
       return { ...agent, ...(live.activity === undefined ? {} : { activity: live.activity }), ...(live.lastEventAt === undefined ? {} : { lastEventAt: live.lastEventAt }) };
     });
-    return next.some((agent, index) => agent !== run.agents[index]) ? { ...run, agents: next } : run;
+    return next.some((agent, index) => agent !== run.agents[index]) ? { ...withTools, agents: next } : withTools;
   }
   #state(runId: string, agentId: string): LiveAgentState {
     const agents = this.#byRun.get(runId) ?? new Map<string, LiveAgentState>();

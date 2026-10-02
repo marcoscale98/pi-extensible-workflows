@@ -1,9 +1,14 @@
 # Changelog
 ## Unreleased
 
+### Breaking changes
+
+- `tools` is a reserved workflow global: registering a workflow function named `tools` fails with `GLOBAL_COLLISION`. Rename the function.
+
 ### New capabilities
 
 - Workflow and subagent tools declare an `outputSchema` and return `structuredContent`, so Pi `codemode` scripts receive objects instead of JSON text. For example, `await tools.workflow_status({ runId })` resolves to `{ runId, workflowName, state, agents, ... }`. A completed foreground `workflow`, `workflow_retry`, or `workflow_resume` call resolves with the full `value`, even when the model sees only a result descriptor. Inside workflow agents, the child agent tools `agent` and `get_subagent_result` do the same, and Herdr-bridged tools keep their `outputSchema`.
+- Workflow scripts call the launching session's tools directly as `await tools.<name>(args)`, through Pi's `ctx.executeTool()`, with the names and results of Pi `codemode`. Permission handlers apply, results are journaled for resume and retry, the live workflow item shows calls in flight, and an unknown tool fails the launch with `UNKNOWN_TOOL`. Failed calls reject with the new `TOOL_FAILED` code.
 - `workflow_status`, `workflow_catalog`, and `subagents_inspect` carry the `readOnlyHint` tool annotation, so permission extensions that read annotations can skip confirming them.
 
 ### Internal

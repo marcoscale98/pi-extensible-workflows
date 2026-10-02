@@ -29,7 +29,7 @@ export const WORKFLOW_BLOCKED_EVENT = "workflow:blocked";
 export const ERROR_CODES = [
   "CONFIG_ERROR", "INVALID_SETTINGS", "INVALID_SYNTAX", "INVALID_METADATA", "DUPLICATE_NAME", "INVALID_SCHEMA", "UNKNOWN_MODEL", "UNKNOWN_TOOL", "UNKNOWN_AGENT_TYPE",
   "RUN_OWNED", "RUN_NOT_FOUND", "REGISTRY_FROZEN", "GLOBAL_COLLISION", "MISSING_WORKFLOW", "RPC_LIMIT_EXCEEDED", "SHELL_FAILED", "AGENT_TIMEOUT", "AGENT_FAILED", "AGENT_RESULT_COLLECTED", "RESULT_INVALID",
-  "CANCELLED", "WORKER_UNRESPONSIVE", "WORKTREE_FAILED", "RESUME_INCOMPATIBLE", "BUDGET_EXHAUSTED", "INTERNAL_ERROR",
+  "TOOL_FAILED", "CANCELLED", "WORKER_UNRESPONSIVE", "WORKTREE_FAILED", "RESUME_INCOMPATIBLE", "BUDGET_EXHAUSTED", "INTERNAL_ERROR",
   ] as const;
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
@@ -195,6 +195,7 @@ export interface RunRecord {
   activeShells?: number;
   activeShellStartedAt?: number;
   activeShellsByPhase?: readonly WorkflowPhaseShellActivity[];
+  activeTools?: readonly { name: string; startedAt: number }[]; // Script tool calls in flight: a live overlay for rendering, never persisted.
   error?: WorkflowErrorShape;
   failedAt?: string;
   budget?: WorkflowBudget;
@@ -357,7 +358,9 @@ export interface FunctionIdentity { path: string; structuralPath: readonly strin
 export type AgentContinuity = "fresh" | "continued";
 export interface AgentIdentity { structuralPath: readonly string[]; callSite: string; occurrence: number; parentBreadcrumb?: string; worktreeOwner?: string; handle?: string; turn?: number }
 export interface ShellIdentity { structuralPath: readonly string[]; callSite: string; occurrence: number; worktreeOwner?: string }
-export interface WorkflowBridge { agent?: (prompt: string, options: Readonly<Record<string, JsonValue>>, signal: AbortSignal, identity: AgentIdentity) => Promise<JsonValue>; shell?: (command: string, options: ShellOptions, signal: AbortSignal, identity: ShellIdentity) => Promise<ShellResult>; checkpoint?: (input: Readonly<Record<string, JsonValue>>, signal: AbortSignal) => boolean | Promise<boolean>; function?: (name: string, input: Readonly<Record<string, JsonValue>>, signal: AbortSignal, identity: FunctionIdentity) => Promise<JsonValue>; worktree?: (owner: string, signal: AbortSignal) => Promise<Readonly<WorkflowWorktreeReference>>; functions?: Readonly<Record<string, { name: string }>>; phase?: (name: string) => void | Promise<void>; log?: (message: string) => void | Promise<void> }
+/** A script `tools.<id>(args)` call: the n-th call of that tool within one structural scope. */
+export interface ToolIdentity { structuralPath: readonly string[]; occurrence: number }
+export interface WorkflowBridge { agent?: (prompt: string, options: Readonly<Record<string, JsonValue>>, signal: AbortSignal, identity: AgentIdentity) => Promise<JsonValue>; shell?: (command: string, options: ShellOptions, signal: AbortSignal, identity: ShellIdentity) => Promise<ShellResult>; checkpoint?: (input: Readonly<Record<string, JsonValue>>, signal: AbortSignal) => boolean | Promise<boolean>; function?: (name: string, input: Readonly<Record<string, JsonValue>>, signal: AbortSignal, identity: FunctionIdentity) => Promise<JsonValue>; worktree?: (owner: string, signal: AbortSignal) => Promise<Readonly<WorkflowWorktreeReference>>; functions?: Readonly<Record<string, { name: string }>>; phase?: (name: string) => void | Promise<void>; log?: (message: string) => void | Promise<void>; tool?: (identifier: string, args: Readonly<Record<string, JsonValue>>, signal: AbortSignal, identity: ToolIdentity) => Promise<JsonValue> }
 export interface WorkflowExecution { result: Promise<JsonValue>; cancel: () => void }
 export interface StaticWorkflowScope { kind: "parallel" | "pipeline"; name: string | null; key: string | null }
 export type StaticWorkflowExecution = "parallel" | "sequential";

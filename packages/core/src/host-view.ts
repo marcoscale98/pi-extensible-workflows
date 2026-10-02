@@ -90,6 +90,15 @@ function formatShellActivity(activeShells: number | undefined, startedAt: number
   const timing = started && startedAt !== undefined && !Number.isNaN(started.getTime()) ? ` ${styles.dim(`started=${started.toISOString()} elapsed=${formatWorkflowRuntime(Math.max(0, now - startedAt))}`)}` : "";
   return `${styles.accent(spinner)} shell ${styles.accent("[running]")} ${styles.dim(`(${String(count)} active)`)}${timing}`;
 }
+function formatToolActivity(run: Pick<PersistedRun, "activeTools">, spinner: string, styles: WorkflowProgressStyles, now: number): string | undefined {
+  const calls = run.activeTools ?? [];
+  if (!calls.length) return undefined;
+  const counts = new Map<string, number>();
+  for (const { name } of calls) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const names = [...counts].map(([name, count]) => count > 1 ? `${name} ×${String(count)}` : name).join(", ");
+  const elapsed = formatWorkflowRuntime(Math.max(0, now - Math.min(...calls.map(({ startedAt }) => startedAt))));
+  return `${styles.accent(spinner)} tools ${styles.accent("[running]")} ${sanitizeDisplayText(names)} ${styles.dim(`elapsed=${elapsed}`)}`;
+}
 function formatLogTimestamp(timestamp: number | undefined): string {
   if (timestamp === undefined || !Number.isFinite(timestamp)) return "--:--:--";
   const date = new Date(timestamp);
@@ -161,6 +170,8 @@ function workflowProgressLines(run: PersistedRun, spinner: string, styles: Workf
   const scopedShells = (run.activeShellsByPhase?.length ?? 0) > 0;
   const shellActivity = scopedShells ? undefined : formatShellActivity(run.activeShells, run.activeShellStartedAt, spinner, styles, now);
   if (shellActivity) lines.push(`  ${shellActivity}`);
+  const toolActivity = formatToolActivity(run, spinner, styles, now);
+  if (toolActivity) lines.push(`  ${toolActivity}`);
   const byId = new Map(run.agents.map((agent) => [agent.id, agent]));
   const position = new Map(run.agents.map((agent, index) => [agent, index]));
   const renderAgents = (agents: readonly AgentRecord[], nested: boolean) => renderGroupedAgents(agents, ({ agent, depth }, grouped) => {
@@ -470,7 +481,7 @@ export function workflowProgressBlock(run: PersistedRun, theme: Theme, progress?
     invalidate() {
       const displayed = currentRun();
       const now = Date.now();
-      if (!progress || !refresh || displayed.state !== "running" || (!displayed.agents.some((agent) => agent.state === "running") && (displayed.activeShells ?? 0) <= 0)) return;
+      if (!progress || !refresh || displayed.state !== "running" || (!displayed.agents.some((agent) => agent.state === "running") && (displayed.activeShells ?? 0) <= 0 && !displayed.activeTools?.length)) return;
       if (progress.refresh || now - progress.lastRefreshAt < WORKFLOW_PROGRESS_REFRESH_MS) return;
       progress.lastRefreshAt = now;
       const inputRun = progress.inputRun;
@@ -716,6 +727,8 @@ export function formatNavigatorDashboard(run: PersistedRun, checkpoints: readonl
   const lines = [header, meta, ...formatCompactBudgetStatus(run)];
   const shellActivity = formatShellActivity(run.activeShells, run.activeShellStartedAt, "⠦", PLAIN_WORKFLOW_PROGRESS_STYLES, now);
   if (shellActivity) lines.push(`  ${shellActivity}`);
+  const toolActivity = formatToolActivity(run, "⠦", PLAIN_WORKFLOW_PROGRESS_STYLES, now);
+  if (toolActivity) lines.push(`  ${toolActivity}`);
   if (run.error) lines.push(`Error: ${run.error.code}: ${run.error.message}`);
   if (run.events?.length) lines.push(...run.events.filter((event) => event.type === "warning").map((event) => `Warning: ${event.message}`));
   lines.push("");
@@ -753,6 +766,8 @@ export function formatNavigatorRun(loaded: { run: PersistedRun; snapshot: Readon
   ];
   const shellActivity = formatShellActivity(run.activeShells, run.activeShellStartedAt, "⠦", PLAIN_WORKFLOW_PROGRESS_STYLES, now);
   if (shellActivity) lines.push(`  ${shellActivity}`);
+  const toolActivity = formatToolActivity(run, "⠦", PLAIN_WORKFLOW_PROGRESS_STYLES, now);
+  if (toolActivity) lines.push(`  ${toolActivity}`);
   if (run.error) lines.push(`Run error: ${run.error.code}: ${run.error.message}`);
   if (run.events?.length) lines.push(...run.events.filter((event) => event.type === "warning").map((event) => `Warning: ${event.message}`));
   const aliases = snapshot.modelAliases ?? snapshot.settings.modelAliases;
@@ -850,6 +865,8 @@ export function formatWorkflowPhaseDashboard(run: PersistedRun, snapshot: Readon
   const scopedShells = (run.activeShellsByPhase?.length ?? 0) > 0;
   const shellActivity = scopedShells ? undefined : formatShellActivity(run.activeShells, run.activeShellStartedAt, "⠦", styles, now);
   if (shellActivity) lines.push(`  ${shellActivity}`);
+  const toolActivity = formatToolActivity(run, "⠦", styles, now);
+  if (toolActivity) lines.push(`  ${toolActivity}`);
   const actionRows = (): string[] => {
     const actions = selection.actions;
     if (!actions) return [];

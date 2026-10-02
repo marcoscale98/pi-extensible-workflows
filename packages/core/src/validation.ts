@@ -219,6 +219,24 @@ function callHasTrailingComma(source: string, call: WorkflowCall): boolean {
   return current?.type.label === ")" && previous?.type.label === ",";
 }
 
+/**
+ * The `tools.<id>` members a workflow script names statically. Any other use of `tools`, such as a
+ * local declaration that shadows the global or passing it around, makes the set unknowable: undefined.
+ */
+export function scriptToolReferences(script: string): string[] | undefined {
+  const body = workflowBody(script);
+  if (!body.trim()) return [];
+  const names = new Set<string>();
+  const opaque = (node: acorn.AnyNode, parent?: acorn.AnyNode): boolean => {
+    if (node.type === "Identifier" && node.name === "tools") {
+      if (parent?.type === "MemberExpression" && parent.object === node && !parent.computed && parent.property.type === "Identifier") names.add(parent.property.name);
+      else if (!(parent?.type === "Property" && parent.key === node && !parent.computed && !parent.shorthand || parent?.type === "MemberExpression" && parent.property === node && !parent.computed)) return true;
+    }
+    return astChildren(node).some((child) => opaque(child, node));
+  };
+  return opaque(parseWorkflow(body)) ? undefined : [...names];
+}
+
 export function instrumentWorkflow(script: string): string {
   const body = workflowBody(script);
   if (!body.trim()) return body;
