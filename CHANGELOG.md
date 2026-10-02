@@ -1,6 +1,8 @@
 # Changelog
 ## Unreleased
 
+## [5.19.0] - 2026-10-02
+
 ### Breaking changes
 
 - `tools` is a reserved workflow global: registering a workflow function named `tools` fails with `GLOBAL_COLLISION`. Rename the function.
@@ -13,7 +15,7 @@
 
 ### Internal
 
-- Build and test against Pi 1.0.0.
+- Build and test against Pi 1.0.0. `@piewf/cli` bundles Pi 1.0.0.
 
 ## [5.18.0] - 2026-09-30
 
