@@ -211,7 +211,7 @@ const MAX_LIVE_STRING_BYTES = 64 * 1024;
 const MAX_LIVE_ARRAY_ENTRIES = 256;
 const MAX_LIVE_OBJECT_KEYS = 64;
 const LIVE_METADATA_ARRAY_KEYS = new Set(["agents", "runs", "subagents"]);
-const LIVE_TRUNCATABLE_ARRAY_KEYS = new Set(["events", "phaseHistory"]);
+const LIVE_TRUNCATABLE_ARRAY_KEYS = new Set(["events", "phaseHistory", "scriptCalls"]);
 const LIVE_METADATA_OBJECT_KEYS = new Set(["transcripts"]);
 function liveValueWillBeBounded(value: unknown, key = "", depth = 0): boolean {
   if (typeof value === "string") return Buffer.byteLength(value) > MAX_LIVE_STRING_BYTES;

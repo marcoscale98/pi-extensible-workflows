@@ -179,6 +179,8 @@ export interface WorkflowRunEvent { type: string; message: string; timestamp?: n
 export interface WorkflowRetryProvenance { sourceRunId: string; lineageRootRunId: string; completedPaths: readonly string[]; incompletePaths: readonly string[]; namedWorktrees: readonly string[] }
 export interface WorkflowPhaseRecord { phase: string; afterAgent: number }
 export interface WorkflowPhaseShellActivity { phaseIndex: number; active: number; startedAt: number }
+/** A script call recorded for inspection. Tool payloads stay in the replay journal, not this record. Oversized shell inputs are JSON prefixes, with `inputBytes` their full size. */
+export interface WorkflowScriptCall { kind: "shell" | "tool"; name: string; path: string; input?: JsonValue; inputBytes?: number; phase?: string; startedAt: number; finishedAt?: number; error?: { code: WorkflowErrorCode; message?: string } }
 export interface RunRecord {
   id: string;
   workflowName: string;
@@ -196,6 +198,7 @@ export interface RunRecord {
   activeShellStartedAt?: number;
   activeShellsByPhase?: readonly WorkflowPhaseShellActivity[];
   activeTools?: readonly { name: string; startedAt: number }[]; // Script tool calls in flight: a live overlay for rendering, never persisted.
+  scriptCalls?: readonly WorkflowScriptCall[];
   error?: WorkflowErrorShape;
   failedAt?: string;
   budget?: WorkflowBudget;

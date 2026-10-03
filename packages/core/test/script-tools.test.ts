@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { testExtensionApi } from "./support.js";
-import workflowExtension, { runWorkflow, WorkflowError } from "../src/index.js";
+import workflowExtension, { runWorkflow, WorkflowError, RunStore } from "../src/index.js";
 import { toolIdentityPath } from "../src/execution.js";
 import { formatWorkflowProgress } from "../src/host-view.js";
 import { listRunIds } from "../src/persistence.js";
+import { loadTrajectoryRuns } from "../src/trajectory.js";
 import { prepareScriptToolLoadout, scriptToolValue } from "../src/script-tools.js";
 import { scriptToolReferences } from "../src/validation.js";
 import type { ExtensionToolContext, ToolLoadout } from "@earendil-works/pi-coding-agent";
@@ -79,7 +80,7 @@ void test("the workflow tool runs script tools, shows them while in flight, and 
   assert.deepEqual(await listRunIds(home, "session", home, false), [], "an unknown tool fails the launch before the run exists");
 
   const updates: PersistedRun[] = [];
-  const script = "const file = await tools.read({ path: 'a.txt' }); const sh = await tools.bash({ command: 'ls' }); return { file, exit: sh.exit_code };";
+  const script = "phase('io'); const echo = await shell('printf hi', { env: { SECRET: 'value' } }); const file = await tools.read({ path: 'a.txt' }); const sh = await tools.bash({ command: 'ls' }); return { file, exit: sh.exit_code, echo: echo.stdout };";
   await assert.rejects(execute("workflow")("first", { name: "tools", script, foreground: true }, new AbortController().signal, (update: { details: { run: PersistedRun } }) => { updates.push(update.details.run); }, ctx), (error: unknown) => error instanceof WorkflowError && error.code === "TOOL_FAILED");
   assert.deepEqual(executed, ["read", "bash"]);
   const inFlight = updates.find((run) => run.activeTools?.length);
@@ -91,7 +92,74 @@ void test("the workflow tool runs script tools, shows them while in flight, and 
   bashFails = false;
   const [failedRunId] = await listRunIds(home, "session", home, false);
   assert.ok(failedRunId);
+  const [failed] = await loadTrajectoryRuns(home, "session", home);
+  const calls = failed?.run.scriptCalls ?? [];
+  assert.deepEqual(calls.map(({ kind, name, input, phase, error, output }) => ({ kind, name, input, phase, error, output })), [
+    { kind: "shell", name: "shell", input: { command: "printf hi", env: ["SECRET"] }, phase: "io", error: undefined, output: { status: "available", value: { exitCode: 0, stdout: "hi", stderr: "" }, bytes: 40 } },
+    { kind: "tool", name: "read", input: undefined, phase: "io", error: undefined, output: { status: "completed" } },
+    { kind: "tool", name: "bash", input: undefined, phase: "io", error: { code: "TOOL_FAILED" }, output: { status: "failed", code: "TOOL_FAILED" } },
+  ], "tool payloads stay private, while shell inputs and output remain recorded");
+  const store = new RunStore(home, "session", failedRunId, home);
+  const persisted = (await store.load()).run.scriptCalls;
+  assert.deepEqual(persisted?.filter(({ kind }) => kind === "tool").map((call) => ({ input: call.input, error: call.error })), [{ input: undefined, error: undefined }, { input: undefined, error: { code: "TOOL_FAILED" } }]);
+  const rawCalls: unknown = (JSON.parse(readFileSync(join(store.directory, "state.json"), "utf8")) as PersistedRun).scriptCalls;
+  assert.doesNotMatch(JSON.stringify(rawCalls), /a\.txt|bash blocked|content of/);
+  assert.ok(calls.every(({ startedAt, finishedAt }) => finishedAt !== undefined && finishedAt >= startedAt));
   const retried = await execute("workflow_retry")("retry", { runId: failedRunId, foreground: true }, new AbortController().signal, undefined, ctx);
-  assert.deepEqual(retried.structuredContent, { runId: (retried.structuredContent as { runId: string }).runId, parentRunId: failedRunId, state: "completed", value: { file: "content of a.txt", exit: 0 } });
+  const retriedRunId = (retried.structuredContent as { runId: string }).runId;
+  assert.deepEqual(retried.structuredContent, { runId: retriedRunId, parentRunId: failedRunId, state: "completed", value: { file: "content of a.txt", exit: 0, echo: "hi" } });
   assert.deepEqual(executed, ["read", "bash", "bash"], "the retry replays the journaled read and runs only the failed bash");
+  const child = (await loadTrajectoryRuns(home, "session", home)).find(({ run }) => run.id === retriedRunId);
+  assert.deepEqual(child?.run.scriptCalls?.map(({ name, output }) => [name, output.status]), [["bash", "completed"]], "replayed calls are not recorded again");
+});
+
+void test("script call record writes cannot change tool success or failure", async (t) => {
+  for (const write of ["start", "finish"] as const) {
+    for (const code of [undefined, "CANCELLED", "TOOL_FAILED"] as const) {
+      await t.test(`${write} write fails, tool outcome ${code ?? "success"}`, async (t) => {
+        const home = mkdtempSync(join(tmpdir(), "pi-script-call-write-failure-"));
+        t.after(() => { rmSync(home, { recursive: true, force: true }); });
+        const registered: Array<{ name: string; execute: (...args: unknown[]) => Promise<{ structuredContent?: unknown }> }> = [];
+        workflowExtension(testExtensionApi({ registerTool: (definition) => { registered.push(definition as (typeof registered)[number]); }, getActiveTools: () => ["workflow"] }), home);
+        const workflow = registered.find(({ name }) => name === "workflow");
+        assert.ok(workflow);
+        const updateState = Object.getOwnPropertyDescriptor(RunStore.prototype, "updateState")?.value as RunStore["updateState"];
+        let recordWrites = 0;
+        let injected = false;
+        t.mock.method(RunStore.prototype, "updateState", async function (this: RunStore, update: Parameters<RunStore["updateState"]>[0]) {
+          return updateState.call(this, async (run) => {
+            const next = await update(run);
+            if (this.cwd === home && next.scriptCalls !== run.scriptCalls) {
+              recordWrites += 1;
+              if (recordWrites === (write === "start" ? 1 : 2)) {
+                injected = true;
+                throw new Error("record write failed");
+              }
+            }
+            return next;
+          });
+        });
+        let executions = 0;
+        const ctx = {
+          cwd: home, model: { provider: "openai", id: "gpt", contextWindow: 1_000_000, maxTokens: 1_000 }, getContextUsage: () => ({ tokens: 0, contextWindow: 1_000_000 }), sessionManager: { getSessionId: () => "session" }, tools: [tool("read")],
+          executeTool: async () => {
+            executions += 1;
+            if (code) throw new WorkflowError(code, "original tool failure");
+            return outcome("original tool result");
+          },
+        };
+        const result = workflow.execute("id", { name: "write-failure", script: "return tools.read({ path: 'private' });", foreground: true }, new AbortController().signal, undefined, ctx);
+        if (code) await assert.rejects(result, (error: unknown) => error instanceof WorkflowError && error.code === code && error.message.includes("original tool failure"));
+        else {
+          const completed = await result;
+          assert.equal((completed.structuredContent as { value: unknown }).value, "original tool result");
+          const [runId] = await listRunIds(home, "session", home, false);
+          assert.ok(runId);
+          assert.equal((await new RunStore(home, "session", runId, home).replayableOperations())[0]?.value, "original tool result");
+        }
+        assert.equal(injected, true);
+        assert.equal(executions, 1);
+      });
+    }
+  }
 });

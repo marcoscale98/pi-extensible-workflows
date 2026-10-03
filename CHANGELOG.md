@@ -1,6 +1,10 @@
 # Changelog
 ## Unreleased
 
+### New capabilities
+
+- Trajectory shows workflow script `shell()` and `tools.<name>()` calls: CALLS and the `script` Gantt lane share status and colours, with phase and timing. Tool arguments and results are not recorded in call state or shown in Trajectory (including live state and HTML exports/shares); tool errors keep only the code. The replay journal retains tool results unchanged. Shell calls keep inputs and output, with environment override names, not values. Calls are recorded without a count cap; tool metadata writes are best-effort, and journaled calls without finish timing show completed with unknown duration.
+
 ## [5.19.0] - 2026-10-02
 
 ### Breaking changes

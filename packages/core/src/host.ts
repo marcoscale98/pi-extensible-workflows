@@ -24,7 +24,7 @@ import { showChangelogNotice } from "./changelog.js";
 import { createTrajectoryRunLoader, createTrajectoryRunMetadataLoader, createTrajectorySubagentLoader, createTrajectorySubagentMetadataLoader, createTrajectoryTranscriptLoader, type TrajectoryActionRequest, type TrajectoryActionResult, type TrajectorySubagent } from "./trajectory.js";
 import { getTrajectoryHost, type TrajectoryPublisherProvider } from "./trajectory-host-handle.js";
 import { getSubagentManager } from "./subagent-manager-handle.js";
-import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, THINKING_LEVELS, WORKFLOW_BLOCKED_EVENT, WorkflowError, isContextFileScope, isExternallyEndedRunState, isHardTerminalRunState, roleNameOf, type AgentAccounting, type AgentIdentity, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type LiveSessionHandoff, type HardTerminalRunState, type ModelSpec, type PreparedAgentSession, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type ToolIdentity, type WorkflowAgentSession, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
+import { HARD_TERMINAL_RUN_STATES, LAUNCH_SNAPSHOT_IDENTITY_VERSION, THINKING_LEVELS, WORKFLOW_BLOCKED_EVENT, WorkflowError, isContextFileScope, isExternallyEndedRunState, isHardTerminalRunState, roleNameOf, type AgentAccounting, type AgentIdentity, type AgentRecord, type AgentResourcePolicy, type AgentTransport, type JsonValue, type LaunchSnapshot, type LiveSessionHandoff, type HardTerminalRunState, type ModelSpec, type PreparedAgentSession, type RunState, type ShellIdentity, type ShellOptions, type ShellResult, type ToolIdentity, type WorkflowAgentSession, type WorkflowErrorCode, type WorkflowMetadata, type WorkflowModelAliasResolverContext, type WorkflowSettings, type WorkflowScriptCall, type WorkflowSettingsResolution, type WorkflowWorktreeReference } from "./types.js";
 import type { SubagentManagerContext, SubagentRunRequest, SubagentStatus } from "../subagents/src/contracts.js";
 import {
   SETTLED_AGENT_STATES,
@@ -283,6 +283,23 @@ function modelInventory(root: ModelSpec | undefined, registry: ModelRegistryCapa
 function resumeHostContext(ctx: unknown): { model: { provider: string; id: string } | undefined; modelRegistry: ModelRegistryCapability | undefined; deliveryContext: CompletionDeliveryContext; toolContext: ExtensionToolContext | undefined } {
   const model = object(ctx) && object(ctx.model) && typeof ctx.model.provider === "string" && typeof ctx.model.id === "string" ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
   return { model, modelRegistry: contextHostCapabilities(ctx).modelRegistry, deliveryContext: completionContext(ctx), toolContext: scriptToolContext(ctx) };
+}
+// State is rewritten on every update, so large shell inputs and errors are kept as prefixes.
+const SCRIPT_CALL_TEXT_LIMIT_BYTES = 16 * 1024;
+function scriptCallInput(input: JsonValue): Pick<WorkflowScriptCall, "input" | "inputBytes"> {
+  const text = JSON.stringify(input);
+  const bytes = Buffer.byteLength(text);
+  return bytes <= SCRIPT_CALL_TEXT_LIMIT_BYTES ? { input } : { input: utf8Prefix(text, SCRIPT_CALL_TEXT_LIMIT_BYTES), inputBytes: bytes };
+}
+/** Records a script call as started, replacing the record of an attempt that an interruption left unfinished. */
+function startScriptCall(run: PersistedRun, call: WorkflowScriptCall): PersistedRun {
+  const recorded = { ...call, ...(run.phase === undefined ? {} : { phase: run.phase }) };
+  const calls = run.scriptCalls ?? [];
+  return { ...run, scriptCalls: calls.some(({ path }) => path === call.path) ? calls.map((current) => current.path === call.path ? recorded : current) : [...calls, recorded] };
+}
+function finishScriptCall(run: PersistedRun, path: string, error?: WorkflowError): PersistedRun {
+  const finishedAt = Date.now();
+  return { ...run, scriptCalls: (run.scriptCalls ?? []).map((call) => call.path === path ? { ...call, finishedAt, ...(error ? { error: { code: error.code, ...(call.kind === "shell" ? { message: utf8Prefix(error.message, SCRIPT_CALL_TEXT_LIMIT_BYTES) } : {}) } } : {}) } : call) };
 }
 type AliasVirtualModel = { provider: string; id: string; name: string; thinkingLevels: readonly string[]; route: (request: { thinkingLevel: string }, ctx: ExtensionContext) => { model: Model<Api>; thinkingLevel: string } };
 /** Lists workflow model aliases in `/model` as virtual models; needs a Pi host with `registerVirtualModel`. */
@@ -583,7 +600,11 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       if (replayed) return readShellResult(replayed.value);
       const shellStartedAt = Date.now();
       let shellPhaseIndex = -1;
-      const started = await persistRunState(store, metadata, (current) => {
+      // Env values stay out of the record: they may carry secrets, and a shared trajectory publishes run state.
+      const call: WorkflowScriptCall = { kind: "shell", name: "shell", path, ...scriptCallInput({ command, ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }), ...(options.env === undefined ? {} : { env: Object.keys(options.env) }), ...(identity.worktreeOwner ? { worktree: identity.worktreeOwner } : {}) }), startedAt: shellStartedAt };
+      let failure: WorkflowError | undefined;
+      const started = await persistRunState(store, metadata, (run) => {
+        const current = startScriptCall(run, call);
         const history = current.phaseHistory ?? [];
         if (current.phase !== undefined) shellPhaseIndex = current.phaseHistoryIndex ?? (history.length ? history.length - 1 : 0);
         const phaseActivities = [...(current.activeShellsByPhase ?? [])];
@@ -601,8 +622,12 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         if (!jsonValue(result)) fail("SHELL_FAILED", "Shell result is not JSON-compatible");
         await store.complete(path, result);
         return result;
+      } catch (error) {
+        failure = asWorkflowError(error);
+        throw error;
       } finally {
-        const stopped = await persistRunState(store, metadata, (current) => {
+        const stopped = await persistRunState(store, metadata, (run) => {
+          const current = finishScriptCall(run, path, failure);
           const phaseActivities = [...(current.activeShellsByPhase ?? [])];
           const phaseActivityIndex = phaseActivities.findIndex(({ phaseIndex }) => phaseIndex === shellPhaseIndex);
           const phaseActivity = phaseActivities[phaseActivityIndex];
@@ -631,12 +656,15 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       if (!context) fail("UNKNOWN_TOOL", `tools.${identifier} needs a run launched or recovered by a Pi tool call; runs resumed from /workflow or at session start, and headless launches, only replay journaled tool calls`);
       // Rendering is best-effort: it must never lose or mask a completed call.
       const render = async () => { try { const update = runs.get(store.runId)?.update; if (update) update(workflowToolUpdate(withLiveActivities((await store.load()).run))); } catch { /* best-effort progress */ } };
+      // Inspection writes must not prevent execution, mask errors, or reject a journaled success.
+      const record = async (update: (run: PersistedRun) => PersistedRun) => { try { await store.updateState(update); } catch { /* best-effort call metadata */ } };
       let value: JsonValue;
       try {
         const tool = scriptTool(context, identifier);
         if (!tool) fail("UNKNOWN_TOOL", `tools.${identifier} is not a tool this session can call`);
         const cancelled = (): boolean => signal.aborted;
         if (cancelled()) fail("CANCELLED", "Workflow cancelled");
+        await record((run) => startScriptCall(run, { kind: "tool", name: tool.name, path, startedAt: Date.now() }));
         const finished = liveAgents.toolStarted(store.runId, tool.name);
         try {
           await render();
@@ -646,9 +674,12 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
         } finally { finished(); }
       } catch (error) {
         // A stale context throws plain errors from ctx.tools; report them as tool failures.
-        throw error instanceof WorkflowError ? error : new WorkflowError("TOOL_FAILED", `tools.${identifier}: ${errorText(error)}`);
+        const failure = error instanceof WorkflowError ? error : new WorkflowError("TOOL_FAILED", `tools.${identifier}: ${errorText(error)}`);
+        await record((run) => finishScriptCall(run, path, failure));
+        throw failure;
       }
       await store.complete(path, value);
+      await record((run) => finishScriptCall(run, path));
       await render();
       return value;
     } finally { await lifecycle.leave(); }
