@@ -621,7 +621,9 @@ void test("CLI parser handles delimiter passthrough, negated booleans, and negat
   const booleanSchema = { type: "object", properties: { issue: { type: "integer" }, verbose: { type: "boolean", default: true } }, required: ["issue"], additionalProperties: false };
   const integerSchema = { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false };
   const numberSchema = { type: "object", properties: { value: { type: "number" } }, required: ["value"], additionalProperties: false };
-  assert.deepEqual(parseWorkflowCliArgs(stringSchema, ["--", "--approve"]), { value: "--approve" });
+  for (const value of ["--help", "-h", "--", "--approve"]) {
+    assert.deepEqual(parseWorkflowCliArgs(stringSchema, ["--", value]), { value });
+  }
   assert.equal(parseWorkflowCliArgs(booleanSchema, ["1", "--no-verbose"]).verbose, false);
   assert.deepEqual(parseWorkflowCliArgs(integerSchema, ["-7"]), { value: -7 });
   assert.deepEqual(parseWorkflowCliArgs(numberSchema, ["-1.5"]), { value: -1.5 });
@@ -821,12 +823,17 @@ void test("headless CLI trust overrides are honored without leaking into workflo
   assert.equal(conflict.status, 1);
   assert.match(conflict.stderr, /cannot be combined/);
 });
-void test("isolated CLI passes post-delimiter trust-like literals to workflows", () => {
-  const paths = fixture();
-  const result = runIsolatedCli(paths, `cliLiteral: { description: "Echo a literal option", input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false }, output: { type: "string" }, run: (input) => input.value }`, ["run", "--approve", "cliLiteral", "--", "--approve"]);
-  assert.equal(result.status, 0);
-  assert.equal(result.stdout, '"--approve"\n');
-});
+for (const value of ["--help", "-h", "--", "--approve"]) {
+  void test(`isolated CLI passes post-delimiter literal ${value} to workflows`, () => {
+    const paths = fixture();
+    try {
+      const result = runIsolatedCli(paths, `cliLiteral: { description: "Echo a literal option", input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false }, output: { type: "string" }, run: (input) => input.value }`, ["run", "--approve", "cliLiteral", "--", value]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, `${JSON.stringify(value)}\n`);
+      assert.match(result.stderr, /Run ID: [0-9a-f-]+/);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+}
 
 void test("CLI cancellation aborts the workflow and exits non-zero", () => {
   const paths = fixture();

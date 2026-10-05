@@ -920,6 +920,7 @@ function unavailable(operation: string): { ok: false; error: { code: "SUBAGENTS_
 
 class PersistentSubagentManager implements SubagentManager {
   private readonly activeRuns = new Map<string, LiveRun>();
+  private readonly pendingStarts = new Set<Promise<void>>();
   private activeRunCount = 0;
   private readonly terminalSummaries = new Map<string, TerminalSummary>();
   private readonly reconciliationErrors = new Map<string, WorkflowError>();
@@ -983,13 +984,23 @@ class PersistentSubagentManager implements SubagentManager {
     this.activeRunCount += 1;
     const controller = new AbortController();
     const initialStatus: PersistedSubagentStatus = { id, sessionId, state: "running", startedAt, owner: { ...owner } };
+    let finishStart!: () => void;
+    const pendingStart = new Promise<void>((resolve) => { finishStart = resolve; });
+    this.pendingStarts.add(pendingStart);
     let directory: string;
     try {
       directory = await createRunStorage(storageDirectory(this.dependencies), id, snapshot, initialStatus, external);
+      if (this.disposePromise !== undefined || context.signal?.aborted) {
+        await atomicJson(statusPath(directory), reconciledStatus(initialStatus, "stopped", Date.now()));
+        throw new WorkflowError("CANCELLED", "Subagent cancelled");
+      }
     } catch (error) {
       this.activeRunCount -= 1;
       if (error instanceof WorkflowError) throw error;
       throw internalStorageError(error, `Unable to start subagent ${id}`);
+    } finally {
+      this.pendingStarts.delete(pendingStart);
+      finishStart();
     }
     const current: { run?: LiveRun } = {};
     let resolveTerminal!: (result: ForegroundResult) => void;
@@ -1175,11 +1186,11 @@ class PersistentSubagentManager implements SubagentManager {
 
   async dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
+    this.disposed = true;
     this.disposePromise = (async () => {
       await this.initialization;
-      this.disposed = true;
       const runs = [...this.activeRuns.values()];
-      await Promise.allSettled(runs.map((run) => this.stopRun(run, true)));
+      await Promise.allSettled([...this.pendingStarts, ...runs.map((run) => this.stopRun(run, true))]);
       await Promise.allSettled([...this.notificationPromises]);
       const owner = this.storageOwner;
       this.storageOwner = undefined;

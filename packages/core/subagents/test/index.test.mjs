@@ -1,8 +1,9 @@
 /* global setTimeout, setImmediate, structuredClone */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import fsPromises, { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -2368,6 +2369,63 @@ test("delivers completion and failure through steering messages while the parent
     }
   } finally {
     await shutdown?.({ type: "session_shutdown", reason: "quit" }, context);
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("session shutdown waits for pending storage and never starts its executor", async (t) => {
+  const cwd = await mkdtemp(join(tmpdir(), "subagents-pending-shutdown-"));
+  const storageDir = join(cwd, "storage");
+  const storageStarted = deferred();
+  const releaseStorage = deferred();
+  let executorStarts = 0;
+  let shutdown;
+  const manager = createSubagentManager({
+    storageDir,
+    createExecutor() {
+      executorStarts += 1;
+      return { async execute() { return { value: "late execution", attempts: [], cwd }; } };
+    },
+  });
+  registerSubagentsExtension({ registerTool() {}, on(name, handler) { if (name === "session_shutdown") shutdown = handler; } }, { manager });
+  const context = await managerContext(cwd);
+  const originalMkdir = fsPromises.mkdir;
+  let shutdownPromise;
+  let launch;
+  try {
+    await manager.inspect({}, context);
+    t.mock.method(fsPromises, "mkdir", async (path, options) => {
+      const result = await originalMkdir(path, options);
+      if (dirname(path) === storageDir) {
+        storageStarted.resolve(path);
+        await releaseStorage.promise;
+      }
+      return result;
+    });
+    syncBuiltinESMExports();
+    launch = manager.run({ prompt: "must not start" }, context);
+    const cancelled = assert.rejects(launch, (error) => error?.code === "CANCELLED");
+    const directory = await storageStarted.promise;
+    let shutdownFinished = false;
+    shutdownPromise = shutdown({}, context).then(() => { shutdownFinished = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownFinished, false);
+    await stat(join(storageDir, "owner.json"));
+    releaseStorage.resolve();
+    await Promise.all([shutdownPromise, cancelled]);
+    assert.equal(executorStarts, 0);
+    const status = JSON.parse(await readFile(join(directory, "status.json"), "utf8"));
+    assert.equal(status.state, "stopped");
+    assert.equal(status.owner, undefined);
+    assert.ok(status.finishedAt >= status.startedAt);
+    await assert.rejects(stat(join(storageDir, "owner.json")), (error) => error?.code === "ENOENT");
+    await assert.rejects(manager.run({ prompt: "after shutdown" }, context), (error) => error?.code === "CANCELLED");
+  } finally {
+    releaseStorage.resolve();
+    await Promise.allSettled([launch, shutdownPromise]);
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await manager.dispose();
     await rm(cwd, { recursive: true, force: true });
   }
 });

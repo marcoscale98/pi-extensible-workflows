@@ -124,7 +124,7 @@ export function parseWorkflowCliArgs(schema: JsonSchema, rawArgs: readonly strin
   };
   for (let index = 0; index < rawArgs.length; index += 1) {
     const token = requiredArg(rawArgs, index);
-    if (token === "--") { endOptions = true; continue; }
+    if (!endOptions && token === "--") { endOptions = true; continue; }
     if (!endOptions && (token === "--input" || token.startsWith("--input="))) {
       if (input !== undefined) throw new Error("--input may only be provided once");
       const raw = token.startsWith("--input=") ? token.slice("--input=".length) : rawArgs[++index];
@@ -539,7 +539,8 @@ async function runWorkflowCli(rawArgs: readonly string[], options: WorkflowIo): 
   }
   const name = requiredArg(args, 0);
   return withWorkflowRuntime(runtimeOptions, async (runtime, context) => {
-    const help = args.slice(1).some((arg) => arg === "--help" || arg === "-h");
+    const delimiter = args.indexOf("--");
+    const help = args.slice(1, delimiter < 0 ? undefined : delimiter).some((arg) => arg === "--help" || arg === "-h");
     const fn = runtime.catalog.functions.find((candidate) => candidate.name === name);
     if (!fn) throw new Error(`Unknown workflow function: ${name}`);
     if (help) { options.write(formatWorkflowCliHelp(fn)); return 0; }
