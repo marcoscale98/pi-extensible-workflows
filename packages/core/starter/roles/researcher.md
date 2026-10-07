@@ -1,5 +1,4 @@
 ---
-model: researcher-model
 tools: ["!edit", "!write", "!bash"]
 description: Researcher. Use for deep research across the codebase, docs, and the web when web tools are available
 ---

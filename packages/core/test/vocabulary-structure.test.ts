@@ -20,9 +20,9 @@ void test("Pi runtime derives thinking validation from the canonical types vocab
   const adapter = source("pi-runtime-adapter.ts");
   const consumers = [adapter, source("decoders.ts")];
 
-  assert.match(types, /export const THINKING_LEVELS = \[[^\]]+\] as const;/);
-  assert.match(types, /export type ThinkingLevel = \(typeof THINKING_LEVELS\)\[number\];/);
-  assert.equal(importsFrom(utils, "THINKING_LEVELS", "\\./types\\.js"), true, "utils owns the single thinking-level guard");
+  assert.match(types, /export \{ THINKING_LEVELS, CONTEXT_FILE_SCOPES, isContextFileScope \} from "@piewf\/pi-ext-roles\/types";/);
+  assert.match(types, /export type ThinkingLevel = RoleTypes\.ThinkingLevel;/);
+  assert.match(utils, /export \{ isThinkingLevel,[^}]+\} from "@piewf\/pi-ext-roles\/utils";/);
   for (const consumer of consumers) {
     assert.doesNotMatch(consumer, /["']off["']\s*,\s*["']minimal["']\s*,\s*["']low["']\s*,\s*["']medium["']\s*,\s*["']high["']\s*,\s*["']xhigh["']\s*,\s*["']max["']/);
     assert.doesNotMatch(consumer, /THINKING_LEVELS\.some\(/, "consumers go through isThinkingLevel() instead of scanning the list");
@@ -55,8 +55,8 @@ void test("host runtime and workflow evals reuse the shared workflow-error guard
 
 void test("context-file scopes are declared once in types and reused by every consumer", () => {
   const types = source("types.ts");
-  assert.match(types, /export type ContextFileScope = \(typeof CONTEXT_FILE_SCOPES\)\[number\];/);
-  for (const name of ["decoders.ts", "settings.ts", "host.ts", "agent-execution.ts"]) {
+  assert.match(types, /export type ContextFileScope = RoleTypes\.ContextFileScope;/);
+  for (const name of ["decoders.ts", "host.ts", "agent-execution.ts"]) {
     const consumer = source(name);
     assert.equal(importsFrom(consumer, "isContextFileScope", "\\./types\\.js"), true, `${name} must import the shared scope guard`);
     assert.doesNotMatch(consumer, /["']global["']\s*,\s*["']project["']\s*,\s*["']cwd["']/, `${name} must not restate the scope list`);
@@ -64,6 +64,9 @@ void test("context-file scopes are declared once in types and reused by every co
     assert.doesNotMatch(consumer, /!==\s*["']global["']\s*&&/, `${name} must not restate the scope comparison chain`);
     assert.doesNotMatch(consumer, /function isContextFileScope\s*\(/, `${name} must not define a local scope guard`);
   }
+  const settings = source("settings.ts");
+  assert.match(settings, /roleApi\(\(\) => roleSettings\.validateContextFileScopes\(value, rolePath\)\)/);
+  assert.doesNotMatch(settings, /["']global["']\s*,\s*["']project["']\s*,\s*["']cwd["']/);
 });
 
 void test("budget dimensions and event types are declared once in types and reused", () => {
@@ -82,7 +85,7 @@ void test("budget dimensions and event types are declared once in types and reus
 
 void test("thinking-level validation reuses the shared utils guard", () => {
   const utils = source("utils.ts");
-  assert.match(utils, /export function isThinkingLevel\(/);
+  assert.match(utils, /export \{ isThinkingLevel,[^}]+\} from "@piewf\/pi-ext-roles\/utils";/);
   for (const name of ["decoders.ts", "pi-runtime-adapter.ts"]) {
     const consumer = source(name);
     assert.equal(importsFrom(consumer, "isThinkingLevel", "\\./utils\\.js"), true, `${name} must import the shared guard`);

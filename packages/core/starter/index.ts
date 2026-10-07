@@ -27,7 +27,6 @@ const extension: WorkflowExtension = {
       resolve: ({ rootModel }) => `${rootModel.provider}/${rootModel.model}`,
     },
   },
-  roleDirectories: [new URL("./roles/", import.meta.url)],
 };
 
 export default function (): void {

@@ -89,8 +89,12 @@ export function decodeAgentDefinition(value: unknown): AgentDefinition | undefin
   const extensionSettings = value.extensionSettings === undefined ? undefined : decodeWorkflowExtensions(value.extensionSettings);
   if (prompt === INVALID_PERSISTED_VALUE || description === INVALID_PERSISTED_VALUE || model === INVALID_PERSISTED_VALUE || overrideSystemPrompt === INVALID_PERSISTED_VALUE) return undefined;
   if (thinking !== undefined && !isThinkingLevel(thinking) || value.tools !== undefined && !tools || value.skills !== undefined && !skills || value.extensions !== undefined && !extensions || value.contextFiles !== undefined && !contextFiles || value.extensionSettings !== undefined && !extensionSettings) return undefined;
+  const rawProvenance = value.provenance;
+  if (rawProvenance !== undefined && (!object(rawProvenance) || typeof rawProvenance.path !== "string" || rawProvenance.scope !== undefined && (typeof rawProvenance.scope !== "string" || !["builtin", "extension", "global", "project"].includes(rawProvenance.scope)) || rawProvenance.owner !== undefined && typeof rawProvenance.owner !== "string" || rawProvenance.priority !== undefined && !finiteNumber(rawProvenance.priority))) return undefined;
+  const provenance = rawProvenance as AgentDefinition["provenance"];
   const foldedModel = typeof model === "string" && thinking !== undefined && !model.includes(":") ? `${model}:${thinking}` : model;
   return {
+    ...(provenance === undefined ? {} : { provenance: structuredClone(provenance) }),
     ...(prompt === undefined ? {} : { prompt }), ...(description === undefined ? {} : { description }), ...(foldedModel === undefined ? {} : { model: foldedModel }),
     ...(tools === undefined ? {} : { tools }), ...(skills === undefined ? {} : { skills }), ...(extensions === undefined ? {} : { extensions }), ...(overrideSystemPrompt === undefined ? {} : { overrideSystemPrompt }), ...(contextFiles === undefined ? {} : { contextFiles }), ...(extensionSettings === undefined ? {} : { extensionSettings }),
   };
@@ -260,6 +264,9 @@ function decodeAgentResourceInspection(value: unknown): AgentResourceInspection 
   const unmatchedTools = decodeStringArray(value.unmatchedTools);
   const rawSources = value.selectorSources;
   const sourceRecord = object(rawSources) ? rawSources : undefined;
+  const defaultsRecord = sourceRecord?.defaults;
+  const defaults = object(defaultsRecord) ? { global: decodeAgentResourceSelectors(defaultsRecord.global), project: decodeAgentResourceSelectors(defaultsRecord.project) } : undefined;
+  if (defaultsRecord !== undefined && (!defaults?.global || !defaults.project)) return undefined;
   const sources = sourceRecord === undefined ? undefined : {
     global: decodeAgentResourceSelectors(sourceRecord.global),
     project: decodeAgentResourceSelectors(sourceRecord.project),
@@ -267,7 +274,7 @@ function decodeAgentResourceInspection(value: unknown): AgentResourceInspection 
     ...(sourceRecord.call === undefined ? {} : { call: decodeAgentResourceSelectors(sourceRecord.call) }),
   };
   if (!selectors || !skills || !extensions || !tools || !unmatchedSkills || !unmatchedExtensions || !unmatchedTools || rawSources !== undefined && (!sources || !sources.global || !sources.project || sources.role === undefined && sourceRecord?.role !== undefined || sources.call === undefined && sourceRecord?.call !== undefined)) return undefined;
-  return { selectors: { skills: [...(selectors.skills ?? [])], extensions: [...(selectors.extensions ?? [])], tools: [...(selectors.tools ?? [])] }, skills, extensions, tools, unmatchedSkills, unmatchedExtensions, unmatchedTools, ...(sources === undefined ? {} : { selectorSources: { global: sources.global ?? {}, project: sources.project ?? {}, ...(sources.role === undefined ? {} : { role: sources.role }), ...(sources.call === undefined ? {} : { call: sources.call }) } }) };
+  return { selectors: { skills: [...(selectors.skills ?? [])], extensions: [...(selectors.extensions ?? [])], tools: [...(selectors.tools ?? [])] }, skills, extensions, tools, unmatchedSkills, unmatchedExtensions, unmatchedTools, ...(sources === undefined ? {} : { selectorSources: { ...(defaults?.global && defaults.project ? { defaults: { global: defaults.global, project: defaults.project } } : {}), global: sources.global ?? {}, project: sources.project ?? {}, ...(sources.role === undefined ? {} : { role: sources.role }), ...(sources.call === undefined ? {} : { call: sources.call }) } }) };
 }
 function decodeAgentSetupSummary(value: unknown): NonNullable<NonNullable<AgentRecord["attemptDetails"]>[number]["setup"]> | undefined {
   if (!object(value) || typeof value.cwd !== "string") return undefined;

@@ -1,5 +1,4 @@
 ---
-model: oracle-model
 tools: ["!*", "read", "grep", "find", "ls", "bash"]
 description: Oracle. Use for a second opinion on a plan, design, or decision before committing to it
 ---

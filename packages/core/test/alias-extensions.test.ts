@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import test from "node:test";
+import { collectRoleContributions, registerRoleContribution } from "@piewf/pi-ext-roles";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { testExtensionApi, waitForIssue105 } from "./support.js";
 import workflowExtension, { createLaunchSnapshot, loadAgentDefinitions, registerWorkflowExtension, RunStore, runWorkflow, structuralPath, WorkflowError, WorkflowRegistry, type JsonValue, type WorkflowFunctionContext } from "../src/index.js";
 import { loadingRegistry } from "../src/registry.js";
@@ -58,7 +60,7 @@ void test("registered globals preserve role definitions for agent calls across r
   const sourceId = (await listRunIds(home, "session", home))[0];
   assert.ok(sourceId);
   const source = await new RunStore(home, "session", sourceId, home).load();
-  assert.deepEqual(source.snapshot.roles, { developer: { prompt: "Developer role" } });
+  assert.deepEqual(source.snapshot.roles, { developer: { provenance: { path: join(agentDir, "pi-extensible-workflows", "roles", "developer.md"), scope: "global", priority: 0 }, prompt: "Developer role" } });
   rmSync(join(agentDir, "pi-extensible-workflows", "roles", "developer.md"));
   const started = await retry.execute("retry", { runId: sourceId, foreground: false }, undefined, undefined, context) as { content: Array<{ text: string }> };
   const childId = (JSON.parse(started.content[0]?.text ?? "null") as { runId: string }).runId;
@@ -558,21 +560,22 @@ void test("loads extension role directories as defaults beneath standard roles",
   writeFileSync(join(secondExtensionDirectory, "extension-only.md"), "Extension-only body");
   writeFileSync(join(agentDir, "pi-extensible-workflows", "roles", "packaged.md"), "Global override body");
   writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "packaged.md"), "Project override body");
-  const registry = new WorkflowRegistry();
-  registry.register({ version: "1.0.0", headline: "Roles", roleDirectories: [extensionDirectory, pathToFileURL(secondExtensionDirectory)] });
-  assert.deepEqual(registry.roleDirectories(), [extensionDirectory, secondExtensionDirectory]);
-  assert.throws(() => loadAgentDefinitions(cwd, agentDir, true, registry.roleDirectories()), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA" && error.message.includes(extensionDirectory) && error.message.includes(secondExtensionDirectory));
-  const reversed = new WorkflowRegistry();
-  reversed.register({ version: "1.0.0", headline: "Roles", roleDirectories: [secondExtensionDirectory, extensionDirectory] });
-  assert.throws(() => loadAgentDefinitions(cwd, agentDir, true, reversed.roleDirectories()), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA" && error.message.includes(extensionDirectory) && error.message.includes(secondExtensionDirectory));
+  for (const directories of [[extensionDirectory, secondExtensionDirectory], [secondExtensionDirectory, extensionDirectory]]) {
+    assert.throws(() => loadAgentDefinitions(cwd, agentDir, true, directories), (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA" && error.message.includes(extensionDirectory) && error.message.includes(secondExtensionDirectory));
+  }
   const roles = loadAgentDefinitions(cwd, agentDir, true, [secondExtensionDirectory]);
   assert.equal(roles["extension-only"]?.prompt, "Extension-only body");
   assert.equal(roles.packaged?.prompt, "Project override body");
-  assert.throws(() => { registry.register({ version: "1.0.0", headline: "Invalid", roleDirectories: ["relative/roles"] }); }, (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  assert.throws(() => { registry.register({ version: "1.0.0", headline: "Invalid", roleDirectories: [new URL("https://example.com/roles")] }); }, (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
-  assert.throws(() => { registry.register({ version: "1.0.0", headline: "Invalid", roleDirectories: Array(1) }); }, (error: unknown) => error instanceof WorkflowError && error.code === "INVALID_METADATA");
+  const bus = createEventBus(), owner = join(home, "contributor.mjs");
+  const unsubscribe = registerRoleContribution({ events: bus }, { owner, roleDirectories: [extensionDirectory, pathToFileURL(extensionDirectory)] });
+  assert.equal(collectRoleContributions(bus, [owner]).length, 1);
+  unsubscribe();
+  for (const roleDirectories of [[""], [new URL("https://example.com/roles")], [{ path: extensionDirectory, priority: NaN }]]) {
+    assert.throws(() => registerRoleContribution({ events: bus }, { owner, roleDirectories }));
+  }
+
 });
-void test("starter roles are fallback defaults beneath extension, global, and project roles", () => {
+void test("independent starter roles are fallback defaults beneath extension, global, and project roles", () => {
   const home = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-starter-role-precedence-"));
   const cwd = join(home, "project");
   const agentDir = join(home, "agent");
@@ -583,10 +586,7 @@ void test("starter roles are fallback defaults beneath extension, global, and pr
   writeFileSync(join(extensionDirectory, "developer.md"), "Extension developer role");
   writeFileSync(join(agentDir, "pi-extensible-workflows", "roles", "reviewer.md"), "Global reviewer role");
   writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "scout.md"), "Project scout role");
-  const registry = new WorkflowRegistry();
-  registry.register({ version: "1.0.0", headline: "Starter roles", roleDirectories: [new URL("../starter/roles/", import.meta.url), extensionDirectory] });
-  const registrations = registry.roleDirectoryRegistrations();
-  assert.equal(registrations.filter(({ builtin }) => builtin === true).length, 1);
+  const registrations = [extensionDirectory];
   const roles = loadAgentDefinitions(cwd, agentDir, true, registrations);
   assert.equal(roles.developer?.prompt, "Extension developer role");
   assert.equal(roles.reviewer?.prompt, "Global reviewer role");
@@ -609,8 +609,17 @@ void test("extension roles flow through host guidance, preflight, launch snapsho
     inputs.push(input);
     return { sessionId: input.sessionLabel, sessionFile: `/sessions/${input.sessionLabel}.jsonl`, messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }], getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), prompt: async (text) => { prompts.push(text); }, steer: async () => {}, dispose() {} };
   };
-  workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["read", "grep", "workflow"], on(name: string, candidate: unknown) { if (name === "before_agent_start") guidanceHandler = candidate as typeof guidanceHandler; if (name === "session_shutdown") shutdown = candidate as typeof shutdown; } }), home, async () => {}, testTransport(createSession), agentDir);
-  registerWorkflowExtension({ version: "1.0.0", headline: "Packaged roles", roleDirectories: [pathToFileURL(roleDirectory)] });
+  const bus = createEventBus(), owner = join(home, "contributor.mjs");
+  const unsubscribe = registerRoleContribution({ events: bus }, { owner, roleDirectories: [roleDirectory] });
+  const inactiveDirectory = join(home, "inactive-roles");
+  mkdirSync(inactiveDirectory);
+  writeFileSync(join(inactiveDirectory, "inactive.md"), "Must not be captured");
+  const unsubscribeInactive = registerRoleContribution({ events: bus }, { owner: join(home, "inactive.mjs"), roleDirectories: [inactiveDirectory] });
+  const capturedSources = collectRoleContributions(bus, [owner]);
+  assert.deepEqual(collectRoleContributions(bus, { activeOnly: true }), []);
+  workflowExtension(testExtensionApi({ registerTool(tool: (typeof tools)[number]) { tools.push(tool); }, registerCommand() {}, getThinkingLevel: () => "medium", getActiveTools: () => ["read", "grep", "workflow"], on(name: string, candidate: unknown) { if (name === "before_agent_start") guidanceHandler = candidate as typeof guidanceHandler; if (name === "session_shutdown") shutdown = candidate as typeof shutdown; } }), home, async () => {}, testTransport(createSession), agentDir, [], capturedSources);
+  unsubscribe();
+  unsubscribeInactive();
   assert.ok(guidanceHandler);
   const guidance = guidanceHandler({ systemPrompt: "BASE SYSTEM" }, { cwd, isProjectTrusted: () => true })?.systemPrompt ?? "";
   assert.match(guidance, /`extension-reviewer`: Packaged review role/);
@@ -634,7 +643,7 @@ void test("extension roles flow through host guidance, preflight, launch snapsho
   assert.deepEqual(loaded.snapshot.models, ["openai/gpt", "anthropic/opus"]);
   assert.deepEqual(loaded.snapshot.tools, ["read", "grep"]);
   assert.deepEqual(loaded.snapshot.projectRoles, []);
-  assert.deepEqual(loaded.snapshot.roles, { "extension-reviewer": { prompt: "Extension prompt", description: "Packaged review role", model: "anthropic/opus:high", tools: ["read", "grep"], skills: ["role-skill"], extensions: [roleExtension] } });
+  assert.deepEqual(loaded.snapshot.roles, { "extension-reviewer": { provenance: { path: join(roleDirectory, "extension-reviewer.md"), scope: "extension", owner }, prompt: "Extension prompt", description: "Packaged review role", model: "anthropic/opus:high", tools: ["read", "grep"], skills: ["role-skill"], extensions: [roleExtension] } });
   await shutdown?.();
 });
 void test("labels standard role directory scan failures as standard roles", () => {

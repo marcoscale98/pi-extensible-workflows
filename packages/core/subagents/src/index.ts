@@ -1,3 +1,4 @@
+import { notifyRoleDeprecation } from "../../src/role-deprecation.js";
 import { join } from "node:path";
 import { defineTool, getAgentDir, type AgentToolResult, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
@@ -26,7 +27,7 @@ export { createSubagentManager, createUnavailableSubagentManager } from "./manag
 export { createRunStoreWorktreeAdapter, defaultWorktreeHome } from "./worktree.js";
 export type { SubagentWorktreeAdapter, SubagentWorktreeContext, SubagentWorktreeHandle, SubagentWorktreeRunStore } from "./worktree.js";
 
-type SubagentsExtensionAPI = Pick<ExtensionAPI, "registerTool"> & Partial<Pick<ExtensionAPI, "getActiveTools" | "getAllTools" | "on" | "sendMessage" | "registerCommand" | "appendEntry" | "registerEntryRenderer">>;
+type SubagentsExtensionAPI = Pick<ExtensionAPI, "registerTool"> & Partial<Pick<ExtensionAPI, "events" | "getActiveTools" | "getAllTools" | "on" | "sendMessage" | "registerCommand" | "appendEntry" | "registerEntryRenderer">>;
 
 function validateSubagentRunRequest(value: unknown): SubagentRunRequest {
   return normalizeSubagentRunRequest(value);
@@ -181,13 +182,13 @@ export function registerSubagentsExtension(pi: SubagentsExtensionAPI, options: S
   };
   const appendEntry = pi.appendEntry;
   const widget = createSubagentBackgroundWidget({ ...(appendEntry === undefined ? {} : { appendEntry: (customType, data) => { appendEntry.call(pi, customType, data); } }), ...(pi.registerEntryRenderer === undefined ? {} : { registerEntryRenderer: pi.registerEntryRenderer.bind(pi) }) });
-  const extension = createSubagentsExtension(options, activeTools, notify, (status, request) => { widget.update(status, request); const registry = loadingRegistry(); if (typeof registry.observeSubagentStatus === "function") registry.observeSubagentStatus(status, request); }, onResourceWarning);
+  const extension = createSubagentsExtension({ ...options, managerDependencies: { ...options.managerDependencies, ...(pi.events ? { roleEvents: pi.events } : {}) } }, activeTools, notify, (status, request) => { widget.update(status, request); const registry = loadingRegistry(); if (typeof registry.observeSubagentStatus === "function") registry.observeSubagentStatus(status, request); }, onResourceWarning);
   const codemodeTools = loadCodemodeToolsSetting(options.managerDependencies?.agentDir);
   for (const tool of extension.tools) pi.registerTool({ ...tool, ...workflowToolExposure(tool.name, codemodeTools) });
   if (pi.registerCommand !== undefined) registerSubagentNavigator(pi.registerCommand.bind(pi), extension.manager, storageDirectory(options), options.clipboard);
   if (pi.on !== undefined) {
     setSubagentManager(extension.manager);
-    pi.on("session_start", (_event, context) => { widget.start(context); });
+    pi.on("session_start", (_event, context) => { notifyRoleDeprecation(context, options.managerDependencies?.agentDir); widget.start(context); });
     pi.on("session_shutdown", async () => {
       try {
         widget.dispose();

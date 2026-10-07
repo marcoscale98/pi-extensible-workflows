@@ -7,7 +7,7 @@ import type { WorkflowRegistryApi } from "./registry.js";
 import { assertModelThinking, validateSchema, deepFreeze, errorText, fail, jsonObject, jsonValue, mergeWorkflowExtensionSettings, modelAliasName, modelCapability, object, positiveInteger, resolveModelReference, resourcePatternHasMagic, unknownModel } from "./utils.js";
 import { WORKFLOW_CALL_KINDS } from "./types.js";
 export { validateSchema } from "./utils.js";
-import { loadAgentDefinitions, loadProjectAgentDefinitions } from "./roles.js";
+import { loadAgentDefinitions } from "./roles.js";
 export { loadAgentDefinitions, loadProjectAgentDefinitions, parseRoleMarkdown, workflowRoleDirectories } from "./roles.js";
 export type { WorkflowRoleDirectoryInput } from "./roles.js";
 
@@ -562,9 +562,8 @@ export function validateWorkflowLaunchWithRegistry(params: WorkflowValidationPar
   const script = typeof params.script === "string" && params.script.trim() ? params.script : fileScript ?? "";
   if (!script) fail("INVALID_SYNTAX", "Provide script or scriptPath");
   const metadata = validateWorkflowMetadata({ name: explicitName, ...(typeof params.description === "string" ? { description: params.description } : {}) });
-  const globalAgentDefinitions = loadAgentDefinitions(context.cwd, context.agentDir, false, registry && typeof registry.roleDirectoryRegistrations === "function" ? registry.roleDirectoryRegistrations() : registry && typeof registry.roleDirectories === "function" ? registry.roleDirectories() : undefined);
-  const projectAgentDefinitions = context.projectTrusted ? loadProjectAgentDefinitions(context.cwd) : {};
-  const agentDefinitions = deepFreeze({ ...globalAgentDefinitions, ...projectAgentDefinitions });
+  const agentDefinitions = loadAgentDefinitions(context.cwd, context.agentDir, context.projectTrusted, context.extensionRoleDirectories);
+  const projectAgentDefinitions = deepFreeze(Object.fromEntries(Object.entries(agentDefinitions).filter(([, definition]) => definition.provenance?.scope === "project")));
   const aliases = context.modelAliases ?? {};
   const knownModels = context.knownModels ?? context.availableModels;
   const checked = preflight(script, { models: context.availableModels, tools: context.rootTools, agentTypes: new Set(Object.keys(agentDefinitions)), modelAliases: aliases, knownModels, ...(context.settingsPath ? { settingsPath: context.settingsPath } : {}) }, [], metadata);

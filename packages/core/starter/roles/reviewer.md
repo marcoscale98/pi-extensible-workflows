@@ -1,5 +1,4 @@
 ---
-model: reviewer-model
 tools: ["!*", "read", "grep", "find", "ls"]
 description: Reviewer. Use when we need to review decisions or code changes
 ---

@@ -7,20 +7,12 @@ import test from "node:test";
 const validationPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../src/validation.ts");
 const rolesPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../src/roles.ts");
 
-void test("parseRoleMarkdown owns one local unquote helper for legacy metadata", () => {
+void test("parseRoleMarkdown delegates parsing to the independent role API with workflow-owned settings validation", () => {
   const source = readFileSync(rolesPath, "utf8");
-  const start = source.indexOf("export function parseRoleMarkdown(");
-  const end = source.indexOf("\nexport function workflowRoleDirectories", start);
-  assert.notEqual(start, -1, "parseRoleMarkdown() is missing");
-  assert.notEqual(end, -1, "parseRoleMarkdown() body is incomplete");
-  const parser = source.slice(start, end);
-
-  assert.equal((parser.match(/^\s*const unquote\s*=\s*\(v: string\)\s*=>\s*v\.replace\(\/\^\['"\]\|\['"\]\$\/g, ""\);\s*$/gm) ?? []).length, 1, "parseRoleMarkdown() must define one local unquote helper");
-  assert.equal((parser.match(/\bunquote\b/g) ?? []).length, 5, "unquote must be used by all remaining legacy quote-stripping paths");
-  assert.equal((parser.match(/replace\(\/\^\['"\]\|\['"\]\$\/g/g) ?? []).length, 1, "quote stripping must use the shared unquote regex");
-  assert.doesNotMatch(source, /^\s*export\s+(?:const|function)\s+unquote\b/m, "unquote must remain local to parseRoleMarkdown()");
-  assert.equal((parser.match(/replace\(\/\^\[']\|\[']\$\/g/g) ?? []).length, 0, "legacy single-quote stripping must be centralized");
-  assert.equal((parser.match(/replace\(\/\^\["\]\|\["\]\$\/g/g) ?? []).length, 0, "legacy double-quote stripping must be centralized");
+  assert.match(source, /import \* as roles from "@piewf\/pi-ext-roles\/roles";/);
+  assert.match(source, /validateDefinition\(roleApi\(\(\) => roles\.parseRoleMarkdown\(content, strict, rolePath\)\), rolePath\)/);
+  assert.match(source, /validateWorkflowExtensionSettings\(definition\.extensionSettings/);
+  assert.doesNotMatch(source, /parseFrontmatter|\bunquote\b/, "the compatibility adapter must not maintain a second parser");
 });
 
 void test("static analysis reads AST property keys through one helper", () => {

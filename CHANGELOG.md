@@ -1,6 +1,24 @@
 # Changelog
 ## Unreleased
 
+## [6.0.0] - 2026-10-07
+
+### Breaking changes
+
+- Roles are owned by `@piewf/pi-ext-roles`, now a registry dependency of core and CLI. `registerWorkflowExtension({ roleDirectories })` is removed and fails with migration guidance. Register packaged roles separately with `registerRoleContribution(pi, { owner: import.meta.url, roleDirectories: ["./roles"] })`; keep workflow `source` for provenance and re-export portable bundles that used the removed field.
+- The `pi-role` binary moves from `@piewf/cli` to `@piewf/pi-ext-roles`. Upgrade the old global CLI first, then install the roles package without forced binary overwrites. The retained `@piewf/cli/pi-role` import is a compatibility adapter, not the binary owner.
+- Fallback roles no longer select models or supply workflow-specific model aliases. Configure a per-call model or an overriding role/shared alias explicitly when preserving an old fallback model choice.
+
+### Migration
+
+- Workflow/subagent users receive the roles library automatically; a separately enabled roles plugin is not required. Move shared roles and settings to `~/.pi/agent/pi-ext-roles/` and `.pi/pi-ext-roles/` when ready. Workflow aliases/selectors remain consumer overrides. No user files are rewritten.
+- Legacy workflow role paths and parser/resolver imports remain temporarily supported, with one TUI migration warning per session when applicable. No compatibility removal date is scheduled. Native `pi-role` does not read legacy workflow paths; migrate its files before using it.
+- Native `pi-role` starts one Pi process from PATH. Role tool selectors control declared loadout, not a sandbox. Native tool flags remain ceilings; partial context scopes are unsupported unless suppressed with `--no-context-files`, and role/shared `extensionSettings` are ignored by the launcher. Workflow/subagent consumers retain settings delivery, partial context filtering, captured configuration, recovery and runtime ownership. See the [migration guide](https://vekexasia.github.io/pi-extensible-workflows/roles.html#migration).
+
+### Verification
+
+- Package verification uses the published roles artifact, without a sibling checkout or local dependency staging. `scripts/verify-role-upgrade.py` exercises registry installation in an isolated Pi, the `5.19.1` to major-candidate upgrade, TUI/reload, legacy settings and role precedence, binary handover, migrated contributors and re-exported bundles against a local provider.
+
 ## [5.19.1] - 2026-10-05
 
 ### New capabilities

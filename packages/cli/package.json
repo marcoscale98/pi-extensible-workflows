@@ -1,6 +1,6 @@
 {
   "name": "@piewf/cli",
-  "version": "5.19.1",
+  "version": "6.0.0",
   "description": "CLI for pi-extensible-workflows",
   "homepage": "https://vekexasia.github.io/pi-extensible-workflows/",
   "repository": {
@@ -14,14 +14,13 @@
     "./pi-role": "./dist/src/pi-role.js"
   },
   "bin": {
-    "piewf": "./dist/src/cli.js",
-    "pi-role": "./dist/src/pi-role.js"
+    "piewf": "./dist/src/cli.js"
   },
   "files": [
     "dist/src"
   ],
   "scripts": {
-    "build": "npm --prefix ../.. run build --workspace=../core && rm -rf dist && tsc -p tsconfig.json && chmod +x dist/src/cli.js dist/src/pi-role.js",
+    "build": "npm --prefix ../.. run build --workspace=../core && rm -rf dist && tsc -p tsconfig.json && chmod +x dist/src/cli.js",
     "inspect": "node dist/src/cli.js inspect",
     "test": "npm run build && TEST_FILES='dist/test/*.test.js' npm run test:run",
     "test:run": "files=${TEST_FILES:-dist/test/*.test.js}; printf '%s\\n' $files | xargs -n1 -P20 sh -c 'tmp=$(mktemp -d); TMPDIR=\"$tmp\" node --test --test-concurrency=1 --test-timeout=60000 --test-force-exit --test-reporter=dot \"$1\"; status=$?; rm -rf \"$tmp\"; exit $status' sh",
@@ -45,7 +44,8 @@
     "@earendil-works/pi-coding-agent": "1.0.0",
     "@earendil-works/pi-server": "1.0.0",
     "@earendil-works/pi-tui": "1.0.0",
-    "pi-extensible-workflows": "5.19.1",
+    "@piewf/pi-ext-roles": "0.1.2",
+    "pi-extensible-workflows": "6.0.0",
     "typebox": "1.3.7"
   },
   "publishConfig": {

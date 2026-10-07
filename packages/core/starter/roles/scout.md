@@ -1,5 +1,4 @@
 ---
-model: scout-model
 tools: ["!*", "read", "grep", "find", "ls"]
 description: Scout. Use for fast read-only codebase recon before planning or implementing
 ---

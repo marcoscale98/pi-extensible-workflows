@@ -102,6 +102,7 @@ export interface AgentExecutionOptions {
   agentNodeId?: string;
 }
 export interface AgentExecutionRoot {
+  projectTrusted?: boolean;
   cwd: string;
   model: ModelSpec;
   tools: ReadonlySet<string>;
@@ -336,7 +337,10 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     const selectorSources = policy.selectorSources;
     const selection = resolveRole(undefined, {
       cwd: input.cwd,
+      agentDir: input.agentDir ?? getAgentDir(),
+      projectTrusted: policy.projectTrusted,
       selectorSources,
+      useSharedSettings: false,
       resources: { extensions: discoveredExtensions },
     });
     const selectedExtensions = selection.selectedExtensions ?? [];
@@ -346,7 +350,7 @@ async function createLocalPiSessionHandle(input: SessionInput, sessionStartEvent
     const skillPaths = [...new Set(resolved.skills.filter(({ enabled, metadata }) => enabled && (policy.projectTrusted || metadata.scope !== "project")).map(({ path }) => path))];
     const updateSkillMatches = (skills: readonly { name: string }[]): Set<string> => {
       const names = [...new Set(skills.map(({ name }) => name))];
-      const selected = resolveRole(undefined, { cwd: input.cwd, selectorSources, resources: { skills: names } });
+      const selected = resolveRole(undefined, { cwd: input.cwd, agentDir: input.agentDir ?? getAgentDir(), projectTrusted: policy.projectTrusted, selectorSources, useSharedSettings: false, resources: { skills: names } });
       const selectedSkills = selected.selectedSkills ?? [];
       policy.selectedSkills = selectedSkills;
       policy.unmatchedSkills = selected.unmatchedSkills ?? [];
@@ -714,7 +718,7 @@ function resourcePolicySummary(policy: AgentResourcePolicy, tools: readonly stri
 const RESOURCE_SELECTOR_KEYS = ["skills", "extensions", "tools"] as const;
 type ResourceSelectorKey = (typeof RESOURCE_SELECTOR_KEYS)[number];
 function resourceSelectorLayers(sources: AgentResourceSelectorSources, key: ResourceSelectorKey): readonly (readonly string[] | undefined)[] {
-  return [sources.global[key], sources.project[key], sources.role?.[key], sources.call?.[key]];
+  return [...(sources.defaults ? [sources.defaults.global[key], sources.defaults.project[key]] : []), sources.global[key], sources.project[key], sources.role?.[key], sources.call?.[key]];
 }
 function selectorListWidened(ceiling: readonly string[], candidate: readonly string[]): boolean {
   let candidateIndex = 0;
@@ -853,7 +857,7 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
   const roleDefinition = roleName ? root.agentDefinitions?.[roleName] : undefined;
   const roleSelectors: AgentResourceSelectors | undefined = roleDefinition ? {
     ...(roleDefinition.skills === undefined ? {} : { skills: roleDefinition.skills }),
-    ...(roleDefinition.extensions === undefined ? {} : { extensions: roleDefinition.extensions.map((selector) => canonicalExtensionSelector(selector, cwd)) }),
+    ...(roleDefinition.extensions === undefined ? {} : { extensions: roleDefinition.extensions.map((selector) => canonicalExtensionSelector(selector, roleDefinition.provenance ? dirname(roleDefinition.provenance.path) : cwd)) }),
     ...(roleDefinition.tools === undefined ? {} : { tools: roleDefinition.tools }),
   } : undefined;
   const selectorValue = (key: "skills" | "extensions" | "tools", fallback: readonly string[] | undefined): readonly string[] | undefined => {
@@ -872,7 +876,7 @@ async function prepareAgentSetup(root: AgentExecutionRoot, transport: AgentTrans
       extensions: [...baseResourcePolicy.effective.extensions, ...(roleSelectors?.extensions ?? []), ...(rawCallExtensions ?? [])],
       ...(baseResourcePolicy.effective.tools === undefined && roleSelectors?.tools === undefined && rawCallTools === undefined ? {} : { tools: [...(baseResourcePolicy.effective.tools ?? []), ...(roleSelectors?.tools ?? []), ...(rawCallTools ?? [])] }),
     },
-    selectorSources: { global: baseResourcePolicy.selectorSources.global, project: baseResourcePolicy.selectorSources.project, ...(roleSelectors ? { role: roleSelectors } : {}), ...(Object.keys(callSelectors).length ? { call: callSelectors } : {}) },
+    selectorSources: { ...baseResourcePolicy.selectorSources, ...(roleSelectors ? { role: roleSelectors } : {}), ...(Object.keys(callSelectors).length ? { call: callSelectors } : {}) },
   } : undefined;
   if (resourcePolicy) {
     resourcePolicy.selectedTools = resolved.tools;
@@ -952,7 +956,9 @@ export class WorkflowAgentExecutor {
       }
     }
     const resolved = resolveRole(roleName, {
+      useSharedSettings: false,
       cwd: this.root.cwd,
+      projectTrusted: this.root.projectTrusted ?? true,
       ...(roleDefinition === undefined ? {} : { definition: roleDefinition }),
       ...(this.root.agentDefinitions === undefined ? {} : { definitions: this.root.agentDefinitions }),
       ...(this.root.agentDir === undefined ? {} : { agentDir: this.root.agentDir }),

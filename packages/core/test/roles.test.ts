@@ -75,7 +75,7 @@ Role prompt`);
     extensions: ["!missing-extension"],
   } as const;
   const definition = loadRole("full", options);
-  assert.deepEqual(definition, parseRoleMarkdown(`---
+  assert.deepEqual(definition, { ...parseRoleMarkdown(`---
 model: role-model
 description: Full role
 tools: ["!*", read]
@@ -87,7 +87,7 @@ extensionSettings:
 override_system_prompt: true
 contextFiles: [global, project, cwd]
 ---
-Role prompt`, true, rolePath));
+Role prompt`, true, rolePath), provenance: { path: rolePath, scope: "global", priority: 0 } });
   const resolved = resolveRole("full", options);
   assert.deepEqual(resolved.model, { provider: "other", model: "override", thinking: "low" });
   assert.deepEqual(resolved.tools, ["read", "grep"]);

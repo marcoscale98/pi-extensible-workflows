@@ -1,3 +1,4 @@
+import { registerRoleContribution } from "@piewf/pi-ext-roles";
 import { registerWorkflowExtension } from "pi-extensible-workflows";
 
 const templateExtension = {
@@ -19,9 +20,6 @@ const templateExtension = {
       },
     },
   },
-  // Packaged resources must be absolute paths or file URLs. This URL stays
-  // correct when the extension is copied or installed elsewhere.
-  roleDirectories: [new URL("./roles/", import.meta.url)],
   // Optional advanced example: select an available model without naming a
   // provider-specific model in the extension.
   modelAliases: {
@@ -46,6 +44,11 @@ const templateExtension = {
   },
 };
 
-export default function extension() {
+export default function extension(pi) {
+  registerRoleContribution(pi, {
+    owner: import.meta.url,
+    roleDirectories: ["./roles"],
+    extension: { version: templateExtension.version, headline: templateExtension.headline },
+  });
   registerWorkflowExtension(templateExtension);
 }

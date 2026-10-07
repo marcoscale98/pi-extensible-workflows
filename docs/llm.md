@@ -27,7 +27,7 @@ npm install -g @piewf/cli
 | --- | --- |
 | `pi-extensible-workflows` | The task needs workflows, the `reviewLoop` implementation-and-review starter, or one independent subagent run with a durable ID and lifecycle controls. |
 | `@piewf/herdr` | Core workflow agents need live handoff, completed-session inspection, or fully inspectable execution in Herdr. Core must also be loaded. |
-| `@piewf/cli` | A terminal needs doctor, inspection, headless registered-function or file-backed workflow execution, export, or bundle commands, or `pi-role <role> [pi arguments...]` to start a regular Pi session with a role's model, tools, skills, extensions, and system prompt. Install it with `npm install -g @piewf/cli` so both binaries are on `PATH`. |
+| `@piewf/cli` | A terminal needs the `piewf` command for doctor, inspection, headless registered-function or file-backed workflow execution, export, or bundles. Only `piewf` is owned by this package; `pi-role` belongs to the independent `@piewf/pi-ext-roles` package. |
 
 For local development:
 
@@ -53,8 +53,10 @@ Only load extension code and role files that you trust. Workflow scripts run in 
 
 - Global settings: `<agentDir>/pi-extensible-workflows/settings.json`
 - Trusted project settings: `<cwd>/.pi/pi-extensible-workflows/settings.json`
-- Global roles: `<agentDir>/pi-extensible-workflows/roles/<name>.md`
-- Trusted project roles: `<cwd>/.pi/pi-extensible-workflows/roles/<name>.md`
+- Global roles: `<agentDir>/pi-ext-roles/roles/<name>.md`
+- Trusted project roles: `<cwd>/.pi/pi-ext-roles/roles/<name>.md`
+
+Workflow consumers temporarily accept the old `pi-extensible-workflows/roles` directories with a deprecation warning. New paths take precedence within each scope. Programmatic consumers only see legacy paths contributed by an authorized workflow consumer; the native CLI does not discover dynamic contributions and requires the new paths.
 
 Missing settings files use defaults. Settings JSON is strict: unknown keys, invalid JSON, and invalid values fail launch or resume. Project settings are ignored when the project is not trusted.
 
@@ -163,7 +165,7 @@ Rules:
 - Export a default factory.
 - Call `registerWorkflowExtension()` inside the factory, not at module top level.
 - Provide a strict semantic `version` and non-empty `headline`.
-- Register at least one capability: `functions`, `modelAliases`, `validateSettings`, `agentSetupHooks`, `agentAttemptActions`, or `roleDirectories`. Function descriptions remain on each registered function and power catalog discovery and CLI help.
+- Register at least one capability: `functions`, `modelAliases`, `validateSettings`, `agentSetupHooks`, or `agentAttemptActions`. Function descriptions remain on each registered function and power catalog discovery and CLI help.
 - Treat all extension code as trusted host code.
 - Use globally unique, stable names. Registration is frozen after `session_start`; late registration fails with `REGISTRY_FROZEN`.
 - Do not use the removed `workflows` or `variables` registration formats.
@@ -205,7 +207,6 @@ export default function extension() {
 | `modelAliases` | Named dynamic resolvers with `resolve(context)`. |
 | `agentSetupHooks` | Named trusted setup hooks with optional finite `priority`. |
 | `agentAttemptActions` | Named `/workflow` actions, optionally shared with `/subagents` through paired `visibleStandalone(context)` and `runStandalone(context)`, alongside `label`, synchronous `visible(context)`, and `run(context)`. |
-| `roleDirectories` | Absolute filesystem paths or `file:` URLs containing packaged `<name>.md` roles. |
 
 Unknown top-level extension keys are rejected. Function names must be identifier-shaped, globally unique, and must not be reserved globals such as `agent`, `args`, `JSON`, `extensions`, or `workflow_catalog`. Model alias names must match `[A-Za-z][A-Za-z0-9_-]*`. Hook and action names must be identifier-shaped and globally unique.
 
@@ -260,11 +261,20 @@ Hooks may mutate the prompt, options, session input, or transport, but the immut
 
 ### Packaged roles
 
-Use `roleDirectories` for extension-provided role defaults. Paths must be absolute or `file:` URLs; use `new URL("./roles/", import.meta.url)` so copied or installed extensions resolve correctly.
+Register role defaults independently of workflow capabilities:
 
 ```ts
-roleDirectories: [new URL("./roles/", import.meta.url)]
+import { registerRoleContribution } from "@piewf/pi-ext-roles";
+
+export default function extension(pi) {
+  registerRoleContribution(pi, {
+    owner: import.meta.url,
+    roleDirectories: ["./roles"],
+  });
+}
 ```
+
+Relative directories resolve from the owner. `registerWorkflowExtension({ roleDirectories })` is rejected with `INVALID_METADATA` and migration guidance, even when `source` is supplied. `source` remains a workflow registration field for function provenance and portable bundling. See [role migration](roles.html#migration) for the retained legacy imports and paths.
 
 Extension roles are defaults. The full precedence order is starter roles < user extension roles < global roles < trusted project roles. Regular extension roles silently override matching starter roles; duplicate role names across regular extension directories are rejected.
 
@@ -323,3 +333,9 @@ When creating or changing an extension or role:
 7. Run `npm run check` from the repository root.
 
 The workflow DSL, workflow invocation examples, checkpoint handling, budgets, worktrees, and recovery are intentionally outside this file. Read the bundled workflow skill for those tasks.
+
+### Native role CLI versus programmatic consumers
+
+`pi-role` composes static roles/settings and spawns native `pi` from PATH without an upfront SDK session or extension factories. Metadata selectors remove selected-out factories before spawn; dynamic contributor discovery is not a CLI feature. Role/shared tool selectors restrict the model-declared loadout, not deferred/codemode capabilities. Native `--tools` overrides the loadout inside its registry allowlist; `--exclude`, `--no-tools` and `--no-builtin-tools` are hard ceilings across reload and later turns.
+
+The binary ignores shared/per-role `extensionSettings`. Partial `contextFiles` scopes fail explicitly unless native `--no-context-files` suppresses context; only all scopes or `[]` are expressible. Explicit models, help and session handling are native, without catalog validation or role-model fallback. Independent `discoverRoles`, `resolveRole` and `composeRoleConfiguration` return definitions/configuration/resolved options, not SDK sessions or a special settings event channel. Workflow agents and subagents apply those options and own provider loading, partial contexts, recovery snapshots and disposal. Workflow transports `extensionSettings` itself via its existing consumer session/start/hook seam (`session_start` `event.settings`). See [roles](roles.html#pi-role).

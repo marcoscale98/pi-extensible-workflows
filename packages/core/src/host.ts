@@ -1,3 +1,7 @@
+import { notifyRoleDeprecation } from "./role-deprecation.js";
+import { registerRoleContribution } from "@piewf/pi-ext-roles";
+import type { RoleDirectoryRegistration } from "@piewf/pi-ext-roles/types";
+import { legacyRoleSources } from "./roles.js";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir } from "node:fs/promises";
@@ -14,8 +18,8 @@ import { retainTerminalRuns } from "./retention.js";
 import type { PersistedRun, WorktreeReference } from "./persistence.js";
 import { validateBudget, WorkflowBudgetRuntime } from "./budget.js";
 import { SerialLane, asWorkflowError, createLaunchSnapshot, errorCode, errorText, fail, isNodeError, jsonValue, mergeWorkflowExtensionSettings, modelAliasErrorName, modelCapability, object, parseModelReference, positiveInteger, reachableTools, resolveModelReference, VIRTUAL_MODEL_PROVIDER, sanitizeDisplayText, validateModelAliases } from "./utils.js";
-import { loadCodemodeToolsSetting, loadSettings, preflight, resolveAgentResourcePolicy, resolveWorkflowSettings, validateCheckpoint, validateModelAliasAvailability, validateWorkflowLaunchWithRegistry, workflowProjectSettingsPath, workflowSettingsPath, workflowToolExposure } from "./validation.js";
-import { loadAgentDefinitions, loadProjectAgentDefinitions } from "./roles.js";
+import { loadCodemodeToolsSetting, preflight, resolveAgentResourcePolicy, resolveWorkflowSettings, validateCheckpoint, validateModelAliasAvailability, validateWorkflowLaunchWithRegistry, workflowProjectSettingsPath, workflowSettingsPath, workflowToolExposure } from "./validation.js";
+import { activeRoleDirectories, loadAgentDefinitions } from "./roles.js";
 import { beginWorkflowExtensionLoading, loadingRegistry, resetWorkflowRegistryIfIdle, retainWorkflowRegistry, type WorkflowRegistryApi } from "./registry.js";
 import { agentHandleTurnPath, agentIdentityPath, agentWorktree, encoded, executeShellCommand, persistActiveAgentAttempt, persistAgentAttempts, readShellResult, runWorkflow, shellIdentityPath, toolIdentityPath } from "./execution.js";
 import { prepareScriptToolLoadout, scriptTool, scriptToolContext, scriptToolValue, validateScriptToolReferences } from "./script-tools.js";
@@ -336,10 +340,16 @@ async function resolveLaunchAliases(registry: WorkflowRegistryApi, staticAliases
   }
 }
 
-export default function workflowExtension(pi: WorkflowExtensionAPI, home?: string, clipboard = copyToClipboard, transport: AgentTransport = localAgentTransport, agentDir?: string, additionalSkillPaths: readonly string[] = []) {
+export default function workflowExtension(pi: WorkflowExtensionAPI, home?: string, clipboard = copyToClipboard, transport: AgentTransport = localAgentTransport, agentDir?: string, additionalSkillPaths: readonly string[] = [], roleSources?: readonly RoleDirectoryRegistration[]) {
   beginWorkflowExtensionLoading();
   const registry = loadingRegistry();
   const extensionAgentDir = agentDir ?? getAgentDir();
+  const currentRoleSources = () => roleSources ?? activeRoleDirectories(pi.events);
+  if (pi.events?.on && pi.events.emit) {
+    const events = { on: pi.events.on, emit: pi.events.emit };
+    const unsubscribeSources = registerRoleContribution({ events, on: pi.on.bind(pi) }, { owner: new URL(import.meta.url.endsWith(".ts") ? "./index.ts" : "./index.js", import.meta.url), roleDirectories: legacyRoleSources(process.cwd(), extensionAgentDir) });
+    pi.on("session_shutdown", () => { unsubscribeSources(); });
+  }
   const registerEntryRenderer = piHostCapabilities(pi).registerEntryRenderer;
   registerEntryRenderer?.<WorkflowLogEntry>(WORKFLOW_LOG_ENTRY, (entry) => {
     const data = entry.data;
@@ -351,7 +361,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   });
   let backgroundWidgetEnabled = true;
   try {
-    const globalSettings = loadSettings(workflowSettingsPath(extensionAgentDir));
+    const globalSettings = resolveWorkflowSettings(process.cwd(), false, workflowSettingsPath(extensionAgentDir)).effective;
     backgroundWidgetEnabled = globalSettings.backgroundWidget ?? true;
     // Registered at load, before Pi resolves --model and restores the session model. Project aliases need project trust, which is unknown here.
     registerAliasVirtualModels(pi, Object.keys(globalSettings.modelAliases ?? {}), workflowSettingsPath(extensionAgentDir));
@@ -1035,8 +1045,8 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     let current: Readonly<Record<string, AgentDefinition>> = {};
     let project: Readonly<Record<string, AgentDefinition>> = {};
     try {
-      current = loadAgentDefinitions(cwd, extensionAgentDir, trustedProject, registry.roleDirectoryRegistrations());
-      project = trustedProject ? loadProjectAgentDefinitions(cwd) : {};
+      current = loadAgentDefinitions(cwd, extensionAgentDir, trustedProject, currentRoleSources());
+      project = Object.fromEntries(Object.entries(current).filter(([, definition]) => definition.provenance?.scope === "project"));
     } catch { /* Unreadable current roles leave the resume with the snapshot roles, as before. */ }
     const definitions = { ...current, ...(snapshot.roles ?? {}) };
     const captured = roleCapture(store, snapshot, definitions, project);
@@ -1211,6 +1221,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
     await deliveryController.deliverTerminal(store, formatWorkflowFailureDeliveryFallback(run.workflowName, run.id, store.directory, error, run.state === "failed"), true);
   };
   pi.on("session_start", async (_event, ctx) => {
+    notifyRoleDeprecation(ctx, extensionAgentDir);
     if (sessionStarted) return;
     sessionStarted = true;
     try {
@@ -1254,7 +1265,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const roleDefinitions = loaded.snapshot.roles ?? {};
       const abortController = new AbortController();
       const providerErrorRecovery = createProviderErrorRecovery(ctx, new Set(loaded.snapshot.models), () => { abortController.abort(); });
-      runs.set(runId, { executor: createAgentExecutor({ cwd: ctx.cwd, model, tools: activeSnapshotTools(loaded.snapshot.tools, "session"), resourceSelectors: snapshotResourcePolicy(loaded.snapshot, store.cwd, projectTrusted(ctx), workflowSettingsPath(extensionAgentDir)).effective, extensionSettings: loaded.snapshot.settings.extensionSettings, availableModels: new Set(loaded.snapshot.models), knownModels: new Set(loaded.snapshot.models), ...(loaded.snapshot.modelAliases ?? loaded.snapshot.settings.modelAliases ? { modelAliases: loaded.snapshot.modelAliases ?? loaded.snapshot.settings.modelAliases } : {}), ...(loaded.snapshot.settingsSources?.modelAliases ? { settingsPath: loaded.snapshot.settingsSources.modelAliases } : loaded.snapshot.settingsPath ? { settingsPath: loaded.snapshot.settingsPath } : {}), agentDefinitions: roleDefinitions, runStore: store, providerPause, agentResourcePolicy: frozenResourcePolicy(snapshotResourcePolicy(loaded.snapshot, store.cwd, projectTrusted(ctx), workflowSettingsPath(extensionAgentDir))) }), store, metadata: loaded.snapshot.metadata, model, lifecycle, budget: budgetRuntime, abortController, projectTrusted: () => projectTrusted(ctx), checkpointResolvers: new Map(), ...(providerErrorRecovery ? { providerErrorRecovery } : {}) });
+      runs.set(runId, { executor: createAgentExecutor({ cwd: ctx.cwd, projectTrusted: projectTrusted(ctx), model, tools: activeSnapshotTools(loaded.snapshot.tools, "session"), resourceSelectors: snapshotResourcePolicy(loaded.snapshot, store.cwd, projectTrusted(ctx), workflowSettingsPath(extensionAgentDir)).effective, extensionSettings: loaded.snapshot.settings.extensionSettings, availableModels: new Set(loaded.snapshot.models), knownModels: new Set(loaded.snapshot.models), ...(loaded.snapshot.modelAliases ?? loaded.snapshot.settings.modelAliases ? { modelAliases: loaded.snapshot.modelAliases ?? loaded.snapshot.settings.modelAliases } : {}), ...(loaded.snapshot.settingsSources?.modelAliases ? { settingsPath: loaded.snapshot.settingsSources.modelAliases } : loaded.snapshot.settingsPath ? { settingsPath: loaded.snapshot.settingsPath } : {}), agentDefinitions: roleDefinitions, runStore: store, providerPause, agentResourcePolicy: frozenResourcePolicy(snapshotResourcePolicy(loaded.snapshot, store.cwd, projectTrusted(ctx), workflowSettingsPath(extensionAgentDir))) }), store, metadata: loaded.snapshot.metadata, model, lifecycle, budget: budgetRuntime, abortController, projectTrusted: () => projectTrusted(ctx), checkpointResolvers: new Map(), ...(providerErrorRecovery ? { providerErrorRecovery } : {}) });
       for (const checkpoint of await store.awaitingCheckpoints()) deliver(pi, `Workflow ${loaded.snapshot.metadata.name} checkpoint ${checkpoint.name}: ${checkpoint.prompt}\nContext: ${JSON.stringify(checkpoint.context)}\nRespond with workflow_respond.`);
       for (const decision of await store.pendingWorkflowDecisions()) deliver(pi, recovery.budgetDecisionDelivery(loaded.snapshot.metadata, decision));
       scheduler.restoreRun(runId, loaded.snapshot.settings.concurrency, loaded.snapshot.identityVersion === LAUNCH_SNAPSHOT_IDENTITY_VERSION ? await store.loadOwnership() : [], () => runs.get(runId)?.budget.checkAgentLaunch(), loaded.snapshot.settings.extensionSettings);
@@ -1285,7 +1296,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
   });
   pi.on("before_agent_start", (event, ctx) => {
     if (!pi.getActiveTools().includes("workflow")) return;
-    const roles = Object.entries(loadAgentDefinitions(ctx.cwd, extensionAgentDir, projectTrusted(ctx), typeof registry.roleDirectoryRegistrations === "function" ? registry.roleDirectoryRegistrations() : undefined)).filter(([, definition]) => definition.description);
+    const roles = Object.entries(loadAgentDefinitions(ctx.cwd, extensionAgentDir, projectTrusted(ctx), currentRoleSources())).filter(([, definition]) => definition.description);
     if (!roles.length) return;
     const content = `Workflow role descriptions:\n${roles.map(([name, definition]) => `- \`${name}\`: ${String(definition.description)}`).join("\n")}`;
     return { systemPrompt: `${event.systemPrompt}\n\n${content}` };
@@ -1331,7 +1342,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const settings = Object.freeze({ ...launch.settings, ...(Object.keys(modelAliases).length ? { modelAliases } : {}) });
       if (launch.resolution.global.extensionSettings !== undefined) registry.validateExtensionSettings(launch.resolution.global.extensionSettings, { source: "global", cwd: ctx.cwd, projectTrusted: trustedProject, settingsPath: launch.resolution.globalSettingsPath });
       if (trustedProject && launch.resolution.project.extensionSettings !== undefined) registry.validateExtensionSettings(launch.resolution.project.extensionSettings, { source: "project", cwd: ctx.cwd, projectTrusted: true, settingsPath: launch.resolution.projectSettingsPath });
-      const validated = validateWorkflowLaunchWithRegistry(params, { cwd: ctx.cwd, agentDir: extensionAgentDir, projectTrusted: trustedProject, availableModels, rootTools: new Set(rootTools), modelAliases, knownModels, settingsPath, ...(settings.extensionSettings === undefined ? {} : { extensionSettings: settings.extensionSettings }) }, registry);
+      const validated = validateWorkflowLaunchWithRegistry(params, { cwd: ctx.cwd, agentDir: extensionAgentDir, extensionRoleDirectories: currentRoleSources(), projectTrusted: trustedProject, availableModels, rootTools: new Set(rootTools), modelAliases, knownModels, settingsPath, ...(settings.extensionSettings === undefined ? {} : { extensionSettings: settings.extensionSettings }) }, registry);
       const { script, checked, agentDefinitions, projectAgentDefinitions, roleNames } = validated;
       const toolContext = scriptToolContext(ctx);
       validateScriptToolReferences(script, toolContext);
@@ -1386,7 +1397,7 @@ export default function workflowExtension(pi: WorkflowExtensionAPI, home?: strin
       const backgroundLaunch = !params.foreground;
       const providerPause = async () => { if (!foregroundAttached) deliver(pi, `Workflow ${checked.metadata.name} paused: provider limit.`); await lifecycle.providerPause(); };
       const providerErrorRecovery = createProviderErrorRecovery(ctx, availableModels, () => { runController.abort(); });
-      const executor = createAgentExecutor({ cwd: ctx.cwd, model: rootModel, tools: new Set(rootTools), resourceSelectors: launch.resourcePolicy.effective, extensionSettings: settings.extensionSettings, availableModels, knownModels, modelAliases, settingsPath, agentDefinitions, runStore: store, providerPause, agentResourcePolicy: frozenResourcePolicy(launch.resourcePolicy), runContext });
+      const executor = createAgentExecutor({ cwd: ctx.cwd, projectTrusted: launch.resourcePolicy.projectTrusted, model: rootModel, tools: new Set(rootTools), resourceSelectors: launch.resourcePolicy.effective, extensionSettings: settings.extensionSettings, availableModels, knownModels, modelAliases, settingsPath, agentDefinitions, runStore: store, providerPause, agentResourcePolicy: frozenResourcePolicy(launch.resourcePolicy), runContext });
       const runRecord: WorkflowRunRecord = { executor, store, metadata: checked.metadata, model: rootModel, lifecycle, budget: budgetRuntime, abortController: runController, foreground: foregroundAttached, projectTrusted: () => projectTrusted(ctx), checkpointResolvers: new Map(), ...(providerErrorRecovery ? { providerErrorRecovery } : {}), ...(params.foreground && onUpdate ? { update: onUpdate } : {}) };
       runs.set(runId, runRecord);
       if (params.foreground && onUpdate) onUpdate(workflowToolUpdate((await store.load()).run));

@@ -35,24 +35,24 @@ void test("loads markdown agent roles only from canonical global and project dir
     writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "Review role");
     writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "shadowed.md"), "Project shadowed role");
     const roles = loadAgentDefinitions(cwd);
-    assert.deepEqual(roles.global, { prompt: "Global role", description: "Global review", model: "openai/gpt:high", tools: ["read", "grep"] });
+    assert.deepEqual(roles.global, { provenance: { path: join(defaultAgentDir, "pi-extensible-workflows", "roles", "global.md"), scope: "global", priority: 0 }, prompt: "Global role", description: "Global review", model: "openai/gpt:high", tools: ["read", "grep"] });
     assert.equal(roles.reviewer?.prompt, "Review role");
-    assert.deepEqual(roles.collision, { prompt: "Canonical collision" });
-    assert.deepEqual(roles.shadowed, { prompt: "Project shadowed role" });
-    assert.deepEqual(roles.multiline, { prompt: "Multiline role", tools: ["read", "grep"] });
+    assert.deepEqual(roles.collision, { provenance: { path: join(defaultAgentDir, "pi-extensible-workflows", "roles", "collision.md"), scope: "global", priority: 0 }, prompt: "Canonical collision" });
+    assert.deepEqual(roles.shadowed, { provenance: { path: join(cwd, ".pi", "pi-extensible-workflows", "roles", "shadowed.md"), scope: "project", priority: 0 }, prompt: "Project shadowed role" });
+    assert.deepEqual(roles.multiline, { provenance: { path: join(defaultAgentDir, "pi-extensible-workflows", "roles", "multiline.md"), scope: "global", priority: 0 }, prompt: "Multiline role", tools: ["read", "grep"] });
     assert.equal(roles["old-global"], undefined);
     assert.equal(roles["old-legacy"], undefined);
     assert.equal(roles["old-project"], undefined);
     const untrusted = loadAgentDefinitions(cwd, undefined, false);
-    assert.equal(untrusted.reviewer, undefined);
-    assert.deepEqual(untrusted.collision, { prompt: "Canonical collision" });
+    assert.equal(untrusted.reviewer?.provenance?.scope, "builtin");
+    assert.deepEqual(untrusted.collision, { provenance: { path: join(defaultAgentDir, "pi-extensible-workflows", "roles", "collision.md"), scope: "global", priority: 0 }, prompt: "Canonical collision" });
     process.env.PI_CODING_AGENT_DIR = customAgentDir;
     mkdirSync(join(customAgentDir, "pi-extensible-workflows", "roles"), { recursive: true });
     writeFileSync(join(customAgentDir, "pi-extensible-workflows", "roles", "custom.md"), "Custom role");
     writeFileSync(join(customAgentDir, "pi-extensible-workflows", "roles", "collision.md"), "Custom collision");
     const customRoles = loadAgentDefinitions(cwd);
-    assert.deepEqual(customRoles.custom, { prompt: "Custom role" });
-    assert.deepEqual(customRoles.collision, { prompt: "Custom collision" });
+    assert.deepEqual(customRoles.custom, { provenance: { path: join(customAgentDir, "pi-extensible-workflows", "roles", "custom.md"), scope: "global", priority: 0 }, prompt: "Custom role" });
+    assert.deepEqual(customRoles.collision, { provenance: { path: join(customAgentDir, "pi-extensible-workflows", "roles", "collision.md"), scope: "global", priority: 0 }, prompt: "Custom collision" });
   } finally {
     if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -70,8 +70,8 @@ void test("loads markdown agent roles deployed as per-file symlinks", () => {
   symlinkSync(join(root, "missing-role.md"), join(roleDirectory, "dangling.md"));
   writeFileSync(join(roleDirectory, "sibling.md"), "Sibling role");
   const roles = loadAgentDefinitions(cwd, agentDir, true, []);
-  assert.deepEqual(roles.linked, { prompt: "Linked body", description: "Linked role" });
-  assert.deepEqual(roles.sibling, { prompt: "Sibling role" });
+  assert.deepEqual(roles.linked, { provenance: { path: join(root, "source-role.md"), scope: "global", priority: 0 }, prompt: "Linked body", description: "Linked role" });
+  assert.deepEqual(roles.sibling, { provenance: { path: join(roleDirectory, "sibling.md"), scope: "global", priority: 0 }, prompt: "Sibling role" });
 });
 
 void test("strict role frontmatter rejects malformed metadata", () => {
@@ -119,7 +119,7 @@ void test("strict role selectors normalize relative and portable extension paths
   process.env.HOME = root;
   try {
     const definition = parseRoleMarkdown(`---\nskills: [role-skill, role-skill]\nextensions:\n  - "../role-extension.ts"\n  - "~/role-extension.ts"\n  - "${pathToFileURL(extension).href}"\n---\nbody`, true, rolePath);
-    assert.deepEqual(definition, { prompt: "body", skills: ["role-skill", "role-skill"], extensions: [extension, extension, extension] });
+    assert.deepEqual(definition, { provenance: { path: rolePath }, prompt: "body", skills: ["role-skill", "role-skill"], extensions: [extension, extension, extension] });
     for (const content of [
       "---\nskills: role-skill\n---\nbody",
       "---\nskills: [role-skill, 2]\n---\nbody",

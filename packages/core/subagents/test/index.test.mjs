@@ -3433,3 +3433,42 @@ function deferred() {
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
 }
+
+test("shared roles settings reach standalone preparation and explicit consumer/call overrides", async () => {
+  resetWorkflowRegistry();
+  const root = await mkdtemp(join(tmpdir(), "subagents-shared-roles-"));
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  const sharedPath = join(agentDir, "pi-ext-roles", "settings.json");
+  const consumerPath = join(agentDir, "pi-extensible-workflows", "settings.json");
+  const captured = [];
+  const context = await managerContext(cwd);
+  const transport = { id: "inspection", async createSession() { throw new Error("inspection must not create a session"); } };
+  const manager = createSubagentManager({
+    agentDir, storageDir: join(root, "storage"), transport,
+    getActiveTools: () => ["read", "grep", "subagents_run"],
+    createExecutor(rootValue, nextTransport) {
+      return { async execute(task, options) {
+        const prepared = await prepareAgentSetupForInspection(rootValue, task, options, nextTransport);
+        captured.push(prepared.setup.prepared);
+        return { value: "prepared", attempts: [], cwd };
+      } };
+    },
+  });
+  try {
+    await mkdir(join(agentDir, "pi-ext-roles", "roles"), { recursive: true });
+    await writeFile(sharedPath, JSON.stringify({ modelAliases: { selected: "fixture/cheap:high" }, tools: ["!*", "read"], skills: ["!*", "shared-*"], extensionSettings: { acme: { shared: true } } }));
+    await writeFile(join(agentDir, "pi-ext-roles", "roles", "custom.md"), "---\nmodel: selected\n---\nShared standalone role");
+    assert.equal((await manager.run({ prompt: "shared", role: "custom", mode: "foreground" }, context)).state, "completed");
+    assert.deepEqual(captured[0].model, { provider: "fixture", model: "cheap", thinking: "high" });
+    assert.deepEqual(captured[0].tools, ["read"]);
+    assert.deepEqual(captured[0].settings, { acme: { shared: true } });
+    assert.deepEqual(captured[0].resourcePolicy.selectorSources.defaults.global.skills, ["!*", "shared-*"]);
+    await mkdir(dirname(consumerPath), { recursive: true });
+    await writeFile(consumerPath, JSON.stringify({ modelAliases: { selected: "fixture/role-model:low" }, tools: ["grep"], extensionSettings: {} }));
+    assert.equal((await manager.run({ prompt: "consumer", role: "custom", tools: ["!*", "grep"], mode: "foreground" }, context)).state, "completed");
+    assert.deepEqual(captured[1].model, { provider: "fixture", model: "role-model", thinking: "low" });
+    assert.deepEqual(captured[1].tools, ["grep"]);
+    assert.deepEqual(captured[1].settings, { acme: { shared: true } });
+  } finally { await manager.dispose(); resetWorkflowRegistry(); await rm(root, { recursive: true, force: true }); }
+});

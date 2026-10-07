@@ -55,7 +55,12 @@ test("the repository keeps the public package in the core workspace", () => {
   assert.equal(cli.name, "@piewf/cli");
   assert.equal(cli.version, root.version);
   assert.equal(cli.bin.piewf, "./dist/src/cli.js");
-  assert.equal(cli.bin["pi-role"], "./dist/src/pi-role.js");
+  assert.equal(cli.bin["pi-role"], undefined);
+  const roles = JSON.parse(readFileSync(new URL("../../../node_modules/@piewf/pi-ext-roles/package.json", import.meta.url), "utf8"));
+  assert.equal(roles.bin["pi-role"], "./dist/cli.js");
+  assert.equal(core.dependencies[roles.name], roles.version);
+  assert.equal(cli.dependencies[roles.name], roles.version);
+  assert.match(roles.version, /^\d+\.\d+\.\d+$/);
   assert.equal(cli.publishConfig.access, "public");
 });
 

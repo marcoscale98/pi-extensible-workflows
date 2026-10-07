@@ -1,3 +1,4 @@
+import type * as RoleTypes from "@piewf/pi-ext-roles/types";
 import type { CreateAgentSessionOptions, InlineExtension, SessionManager, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 export const RUN_STATES = ["queued", "running", "pausing", "paused", "awaiting_input", "completed", "failed", "stopped", "interrupted", "budget_exhausted"] as const;
@@ -32,10 +33,10 @@ export const ERROR_CODES = [
   "TOOL_FAILED", "CANCELLED", "WORKER_UNRESPONSIVE", "WORKTREE_FAILED", "RESUME_INCOMPATIBLE", "BUDGET_EXHAUSTED", "INTERNAL_ERROR",
   ] as const;
 
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+export { THINKING_LEVELS, CONTEXT_FILE_SCOPES, isContextFileScope } from "@piewf/pi-ext-roles/types";
+export type ThinkingLevel = RoleTypes.ThinkingLevel;
 export type WorkflowErrorCode = (typeof ERROR_CODES)[number];
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonValue = RoleTypes.JsonValue;
 export type JsonSchema = { [key: string]: JsonValue };
 type WorkflowSchema = JsonSchema | TSchema;
 export function roleNameOf(value: unknown): string | undefined {
@@ -85,7 +86,7 @@ export interface WorkflowPhaseChangedEvent extends WorkflowEventBase { previousP
 export type WorkflowCheckpointState = "awaiting" | "approved" | "rejected";
 export interface WorkflowCheckpointStateChangedEvent extends WorkflowEventBase { name: string; state: WorkflowCheckpointState }
 export interface WorkflowBudgetEvent extends WorkflowEventBase { type: BudgetEventType; budgetVersion: number; dimensions: readonly BudgetDimension[]; usage: WorkflowBudgetUsage; limits: WorkflowBudget; proposalId?: string; previous?: WorkflowBudget; proposed?: WorkflowBudget }
-export interface ModelSpec { provider: string; model: string; thinking?: ThinkingLevel }
+export type ModelSpec = RoleTypes.ModelSpec;
 export interface WorkflowModelAliasResolverContext { cwd: string; projectTrusted: boolean; rootModel: ModelSpec; knownModels: ReadonlySet<string>; availableModels: ReadonlySet<string>; signal: AbortSignal }
 export interface WorkflowModelAlias { resolve: (context: Readonly<WorkflowModelAliasResolverContext>) => string | Promise<string> }
 export interface WorkflowMetadata { name: string; description?: string }
@@ -101,13 +102,11 @@ export type CodemodeToolsSetting = "all" | "read-only" | "none";
 export interface WorkflowSettings { concurrency: number; backgroundWidget?: boolean; codemodeTools?: CodemodeToolsSetting; modelAliases?: Readonly<Record<string, string>>; skills?: readonly string[]; extensions?: readonly string[]; extensionSettings?: Readonly<WorkflowExtensionSettings>; tools?: readonly string[]; retention?: Readonly<WorkflowRetentionSettings> }
 export type WorkflowSettingsOverrides = Partial<Omit<WorkflowSettings, "backgroundWidget" | "codemodeTools">>;
 export interface WorkflowSettingsSources { concurrency: string; modelAliases: string; skills?: string; extensions?: string; tools?: string; extensionSettings?: string; retention?: string }
-export interface WorkflowSettingsResolution { globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; global: Readonly<WorkflowSettings>; project: Readonly<WorkflowSettingsOverrides>; effective: Readonly<WorkflowSettings>; sources: Readonly<WorkflowSettingsSources> }
-export interface AgentResourceSelectors { skills?: readonly string[]; extensions?: readonly string[]; tools?: readonly string[] }
-export interface AgentResourceSelectorSet { skills: readonly string[]; extensions: readonly string[]; tools?: readonly string[] }
-export interface AgentResourceSelectorSources { global: AgentResourceSelectors; project: AgentResourceSelectors; role?: AgentResourceSelectors; call?: AgentResourceSelectors }
-export const CONTEXT_FILE_SCOPES = ["global", "project", "cwd"] as const;
-export type ContextFileScope = (typeof CONTEXT_FILE_SCOPES)[number];
-export function isContextFileScope(value: unknown): value is ContextFileScope { return CONTEXT_FILE_SCOPES.some((scope) => scope === value); }
+export interface WorkflowSettingsResolution { selectorSources?: AgentResourceSelectorSources; globalSettingsPath: string; projectSettingsPath: string; projectTrusted: boolean; global: Readonly<WorkflowSettings>; project: Readonly<WorkflowSettingsOverrides>; effective: Readonly<WorkflowSettings>; sources: Readonly<WorkflowSettingsSources> }
+export type AgentResourceSelectors = RoleTypes.AgentResourceSelectors;
+export type AgentResourceSelectorSet = RoleTypes.AgentResourceSelectorSet;
+export type AgentResourceSelectorSources = RoleTypes.AgentResourceSelectorSources;
+export type ContextFileScope = RoleTypes.ContextFileScope;
 export interface AgentResourcePolicy {
   globalSettingsPath: string;
   projectSettingsPath: string;
@@ -210,7 +209,7 @@ export interface RunRecord {
 }
 export const LAUNCH_SNAPSHOT_IDENTITY_VERSION = 5;
 export type WorkflowLaunchMode = "foreground" | "background";
-export interface AgentDefinition { prompt?: string; description?: string; model?: string; thinking?: NonNullable<ModelSpec["thinking"]>; tools?: readonly string[]; skills?: readonly string[]; extensions?: readonly string[]; overrideSystemPrompt?: boolean; contextFiles?: readonly ContextFileScope[]; extensionSettings?: Readonly<WorkflowExtensionSettings> }
+export type AgentDefinition = Omit<RoleTypes.AgentDefinition, "extensionSettings"> & { extensionSettings?: Readonly<WorkflowExtensionSettings> };
 export interface LaunchSnapshot {
   identityVersion?: number;
   launchMode?: WorkflowLaunchMode;
@@ -334,13 +333,13 @@ export interface AgentSetupHook { priority?: number; setup: (agent: AgentSetup, 
 export interface RegisteredAgentSetupHook { name: string; priority: number; setup: AgentSetupHook["setup"] }
 export interface WorkflowExtensionMetadata { version: string; headline: string }
 export interface WorkflowFunctionSource { readonly module: string; readonly export: string; readonly dependencies: readonly string[] }
-export interface WorkflowRoleDirectoryRegistration { path: string; extension: WorkflowExtensionMetadata; readonly builtin?: true }
+export type WorkflowRoleDirectoryRegistration = Omit<RoleTypes.RoleDirectoryRegistration, "extension"> & { extension: WorkflowExtensionMetadata };
 export interface AgentAttemptActionUi { notify(message: string, level?: "info" | "warning" | "error"): void; confirm(title: string, message: string): Promise<boolean>; select(title: string, options: readonly string[]): Promise<string | undefined>; input(title: string, placeholder?: string): Promise<string | undefined>; setWorkingMessage?(message?: string): void }
 export interface StandaloneAgentRecord { readonly id: string; readonly name: string; readonly label?: string; readonly state: "running" | "completed" | "failed" | "stopped"; readonly structuralPath?: readonly string[] }
 export interface StandaloneAgentAttemptActionContext { readonly agent: Readonly<StandaloneAgentRecord>; readonly attempt: Readonly<AgentAttemptSummary>; readonly session?: WorkflowAgentSessionReference; readonly liveSession?: WorkflowAgentSession; readonly prepared?: Readonly<PreparedAgentSession>; readonly handoff?: LiveSessionHandoff; readonly signal: AbortSignal; readonly ui: Readonly<AgentAttemptActionUi> }
 export interface AgentAttemptActionContext { readonly run: Readonly<RunRecord>; readonly agent: Readonly<AgentRecord>; readonly attempt: Readonly<AgentAttemptSummary>; readonly session?: WorkflowAgentSessionReference; readonly liveSession?: WorkflowAgentSession; readonly prepared?: Readonly<PreparedAgentSession>; readonly handoff?: LiveSessionHandoff; readonly signal: AbortSignal; readonly ui: Readonly<AgentAttemptActionUi> }
 export interface AgentAttemptAction { readonly label: string; visible(context: Readonly<AgentAttemptActionContext>): boolean; run(context: Readonly<AgentAttemptActionContext>): void | Promise<void>; visibleStandalone?(context: Readonly<StandaloneAgentAttemptActionContext>): boolean; runStandalone?(context: Readonly<StandaloneAgentAttemptActionContext>): void | Promise<void> }
-export interface WorkflowExtension extends WorkflowExtensionMetadata { description?: string; source?: string; dependencies?: readonly string[]; validateSettings?: WorkflowExtensionSettingsValidator; functions?: Readonly<Record<string, WorkflowFunction>>; modelAliases?: Readonly<Record<string, WorkflowModelAlias>>; agentSetupHooks?: Readonly<Record<string, AgentSetupHook>>; agentAttemptActions?: Readonly<Record<string, AgentAttemptAction>>; roleDirectories?: readonly (string | URL)[] }
+export interface WorkflowExtension extends WorkflowExtensionMetadata { description?: string; source?: string; dependencies?: readonly string[]; validateSettings?: WorkflowExtensionSettingsValidator; functions?: Readonly<Record<string, WorkflowFunction>>; modelAliases?: Readonly<Record<string, WorkflowModelAlias>>; agentSetupHooks?: Readonly<Record<string, AgentSetupHook>>; agentAttemptActions?: Readonly<Record<string, AgentAttemptAction>> }
 export interface WorkflowJournal { get(path: string): JsonValue | undefined; put(path: string, value: JsonValue): void }
 // The brand keeps instanceof working across the bundled extension entries, which each inline their own copy of this class.
 const WORKFLOW_ERROR_BRAND = Symbol.for("pi-extensible-workflows.workflow-error");
@@ -377,5 +376,5 @@ export interface WorkflowCatalogIndexFunction { name: string; description: strin
 export interface WorkflowCatalogIndex { functions: readonly WorkflowCatalogIndexFunction[]; modelAliases?: Readonly<Record<string, string>>; modelAliasEntries?: readonly WorkflowCatalogModelAlias[]; settings?: WorkflowCatalogSettings }
 export interface WorkflowCatalogError { error: { code: "NOT_FOUND"; name: string; message: string } }
 export interface WorkflowValidationParameters { name: string; description?: string; script?: string; scriptPath?: string; args?: unknown }
-export interface WorkflowValidationContext { cwd: string; projectTrusted: boolean; availableModels: ReadonlySet<string>; rootTools: ReadonlySet<string>; modelAliases?: Readonly<Record<string, string>>; knownModels?: ReadonlySet<string>; settingsPath?: string; agentDir?: string; extensionSettings?: Readonly<WorkflowExtensionSettings> }
+export interface WorkflowValidationContext { extensionRoleDirectories?: readonly import("@piewf/pi-ext-roles/types").RoleDirectoryRegistration[]; cwd: string; projectTrusted: boolean; availableModels: ReadonlySet<string>; rootTools: ReadonlySet<string>; modelAliases?: Readonly<Record<string, string>>; knownModels?: ReadonlySet<string>; settingsPath?: string; agentDir?: string; extensionSettings?: Readonly<WorkflowExtensionSettings> }
 export interface ValidatedWorkflowLaunch { script: string; checked: PreflightResult; agentDefinitions: Readonly<Record<string, AgentDefinition>>; projectAgentDefinitions: Readonly<Record<string, AgentDefinition>>; roleNames: readonly string[] }

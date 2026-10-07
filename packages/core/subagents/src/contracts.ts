@@ -156,6 +156,7 @@ export interface SubagentExecutor {
   execute(task: string, options: AgentExecutionOptions, signal?: AbortSignal, setSteer?: (handler: (message: string) => void | Promise<void>) => void): Promise<AgentExecutionResult>;
 }
 export interface SubagentManagerDependencies {
+  readonly roleEvents?: import("@earendil-works/pi-coding-agent").EventBus;
   readonly getActiveTools?: () => readonly string[];
   readonly agentDir?: string;
   readonly storageDir?: string;

@@ -42,7 +42,7 @@ import {
   SerialLane,
 } from "../../src/index.js";
 import { decodeAgentDefinition, decodeWorkflowExtensions } from "../../src/decoders.js";
-import { loadAgentDefinitions } from "../../src/roles.js";
+import { activeRoleDirectories, loadAgentDefinitions } from "../../src/roles.js";
 import { atomicJson, json as readJson, processAlive } from "../../src/persistence.js";
 import { accountingValue, activityValue, legacyAccountingValue, worktreeValue } from "./decode.js";
 import {
@@ -212,6 +212,7 @@ function executionRoot(context: Readonly<SubagentManagerContext>, dependencies: 
   const extensionSettingsPath = standaloneExtensionSettingsPath(extensionContext.cwd, agentDir, trustedProject, external);
   return {
     cwd: extensionContext.cwd,
+    projectTrusted: trustedProject,
     model,
     tools,
     resourceSelectors: resourcePolicy.effective,
@@ -426,7 +427,7 @@ function standaloneExternalConfiguration(context: Readonly<SubagentManagerContex
     projectTrusted: trustedProject,
     ...(globalExtensionSettings === undefined ? {} : { globalExtensionSettings: structuredClone(globalExtensionSettings) }),
     ...(projectExtensionSettings === undefined ? {} : { projectExtensionSettings: structuredClone(projectExtensionSettings) }),
-    agentDefinitions: structuredClone(loadAgentDefinitions(cwd, agentDir, trustedProject)),
+    agentDefinitions: structuredClone(loadAgentDefinitions(cwd, agentDir, trustedProject, activeRoleDirectories(dependencies.roleEvents))),
   });
 }
 

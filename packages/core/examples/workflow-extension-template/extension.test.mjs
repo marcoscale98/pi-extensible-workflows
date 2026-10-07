@@ -1,3 +1,4 @@
+import { collectRoleContributions } from "@piewf/pi-ext-roles";
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -5,8 +6,8 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
-import { beginWorkflowExtensionLoading, loadingRegistry, registeredWorkflowFunctions, registeredWorkflowRoleDirectoryRegistrations, resetWorkflowRegistry, workflowCatalog } from "pi-extensible-workflows";
+import { createEventBus, discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
+import { beginWorkflowExtensionLoading, loadingRegistry, registeredWorkflowFunctions, resetWorkflowRegistry, workflowCatalog } from "pi-extensible-workflows";
 
 test("discovers the copied directory as a trusted Pi extension", async () => {
   const root = await mkdtemp(join(tmpdir(), "workflow-extension-template-"));
@@ -16,6 +17,8 @@ test("discovers the copied directory as a trusted Pi extension", async () => {
     const packageEntry = fileURLToPath(import.meta.resolve("pi-extensible-workflows"));
     const packageRoot = join(dirname(packageEntry), "..", "..");
     await symlink(packageRoot, join(root, "node_modules", "pi-extensible-workflows"), "dir");
+    await mkdir(join(root, "node_modules", "@piewf"), { recursive: true });
+    await symlink(join(dirname(fileURLToPath(import.meta.resolve("@piewf/pi-ext-roles"))), ".."), join(root, "node_modules", "@piewf", "pi-ext-roles"), "dir");
     await cp(dirname(fileURLToPath(import.meta.url)), destination, { recursive: true });
     const result = await discoverAndLoadExtensions([], root, join(root, ".pi", "agent"));
     assert.equal(result.errors.length, 0);
@@ -27,14 +30,15 @@ test("discovers the copied directory as a trusted Pi extension", async () => {
   resetWorkflowRegistry();
   const { default: extension } = await import("./index.js");
   beginWorkflowExtensionLoading();
-  extension();
+  const bus = createEventBus();
+  extension({ events: bus });
 
   const catalog = workflowCatalog();
   assert.deepEqual(catalog.functions.map(({ name }) => name), ["greet"]);
   assert.deepEqual(catalog.modelAliasEntries?.filter(({ name }) => name === "template-model").map(({ name, kind }) => ({ name, kind })), [{ name: "template-model", kind: "dynamic" }]);
   assert.equal(await registeredWorkflowFunctions().greet.run({ name: "Ada" }, {}), "Hello, Ada!");
 
-  const registration = registeredWorkflowRoleDirectoryRegistrations()[0];
+  const registration = collectRoleContributions(bus, [fileURLToPath(new URL("./index.js", import.meta.url))])[0];
   assert.ok(registration);
   assert.match(readFileSync(join(registration.path, "reviewer.md"), "utf8"), /Packaged reviewer role/);
 

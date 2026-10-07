@@ -1,14 +1,16 @@
 #!/usr/bin/env node
+export * as roleContributionApi from "@piewf/pi-ext-roles";
+import { collectRoleContributions, type RoleDirectoryRegistration } from "@piewf/pi-ext-roles";
 import { randomUUID } from "node:crypto";
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ProjectTrustStore, SessionManager, SettingsManager, createAgentSessionFromServices, createAgentSessionServices, getAgentDir, hasTrustRequiringProjectResources, type ExtensionAPI, type LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
+import { createEventBus, ProjectTrustStore, SessionManager, SettingsManager, createAgentSessionFromServices, createAgentSessionServices, getAgentDir, hasTrustRequiringProjectResources, type ExtensionAPI, type LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 import { doctor, doctorExitCode, formatDoctorReport, type DoctorOptions } from "./doctor.js";
 import { doctorCleanup, doctorCleanupExitCode, formatDoctorCleanupReport, type DoctorCleanupOptions } from "./doctor-cleanup.js";
-import { loadAgentDefinitions } from "pi-extensible-workflows/roles";
+import { discoverRoles } from "pi-extensible-workflows/roles";
 import workflowExtension, { errorText, formatWorkflowProgress, isNodeError, jsonValue, object, registeredWorkflowFunctionSources, sameFilesystemPath, truncateWorkflowProgress, workflowCatalog, workflowSettingsPath, type JsonSchema, type JsonValue, type WorkflowExtensionAPI, type WorkflowProgressStyles } from "pi-extensible-workflows";
 import { portableEngineVersion, portablePiVersion, writePortableWorkflowBundle } from "./bundles.js";
 import { runSessionInspector, transcriptFileLines, type InspectMode } from "./session-inspector.js";
@@ -16,7 +18,7 @@ import { isPersistedRun, listPersistedSessionIds, listRunIds, type PersistedRun 
 import { shareTrajectoryRun } from "pi-extensible-workflows/trajectory";
 import type { WorkflowCatalogFunction } from "pi-extensible-workflows";
 
-export interface CliOptions extends DoctorOptions { inspect?: (sessionId?: string, mode?: InspectMode, failedOnly?: boolean) => Promise<void>; transcript?: (sessionFile: string) => Promise<void>; stderr?: (text: string) => void; signal?: AbortSignal; trustOverride?: boolean; isTTY?: boolean; skillPaths?: readonly string[] }
+export interface CliOptions extends DoctorOptions { inspect?: (sessionId?: string, mode?: InspectMode, failedOnly?: boolean) => Promise<void>; transcript?: (sessionFile: string) => Promise<void>; stderr?: (text: string) => void; signal?: AbortSignal; trustOverride?: boolean; isTTY?: boolean; skillPaths?: readonly string[]; roleSources?: readonly RoleDirectoryRegistration[] }
 
 type CliScalar = "string" | "integer" | "number" | "boolean";
 type CliField = { name: string; option: string; schema: Record<string, unknown>; type: CliScalar | "array"; itemType?: CliScalar; required: boolean };
@@ -294,7 +296,7 @@ function stripTrustOptions(rawArgs: readonly string[]): { args: string[]; trustO
   }
   return { args, ...(trustOverride !== undefined ? { trustOverride } : {}) };
 }
-type WorkflowIo = { write: (text: string) => void; stderr: (text: string) => void; cwd?: string; agentDir?: string; trustOverride?: boolean; isTTY?: boolean; signal?: AbortSignal; skillPaths?: readonly string[] };
+type WorkflowIo = { write: (text: string) => void; stderr: (text: string) => void; cwd?: string; agentDir?: string; trustOverride?: boolean; isTTY?: boolean; signal?: AbortSignal; skillPaths?: readonly string[]; roleSources?: readonly RoleDirectoryRegistration[] };
 
 type HeadlessExtensionAPI = WorkflowExtensionAPI & { events: Pick<ExtensionAPI["events"], "emit"> };
 type HeadlessWorkflowResult = { content: Array<{ type: string; text: string }>; details?: unknown };
@@ -302,7 +304,7 @@ type HeadlessWorkflowTool = { name: "workflow"; execute: (toolCallId: string, pa
 function isHeadlessWorkflowResult(value: unknown): value is HeadlessWorkflowResult { return object(value) && Array.isArray(value.content) && value.content.every((entry) => object(entry) && typeof entry.type === "string" && typeof entry.text === "string"); }
 function isHeadlessWorkflowTool(value: unknown): value is HeadlessWorkflowTool { return object(value) && value.name === "workflow" && typeof value.execute === "function"; }
 type ShutdownHandler = (event: unknown, context: unknown) => Promise<void> | void;
-type WorkflowRuntime = { catalog: ReturnType<typeof workflowCatalog>; services: Awaited<ReturnType<typeof createAgentSessionServices>>; workflowTool: HeadlessWorkflowTool; shutdownHandlers: ShutdownHandler[] };
+type WorkflowRuntime = { roleSources: readonly RoleDirectoryRegistration[]; catalog: ReturnType<typeof workflowCatalog>; services: Awaited<ReturnType<typeof createAgentSessionServices>>; workflowTool: HeadlessWorkflowTool; shutdownHandlers: ShutdownHandler[] };
 
 async function createWorkflowRuntime(options: WorkflowIo, shutdownHandlers: ShutdownHandler[] = []): Promise<WorkflowRuntime> {
   const cwd = options.cwd ?? process.cwd();
@@ -337,11 +339,13 @@ async function createWorkflowRuntime(options: WorkflowIo, shutdownHandlers: Shut
     if (savedTrust !== null) return savedTrust;
     return defaultProjectTrust === "always";
   };
+  const bus = createEventBus();
+  shutdownHandlers.push(() => { bus.clear(); });
   const services = await createAgentSessionServices({
     cwd,
     agentDir,
     settingsManager,
-    resourceLoaderOptions: { ...(options.skillPaths?.length ? { additionalSkillPaths: [...options.skillPaths] } : {}) },
+    resourceLoaderOptions: { eventBus: bus, ...(options.skillPaths?.length ? { additionalSkillPaths: [...options.skillPaths] } : {}) },
     resourceLoaderReloadOptions: { resolveProjectTrust },
   });
   const extensions = services.resourceLoader.getExtensions();
@@ -355,12 +359,13 @@ async function createWorkflowRuntime(options: WorkflowIo, shutdownHandlers: Shut
     on(name: string, handler: unknown) { if (name === "session_shutdown" && typeof handler === "function") shutdownHandlers.push(handler as ShutdownHandler); return () => {}; },
     appendEntry() {},
     sendMessage() {},
-    events: { emit() {} },
+    events: bus,
   } satisfies HeadlessExtensionAPI;
-  workflowExtension(headlessPi, homedir(), undefined, undefined, agentDir, options.skillPaths);
+  const roleSources = [...collectRoleContributions(bus, extensions), ...(options.roleSources ?? [])];
+  workflowExtension(headlessPi, homedir(), undefined, undefined, agentDir, options.skillPaths, roleSources);
   const workflowTool = tools.find(isHeadlessWorkflowTool);
   if (!workflowTool) throw new Error("The workflow runtime could not be initialized");
-  return { catalog: workflowCatalog({ cwd, projectTrusted: settingsManager.isProjectTrusted(), globalSettingsPath: workflowSettingsPath(agentDir) }), services, workflowTool, shutdownHandlers };
+  return { roleSources, catalog: workflowCatalog({ cwd, projectTrusted: settingsManager.isProjectTrusted(), globalSettingsPath: workflowSettingsPath(agentDir) }), services, workflowTool, shutdownHandlers };
 }
 
 function availableModelInfo(services: WorkflowRuntime["services"], available = false): { provider: string; id: string }[] {
@@ -624,7 +629,7 @@ async function bundleWorkflowCli(rawArgs: readonly string[], options: WorkflowIo
     if (!fn) throw new Error(`Unknown workflow function: ${workflowName}`);
     const source = registeredWorkflowFunctionSources()[workflowName];
     if (!source) throw new Error(`Workflow ${workflowName} is not exportable; add \`source: import.meta.url\` to extension ${fn.headline}`);
-    const definitions = requirements.roles.length ? loadAgentDefinitions(options.cwd ?? process.cwd(), options.agentDir ?? getAgentDir(), runtime.services.settingsManager.isProjectTrusted()) : {};
+    const definitions = requirements.roles.length ? discoverRoles({ cwd: options.cwd ?? process.cwd(), agentDir: options.agentDir ?? getAgentDir(), projectTrusted: runtime.services.settingsManager.isProjectTrusted(), additionalRoleSources: runtime.roleSources }) : {};
     const roles = Object.fromEntries(requirements.roles.map((role) => {
       if (!role || role === "." || role === ".." || role.includes("/") || role.includes("\\")) throw new Error(`Invalid role name for bundle: ${role}`);
       const definition = definitions[role];
@@ -704,7 +709,7 @@ export async function runCli(args: readonly string[], options: CliOptions = {}, 
   }
   if (args[0] === "bundle" || args[0] === "run" || args[0] === "export") {
     try {
-      const workflowOptions: WorkflowIo = { write, stderr, ...(options.cwd !== undefined ? { cwd: options.cwd } : {}), ...(options.agentDir !== undefined ? { agentDir: options.agentDir } : {}), ...(options.signal ? { signal: options.signal } : {}), ...(options.trustOverride !== undefined ? { trustOverride: options.trustOverride } : {}), ...(options.isTTY !== undefined ? { isTTY: options.isTTY } : {}), ...(options.skillPaths?.length ? { skillPaths: [...options.skillPaths] } : {}) };
+      const workflowOptions: WorkflowIo = { write, stderr, ...(options.cwd !== undefined ? { cwd: options.cwd } : {}), ...(options.agentDir !== undefined ? { agentDir: options.agentDir } : {}), ...(options.signal ? { signal: options.signal } : {}), ...(options.trustOverride !== undefined ? { trustOverride: options.trustOverride } : {}), ...(options.isTTY !== undefined ? { isTTY: options.isTTY } : {}), ...(options.skillPaths?.length ? { skillPaths: [...options.skillPaths] } : {}), ...(options.roleSources ? { roleSources: options.roleSources } : {}) };
       if (args[0] === "bundle") return await bundleWorkflowCli(args.slice(1), workflowOptions);
       return args[0] === "run" ? await runWorkflowCli(args.slice(1), workflowOptions) : await exportWorkflowCli(args.slice(1), workflowOptions);
     } catch (error) { stderr(`Error: ${errorText(error)}\n`); return 1; }

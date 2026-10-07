@@ -33,7 +33,7 @@ void test("untrusted project policy cannot influence launch validation", async (
   mkdirSync(join(agentDir, "pi-extensible-workflows", "roles"), { recursive: true });
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows", "roles"), { recursive: true });
   writeFileSync(join(agentDir, "pi-extensible-workflows", "roles", "safe.md"), "Global role");
-  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "reviewer.md"), "Untrusted project role");
+  writeFileSync(join(cwd, ".pi", "pi-extensible-workflows", "roles", "project-only.md"), "Untrusted project role");
   writeFileSync(globalSettingsPath, JSON.stringify({ concurrency: 3, skills: ["global-only"], extensions: ["/global-only.ts"] }));
   writeFileSync(projectSettingsPath, JSON.stringify({ concurrency: 1, modelAliases: { reviewer: "evil/provider" }, skills: ["project-only"], extensions: ["/project-only.ts"] }));
 
@@ -43,10 +43,10 @@ void test("untrusted project policy cannot influence launch validation", async (
   assert.deepEqual(resolution.effective, resolution.global);
   assert.deepEqual(resolution.effective.skills, ["global-only"]);
   const roles = loadAgentDefinitions(cwd, agentDir, false);
-  assert.equal(roles.reviewer, undefined);
-  assert.deepEqual(roles.safe, { prompt: "Global role" });
+  assert.equal(roles["project-only"], undefined);
+  assert.deepEqual(roles.safe, { prompt: "Global role", provenance: { path: join(agentDir, "pi-extensible-workflows", "roles", "safe.md"), scope: "global", priority: 0 } });
 
-  assert.throws(() => validateWorkflowLaunch({ name: "untrusted", script: `return agent("review", { role: "reviewer" });` }, { cwd, agentDir, projectTrusted: false, availableModels: new Set(["openai/gpt"]), rootTools: new Set(), knownModels: new Set(["openai/gpt"]), settingsPath: globalSettingsPath }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_AGENT_TYPE");
+  assert.throws(() => validateWorkflowLaunch({ name: "untrusted", script: `return agent("review", { role: "project-only" });` }, { cwd, agentDir, projectTrusted: false, availableModels: new Set(["openai/gpt"]), rootTools: new Set(), knownModels: new Set(["openai/gpt"]), settingsPath: globalSettingsPath }), (error: unknown) => error instanceof WorkflowError && error.code === "UNKNOWN_AGENT_TYPE");
   assert.deepEqual(await listRunIds(cwd, "session", root), []);
 });
 

@@ -30,7 +30,7 @@ void test("settings and roles expose direct selector fields", () => {
   mkdirSync(join(cwd, ".pi", "pi-extensible-workflows"), { recursive: true });
   writeFileSync(projectSettingsPath, JSON.stringify({ skills: ["project-*"], extensions: ["!**/unsafe.mjs"], tools: ["!*", "read"] }));
   assert.deepEqual(resolveWorkflowSettings(cwd, true, globalPath).effective, { concurrency: 8, backgroundWidget: true, skills: ["*", "!experimental-*", "project-*"], extensions: ["**/*", "!**/unsafe.mjs"], tools: ["*", "!write", "!*", "read"] });
-  assert.deepEqual(parseRoleMarkdown("---\nskills: [review-*]\nextensions: [\"**/*\"]\ntools: [\"!*\", read]\n---\nReview", true, join(root, "reviewer.md")), { prompt: "Review", skills: ["review-*"], extensions: ["**/*"], tools: ["!*", "read"] });
+  assert.deepEqual(parseRoleMarkdown("---\nskills: [review-*]\nextensions: [\"**/*\"]\ntools: [\"!*\", read]\n---\nReview", true, join(root, "reviewer.md")), { provenance: { path: join(root, "reviewer.md") }, prompt: "Review", skills: ["review-*"], extensions: ["**/*"], tools: ["!*", "read"] });
   const legacyPath = join(root, "legacy.json");
   writeFileSync(legacyPath, JSON.stringify({ disabledAgentResources: { skills: ["old"] } }));
   assert.throws(() => loadSettings(legacyPath), (error: unknown) => error instanceof WorkflowError && error.message.includes("use skills, extensions, and tools selectors"));

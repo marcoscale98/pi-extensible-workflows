@@ -1,7 +1,12 @@
+import { fileURLToPath } from "node:url";
+import { collectRoleContributions, type RoleDirectoryRegistration } from "@piewf/pi-ext-roles";
+import { composeRoleConfiguration, loadSettings as loadSharedRoleSettings, roleSettingsPath, roleProjectSettingsPath } from "@piewf/pi-ext-roles/settings";
+import { canonicalExtensionSelector, roleDirectories } from "@piewf/pi-ext-roles/roles";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { InMemoryCredentialStore, InMemoryModelsStore, type Credential } from "@earendil-works/pi-ai";
 import {
+  createEventBus,
   ModelRuntime,
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -25,7 +30,6 @@ import {
   resourcePatternHasMagic,
   parseThinking,
   registeredWorkflowFunctions,
-  registeredWorkflowRoleDirectoryRegistrations,
   workflowProjectSettingsPath,
   workflowSettingsPath,
   type AgentExecutionOptions,
@@ -35,17 +39,16 @@ import {
   type WorkflowCatalogModelAlias,
   type WorkflowExtensionMetadata,
   type WorkflowFunction,
-  type WorkflowRoleDirectoryRegistration,
   type WorkflowSettings,
   type WorkflowSettingsSources,
 } from "pi-extensible-workflows";
 import type { AgentDefinition } from "pi-extensible-workflows";
-import { parseRoleMarkdown, workflowRoleDirectories } from "pi-extensible-workflows/roles";
+import { parseRoleMarkdown, legacyRoleSources } from "pi-extensible-workflows/roles";
 import { loadingRegistry, type WorkflowRegistryApi } from "pi-extensible-workflows";
 import { selectResourcesByLayers, unmatchedResourcePatterns, mergeWorkflowExtensionSettings } from "pi-extensible-workflows";
 export type DoctorSeverity = "error" | "warning";
 export interface DoctorDiagnostic { severity: DoctorSeverity; code: string; message: string; source?: string; hint?: string }
-export interface DoctorRole { name: string; path: string; scope: "extension" | "global" | "project"; active: boolean; overrides?: string; overriddenBy?: string; extension?: WorkflowExtensionMetadata }
+export interface DoctorRole { name: string; path: string; scope: "extension" | "global" | "project"; active: boolean; overrides?: string; overriddenBy?: string; extension?: WorkflowExtensionMetadata; provenance?: RoleDirectoryRegistration }
 export interface DoctorFunction { name: string; description: string; valid: boolean }
 export interface DoctorTrust { required: boolean; trusted: boolean; source: string }
 export interface DoctorRoleInspection {
@@ -67,6 +70,7 @@ export interface DoctorPiState {
   extensions?: readonly string[];
   skills?: readonly string[];
   functions: Readonly<Record<string, WorkflowFunction>>;
+  roleSources?: readonly RoleDirectoryRegistration[];
 }
 export interface DoctorReport {
   cwd: string;
@@ -74,6 +78,7 @@ export interface DoctorReport {
   settingsPath: string;
   settings: Readonly<WorkflowSettings>;
   settingsSources: WorkflowSettingsSources;
+  sharedRoleSettings?: ReturnType<typeof composeRoleConfiguration>["settings"];
   trust: DoctorTrust;
   activeTools: readonly string[];
   piExtensions: readonly string[];
@@ -160,12 +165,13 @@ async function discoverPi(cwd: string, agentDir: string): Promise<DoctorPiState>
   process.env.PI_OFFLINE = "1";
   try {
     const modelRuntime = await ModelRuntime.create({ credentials: await readCredentials(agentDir), modelsPath: join(agentDir, "models.json"), modelsStore: new InMemoryModelsStore() });
+    const bus = createEventBus();
     const services = await createAgentSessionServices({
       cwd,
       agentDir,
       settingsManager,
       modelRuntime,
-      resourceLoaderOptions: { noPromptTemplates: true, noThemes: true, noContextFiles: true },
+      resourceLoaderOptions: { eventBus: bus, noPromptTemplates: true, noThemes: true, noContextFiles: true },
       resourceLoaderReloadOptions: { resolveProjectTrust: async () => trusted },
     });
     const allModels = services.modelRuntime.getModels();
@@ -173,23 +179,26 @@ async function discoverPi(cwd: string, agentDir: string): Promise<DoctorPiState>
     const model = availableModels[0] ?? allModels[0];
     if (!model) throw new Error("Pi has no models registered");
     const { session } = await createAgentSessionFromServices({ services, sessionManager: SessionManager.inMemory(), model });
-    const activeTools = session.agent.state.tools.map(({ name }) => name).filter((name) => name !== "workflow" && name !== "workflow_respond" && name !== "workflow_catalog");
-    const extensions = services.resourceLoader.getExtensions();
-    const skills = services.resourceLoader.getSkills().skills;
-    return {
-      trust: { required, trusted, source },
-      model: { provider: model.provider, model: model.id, thinking: session.thinkingLevel },
-      activeTools,
-      knownModels: allModels.map(({ provider, id }) => `${provider}/${id}`),
-      availableModels: availableModels.map(({ provider, id }) => `${provider}/${id}`),
-      extensions: extensions.extensions.map(({ resolvedPath }) => resolvedPath),
-      skills: skills.map(({ name }) => name),
-      extensionErrors: [
-        ...extensions.errors.map(({ path, error }) => ({ path, message: error })),
-        ...services.diagnostics.filter(({ type }) => type === "error").map(({ message }) => ({ message })),
-      ],
-      functions: registeredWorkflowFunctions(),
-    };
+    try {
+      const activeTools = session.agent.state.tools.map(({ name }) => name).filter((name) => name !== "workflow" && name !== "workflow_respond" && name !== "workflow_catalog");
+      const extensions = services.resourceLoader.getExtensions();
+      const skills = services.resourceLoader.getSkills().skills;
+      return {
+        trust: { required, trusted, source },
+        model: { provider: model.provider, model: model.id, thinking: session.thinkingLevel },
+        activeTools,
+        knownModels: allModels.map(({ provider, id }) => `${provider}/${id}`),
+        availableModels: availableModels.map(({ provider, id }) => `${provider}/${id}`),
+        extensions: extensions.extensions.map(({ resolvedPath }) => resolvedPath),
+        skills: skills.map(({ name }) => name),
+        extensionErrors: [
+          ...extensions.errors.map(({ path, error }) => ({ path, message: error })),
+          ...services.diagnostics.filter(({ type }) => type === "error").map(({ message }) => ({ message })),
+        ],
+        functions: registeredWorkflowFunctions(),
+        roleSources: collectRoleContributions(bus, extensions),
+      };
+    } finally { session.dispose(); bus.clear(); }
   } finally {
     if (previousOffline === undefined) delete process.env.PI_OFFLINE;
     else process.env.PI_OFFLINE = previousOffline;
@@ -208,23 +217,19 @@ function roleFiles(dir: string): string[] {
   catch (error) { if (isNodeError(error, "ENOENT")) return []; throw error; }
 }
 
-function roleFilesFrom(dirs: readonly string[]): string[] {
-  const paths = dirs.flatMap((dir) => roleFiles(dir));
-  return [...new Map(paths.map((path) => [basename(path, ".md"), path])).values()].sort();
-}
 type ExtensionRoleFile = { name: string; path: string; directory: string; extension: WorkflowExtensionMetadata; builtin?: true };
-type ExtensionRoleScan = { files: ExtensionRoleFile[]; empty: WorkflowRoleDirectoryRegistration[]; errors: Array<{ registration: WorkflowRoleDirectoryRegistration; error: unknown }> };
+type ExtensionRoleScan = { files: ExtensionRoleFile[]; empty: RoleDirectoryRegistration[]; errors: Array<{ registration: RoleDirectoryRegistration; error: unknown }> };
 function extensionLabel(extension: WorkflowExtensionMetadata): string { return `Extension "${extension.headline}" (${extension.version})`; }
-function scanExtensionRoleFiles(registrations: readonly WorkflowRoleDirectoryRegistration[]): ExtensionRoleScan {
+function scanExtensionRoleFiles(registrations: readonly RoleDirectoryRegistration[]): ExtensionRoleScan {
   const files: ExtensionRoleFile[] = [];
-  const empty: WorkflowRoleDirectoryRegistration[] = [];
-  const errors: Array<{ registration: WorkflowRoleDirectoryRegistration; error: unknown }> = [];
+  const empty: RoleDirectoryRegistration[] = [];
+  const errors: Array<{ registration: RoleDirectoryRegistration; error: unknown }> = [];
   for (const registration of registrations) {
     try {
       const entries = readdirSync(registration.path, { withFileTypes: true });
       const roleFiles = entries.filter((entry) => isRoleFile(registration.path, entry));
       if (!roleFiles.length) empty.push(registration);
-      for (const entry of roleFiles) files.push({ name: basename(entry.name, ".md"), path: join(registration.path, entry.name), directory: registration.path, extension: registration.extension, ...(registration.builtin === true ? { builtin: true as const } : {}) });
+      for (const entry of roleFiles) files.push({ name: basename(entry.name, ".md"), path: join(registration.path, entry.name), directory: registration.path, extension: registration.extension ?? { headline: "Role contributor", version: "unknown" }, ...(registration.builtin === true ? { builtin: true as const } : {}) });
     } catch (error) { errors.push({ registration, error }); }
   }
   files.sort((left, right) => left.name.localeCompare(right.name) || left.path.localeCompare(right.path));
@@ -295,9 +300,9 @@ function matchResourcePolicy(policy: AgentResourcePolicy, pi: DoctorPiState): Ag
   const skills = [...new Set(pi.skills ?? [])];
   const tools = [...new Set(pi.activeTools)];
   const layers = policy.selectorSources;
-  const selectedSkills = selectResourcesByLayers([layers.global.skills, layers.project.skills], skills);
-  const selectedExtensions = selectResourcesByLayers([layers.global.extensions, layers.project.extensions], extensions);
-  const selectedTools = selectResourcesByLayers([layers.global.tools, layers.project.tools], tools);
+  const selectedSkills = selectResourcesByLayers([layers.defaults?.global.skills, layers.defaults?.project.skills, layers.global.skills, layers.project.skills], skills);
+  const selectedExtensions = selectResourcesByLayers([layers.defaults?.global.extensions, layers.defaults?.project.extensions, layers.global.extensions, layers.project.extensions], extensions);
+  const selectedTools = selectResourcesByLayers([layers.defaults?.global.tools, layers.defaults?.project.tools, layers.global.tools, layers.project.tools], tools);
   return { ...policy, selectedSkills, selectedExtensions, selectedTools, unmatchedSkills: unmatchedResourcePatterns(policy.effective.skills, skills), unmatchedExtensions: unmatchedResourcePatterns(policy.effective.extensions, extensions), unmatchedTools: unmatchedResourcePatterns(policy.effective.tools ?? [], tools) };
 }
 async function inspectRoleSession(cwd: string, agentDir: string, roleName: string, definition: AgentDefinition, rolePath: string, basePolicy: AgentResourcePolicy, rootModel: { provider: string; model: string; thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }, activeTools: readonly string[], aliases: Readonly<Record<string, string>>, knownModels: ReadonlySet<string>, availableModels: ReadonlySet<string>, settingsPath: string, extensionSettings: Readonly<WorkflowSettings["extensionSettings"]> | undefined, prompt: string, hooks: NonNullable<AgentExecutionRoot["agentSetupHooks"]>, diagnostics: DoctorDiagnostic[]): Promise<DoctorRoleInspection | undefined> {
@@ -305,7 +310,7 @@ async function inspectRoleSession(cwd: string, agentDir: string, roleName: strin
   const signal = new AbortController().signal;
   const transport: AgentTransport = { id: "doctor-local", createSession: async () => { throw new Error("Doctor inspection does not create transport sessions"); } };
   const run = { cwd, sessionId: "doctor", runId: "doctor", workflow: { name: "doctor" }, args: null, signal };
-  const root: AgentExecutionRoot = { cwd, model: { ...rootModel }, tools: new Set(activeTools), agentDefinitions: { [roleName]: definition }, agentDir, extensionSettings, modelAliases: aliases, knownModels, availableModels, settingsPath, agentSetupHooks: hooks, agentResourcePolicy: () => structuredClone(basePolicy), runContext: run };
+  const root: AgentExecutionRoot = { cwd, projectTrusted: basePolicy.projectTrusted, model: { ...rootModel }, tools: new Set(activeTools), resourceSelectors: basePolicy.effective, agentDefinitions: { [roleName]: definition }, agentDir, extensionSettings, modelAliases: aliases, knownModels, availableModels, settingsPath, agentSetupHooks: hooks, agentResourcePolicy: () => structuredClone(basePolicy), runContext: run };
   const options: AgentExecutionOptions = { label: roleName, workflowName: "doctor", role: roleName };
   let prepared: Awaited<ReturnType<typeof prepareAgentSetupForInspection>>;
   try { prepared = await prepareAgentSetupForInspection(root, prompt, options, transport); }
@@ -370,15 +375,43 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
     validateDoctorExtensionSettings(registry, resolved.effective.extensionSettings, "effective", cwd, pi.trust.trusted, settingsSources.extensionSettings ?? settingsPath, diagnostics);
   } catch (error) {
     const message = errorText(error);
-    const source = message.includes(projectSettingsPath) ? projectSettingsPath : settingsPath;
+    const source = [roleProjectSettingsPath(cwd), roleSettingsPath(agentDir), projectSettingsPath].find(path => message.includes(path)) ?? settingsPath;
     if (!diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
   }
+  for (const source of [roleSettingsPath(agentDir), ...(pi.trust.trusted ? [roleProjectSettingsPath(cwd)] : [])]) {
+    try { loadSharedRoleSettings(source); }
+    catch (error) { if (!diagnostics.some(item => item.code === "SETTINGS_INVALID" && item.source === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", errorText(error), source, "Fix the shared role settings file.")); }
+  }
+  let sharedRoleSettings: DoctorReport["sharedRoleSettings"];
+  let consumerModelAliases: Readonly<Record<string, string>> = {};
+  let consumerAliasSource = settingsPath;
   let resourcePolicy: AgentResourcePolicy;
   try {
-    resourcePolicy = matchResourcePolicy(resolveAgentResourcePolicy(cwd, pi.trust.trusted, settingsPath), pi);
+    const consumerGlobal = loadSettings(settingsPath);
+    const consumerProject: Partial<WorkflowSettings> = pi.trust.trusted ? loadSettings(projectSettingsPath) : {};
+    const policy = resolveAgentResourcePolicy(cwd, pi.trust.trusted, settingsPath);
+    const composition = composeRoleConfiguration({ cwd, agentDir, projectTrusted: pi.trust.trusted, selectorSources: policy.selectorSources, modelAliases: consumerProject.modelAliases ?? consumerGlobal.modelAliases ?? {} });
+    sharedRoleSettings = composition.settings;
+    consumerModelAliases = consumerProject.modelAliases ?? consumerGlobal.modelAliases ?? {};
+    consumerAliasSource = consumerProject.modelAliases === undefined ? settingsPath : projectSettingsPath;
+    for (const key of ["skills", "extensions", "tools", "extensionSettings"] as const) {
+      if (consumerGlobal[key] === undefined && consumerProject[key] === undefined && sharedRoleSettings.effective[key] !== undefined) settingsSources = { ...settingsSources, [key]: sharedRoleSettings.sources[key] };
+    }
+    if (consumerGlobal.modelAliases === undefined && consumerProject.modelAliases === undefined) settingsSources = { ...settingsSources, modelAliases: sharedRoleSettings.sources.modelAliases ?? sharedRoleSettings.globalSettingsPath };
+    // extensionSettings stay as resolved by resolveWorkflowSettings: the project consumer map replaces the global one.
+    settings = { ...settings, modelAliases: composition.modelAliases };
+    const canonical = (layer: typeof composition.selectorSources.global) => ({ ...layer, ...(layer.extensions === undefined ? {} : { extensions: layer.extensions.map(selector => canonicalExtensionSelector(selector, cwd)) }) });
+    const sources = { ...composition.selectorSources, global: canonical(composition.selectorSources.global), project: canonical(composition.selectorSources.project), ...(composition.selectorSources.defaults ? { defaults: { global: canonical(composition.selectorSources.defaults.global), project: canonical(composition.selectorSources.defaults.project) } } : {}) };
+    const all = [sources.defaults?.global, sources.defaults?.project, sources.global, sources.project];
+    resourcePolicy = matchResourcePolicy({ ...policy, selectorSources: sources, effective: {
+      skills: all.flatMap(layer => layer?.skills ?? []),
+      extensions: all.flatMap(layer => layer?.extensions ?? []).map(selector => canonicalExtensionSelector(selector, cwd)),
+      tools: all.flatMap(layer => layer?.tools ?? []),
+    } }, pi);
+    settings = { ...settings, skills: resourcePolicy.effective.skills, extensions: resourcePolicy.effective.extensions, tools: resourcePolicy.effective.tools ?? [] };
   } catch (error) {
     const message = errorText(error);
-    const source = message.includes(projectSettingsPath) ? projectSettingsPath : settingsPath;
+    const source = [roleProjectSettingsPath(cwd), roleSettingsPath(agentDir), projectSettingsPath].find(path => message.includes(path)) ?? settingsPath;
     if (!diagnostics.some(({ code, source: itemSource }) => code === "SETTINGS_INVALID" && itemSource === source)) diagnostics.push(diagnostic("error", "SETTINGS_INVALID", message, source, "Fix or remove the invalid workflow settings file."));
     resourcePolicy = emptyResourcePolicy(settingsPath, cwd, pi.trust.trusted);
   }
@@ -397,82 +430,61 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   const registeredModelAliases = registry.modelAliases();
   const dynamicAliases = new Set(registeredModelAliases.map(({ name }) => name).filter((name) => !Object.prototype.hasOwnProperty.call(aliases, name)));
   const modelAliases: WorkflowCatalogModelAlias[] = [
-    ...Object.keys(aliases).map((name) => ({ name, kind: "static" as const, provenance: settingsSources.modelAliases })),
+    ...Object.keys(aliases).map((name) => ({ name, kind: "static" as const, provenance: Object.prototype.hasOwnProperty.call(consumerModelAliases, name) ? consumerAliasSource : sharedRoleSettings?.sources.modelAliases ?? settingsSources.modelAliases })),
     ...registeredModelAliases.map(({ name, version, headline }) => ({ name, kind: "dynamic" as const, provenance: `extension: ${headline}`, version, headline })),
   ].sort((left, right) => left.name.localeCompare(right.name) || left.kind.localeCompare(right.kind));
   const roles: DoctorRole[] = [];
   const definitions = new Map<string, { path: string; definition: AgentDefinition }>();
+  const duplicateExtensionNames = new Set<string>();
   // Keep this scan local because doctor reports every invalid and duplicate file; discoverRoles intentionally fails closed on the complete set.
 
-  const extensionScan = scanExtensionRoleFiles(registeredWorkflowRoleDirectoryRegistrations());
-  for (const { registration, error } of extensionScan.errors) {
-    const message = errorText(error);
-    diagnostics.push(diagnostic("error", "ROLE_DIRECTORY", `${extensionLabel(registration.extension)} role directory "${registration.path}" could not be scanned: ${message}`, registration.path, "Fix or remove the registered role directory."));
-  }
-  for (const registration of extensionScan.empty) diagnostics.push(diagnostic("warning", "ROLE_DIRECTORY_EMPTY", `${extensionLabel(registration.extension)} role directory "${registration.path}" contains no .md role files`, registration.path, "Add packaged role files or remove the directory registration."));
-  const extensionFilesByName = new Map<string, ExtensionRoleFile[]>();
-  for (const file of extensionScan.files) extensionFilesByName.set(file.name, [...(extensionFilesByName.get(file.name) ?? []), file]);
-  const duplicateExtensionNames = new Set<string>();
-  const extensionPaths = new Map<string, string>();
-  const starterOverrides = new Map<string, string>();
-  const starterOverriddenBy = new Map<string, string>();
-  for (const [name, matches] of extensionFilesByName) {
-    const regularMatches = matches.filter(({ builtin }) => builtin !== true);
-    const starterMatches = matches.filter(({ builtin }) => builtin === true);
-    if (regularMatches.length > 1) {
-      duplicateExtensionNames.add(name);
-      diagnostics.push(diagnostic("error", "ROLE_DUPLICATE", `Duplicate extension role "${name}": ${regularMatches.map(({ path, directory, extension }) => `${extensionLabel(extension)} role directory "${directory}" (${path})`).join("; ")}`, regularMatches[0]?.path, "Keep one extension role with this name; global and project roles may override packaged defaults."));
-      continue;
+  const fallbackDirectory = join(dirname(fileURLToPath(import.meta.resolve("@piewf/pi-ext-roles"))), "..", "starter", "roles");
+  const sources: RoleDirectoryRegistration[] = [
+    { path: fallbackDirectory, scope: "builtin", builtin: true },
+    ...(pi.roleSources ?? []),
+    ...legacyRoleSources(cwd, agentDir),
+    ...roleDirectories(agentDir).map(path => ({ path, scope: "global" as const, priority: 100 })),
+    { path: join(cwd, ".pi", "pi-ext-roles", "roles"), scope: "project", priority: 100 },
+  ];
+  const rank = { builtin: 0, extension: 1, global: 2, project: 3 };
+  const seen = new Set<string>();
+  const ordered = sources.filter(source => {
+    const key = JSON.stringify([canonicalPath(source.path), source.owner, source.scope ?? "extension", source.priority ?? 0]);
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  }).sort((a, b) => rank[a.scope ?? "extension"] - rank[b.scope ?? "extension"] || (a.priority ?? 0) - (b.priority ?? 0) || a.path.localeCompare(b.path));
+  const extensionNames = new Map<string, DoctorRole>();
+  for (const source of ordered) {
+    const scope = source.scope ?? "extension";
+    let paths: string[];
+    if (scope === "extension") {
+      const metadata = source.extension ?? { headline: "Role contributor", version: "unknown" };
+      const scan = scanExtensionRoleFiles([{ ...source, extension: metadata }]);
+      for (const { registration, error } of scan.errors) diagnostics.push(diagnostic("error", "ROLE_DIRECTORY", `${extensionLabel(metadata)} role directory "${source.path}" could not be scanned: ${errorText(error)}`, registration.path, "Fix or remove the registered role directory."));
+      for (const registration of scan.empty) diagnostics.push(diagnostic("warning", "ROLE_DIRECTORY_EMPTY", `${extensionLabel(metadata)} role directory "${source.path}" contains no .md role files`, registration.path));
+      paths = scan.files.map(file => file.path);
+    } else paths = roleFiles(source.path);
+    for (const path of paths) {
+      const name = basename(path, ".md");
+      const active = scope !== "project" || pi.trust.trusted;
+      const previous = [...roles].reverse().find(role => role.name === name && role.active);
+      const role: DoctorRole = { name, path, provenance: source, scope: scope === "builtin" ? "extension" : scope, active, ...(source.extension ? { extension: source.extension } : {}), ...(active && previous ? { overrides: previous.path } : {}) };
+      if (scope === "extension") {
+        const duplicate = extensionNames.get(name);
+        if (duplicate) { duplicateExtensionNames.add(name); diagnostics.push(diagnostic("error", "ROLE_DUPLICATE", `Duplicate extension role "${name}": ${duplicate.path}; ${path}`, path)); }
+        extensionNames.set(name, role);
+      }
+      if (active && previous) { previous.active = false; previous.overriddenBy = path; }
+      roles.push(role);
+      // Untrusted project files are visible but never parsed or applied.
+      if (!active) continue;
+      const definition = parseRole(path, diagnostics, source.extension ? { directory: source.path, extension: source.extension } : undefined);
+      if (scope === "extension" && duplicateExtensionNames.has(name)) { role.active = false; definitions.delete(name); continue; }
+      if (definition) {
+        definition.provenance = { path: canonicalPath(path), scope, ...(source.priority === undefined ? {} : { priority: source.priority }), ...(source.owner === undefined ? {} : { owner: source.owner }) };
+        definitions.set(name, { path, definition });
+      } else definitions.delete(name);
     }
-    const extension = regularMatches[0] ?? starterMatches[0];
-    if (extension) extensionPaths.set(name, extension.path);
-    const regular = regularMatches[0];
-    const starter = starterMatches[0];
-    if (regular && starter) {
-      starterOverrides.set(regular.path, starter.path);
-      starterOverriddenBy.set(starter.path, regular.path);
-    }
-  }
-  for (const file of extensionScan.files) {
-    const starterPath = starterOverrides.get(file.path);
-    const overriddenBy = starterOverriddenBy.get(file.path);
-    roles.push({ name: file.name, path: file.path, scope: "extension", active: overriddenBy === undefined, extension: file.extension, ...(starterPath ? { overrides: starterPath } : {}), ...(overriddenBy ? { overriddenBy } : {}) });
-    const definition = parseRole(file.path, diagnostics, { directory: file.directory, extension: file.extension });
-    if (duplicateExtensionNames.has(file.name)) continue;
-    if (extensionPaths.get(file.name) !== file.path) continue;
-    if (definition) definitions.set(file.name, { path: file.path, definition });
-  }
-  const globalPaths = new Map<string, string>();
-  const globalRoleDirs = workflowRoleDirectories(agentDir);
-  for (const path of roleFilesFrom(globalRoleDirs)) {
-    const name = basename(path, ".md");
-    const extensionPath = extensionPaths.get(name);
-    roles.push({ name, path, scope: "global", active: true, ...(extensionPath ? { overrides: extensionPath } : {}) });
-    globalPaths.set(name, path);
-    if (extensionPath) {
-      const extension = roles.find((role) => role.path === extensionPath);
-      if (extension) { extension.active = false; extension.overriddenBy = path; }
-    }
-    const definition = parseRole(path, diagnostics);
-    if (definition) definitions.set(name, { path, definition }); else definitions.delete(name);
-  }
-  for (const path of roleFilesFrom([join(cwd, ".pi", "pi-extensible-workflows", "roles")])) {
-    const name = basename(path, ".md");
-    const globalPath = globalPaths.get(name);
-    const extensionPath = extensionPaths.get(name);
-    const overriddenPath = globalPath ?? extensionPath;
-    const active = pi.trust.trusted;
-    roles.push({ name, path, scope: "project", active, ...(active && overriddenPath ? { overrides: overriddenPath } : {}) });
-    if (!active) continue;
-    if (globalPath) {
-      const global = roles.find((role) => role.path === globalPath);
-      if (global) { global.active = false; global.overriddenBy = path; }
-    } else if (extensionPath) {
-      const extension = roles.find((role) => role.path === extensionPath);
-      if (extension) { extension.active = false; extension.overriddenBy = path; }
-    }
-    const definition = parseRole(path, diagnostics);
-    if (definition) definitions.set(name, { path, definition }); else definitions.delete(name);
   }
   for (const [name, { path, definition }] of definitions) {
     inspectRoleUsage(path, definition, activeTools, knownModels, availableModels, diagnostics, aliases, dynamicAliases, settingsPath);
@@ -530,7 +542,7 @@ export async function doctor(options: DoctorOptions = {}): Promise<DoctorReport>
   const severityOrder: Record<DoctorSeverity, number> = { error: 0, warning: 1 };
   diagnostics.sort((left, right) => severityOrder[left.severity] - severityOrder[right.severity] || (left.source ?? "").localeCompare(right.source ?? "") || left.code.localeCompare(right.code) || left.message.localeCompare(right.message));
   roles.sort((left, right) => left.name.localeCompare(right.name) || left.scope.localeCompare(right.scope));
-  return { cwd, agentDir, settingsPath, settings, settingsSources, trust: pi.trust, activeTools: [...activeTools].sort(), piExtensions: [...new Set((pi.extensions ?? []).map(canonicalPath))].sort(), piSkills: [...new Set(pi.skills ?? [])].sort(), roles, functions, modelAliases, resourcePolicy, ...(options.role !== undefined ? { roleTarget: options.role } : {}), ...(roleInspection ? { roleInspection } : {}), diagnostics };
+  return { cwd, agentDir, settingsPath, settings, settingsSources, ...(sharedRoleSettings ? { sharedRoleSettings } : {}), trust: pi.trust, activeTools: [...activeTools].sort(), piExtensions: [...new Set((pi.extensions ?? []).map(canonicalPath))].sort(), piSkills: [...new Set(pi.skills ?? [])].sort(), roles, functions, modelAliases, resourcePolicy, ...(options.role !== undefined ? { roleTarget: options.role } : {}), ...(roleInspection ? { roleInspection } : {}), diagnostics };
 }
 
 function count(report: DoctorReport, severity: DoctorSeverity): number { return report.diagnostics.filter((item) => item.severity === severity).length; }
@@ -540,6 +552,7 @@ function nestedValues(label: string, values: readonly string[]): string[] {
 }
 function roleSelectorSourceLines(sources: NonNullable<DoctorRoleInspection["resources"]["selectorSources"]>): string[] {
   return [
+    ...(sources.defaults ? [...nestedValues("Shared global skill selectors", sources.defaults.global.skills ?? []), ...nestedValues("Shared project skill selectors", sources.defaults.project.skills ?? []), ...nestedValues("Shared global extension selectors", sources.defaults.global.extensions ?? []), ...nestedValues("Shared project extension selectors", sources.defaults.project.extensions ?? []), ...nestedValues("Shared global tool selectors", sources.defaults.global.tools ?? []), ...nestedValues("Shared project tool selectors", sources.defaults.project.tools ?? [])] : []),
     ...nestedValues("Global skill selectors", sources.global.skills ?? []),
     ...nestedValues("Global extension selectors", sources.global.extensions ?? []),
     ...nestedValues("Global tool selectors", sources.global.tools ?? []),
@@ -625,6 +638,7 @@ export function formatDoctorReport(report: DoctorReport): string {
     "## Pi active skills",
     ...(report.piSkills.length ? report.piSkills.map((skill) => `- \`${skill}\``) : ["- None resolved"]),
     "",
+    ...(report.sharedRoleSettings ? [`- Shared global role settings: ${report.sharedRoleSettings.globalSettingsPath}`, `- Shared project role settings: ${report.sharedRoleSettings.projectSettingsPath}`, ...roleSelectorSourceLines(report.resourcePolicy.selectorSources)] : []),
     "## Workflow agent resource selectors",
     `- Global settings: \`${report.resourcePolicy.globalSettingsPath}\``,
     `- Global skills: ${report.resourcePolicy.global.skills.join(", ") || "(none)"}`,

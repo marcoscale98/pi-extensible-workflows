@@ -1,5 +1,6 @@
+import { canonicalExtensionSelector } from "@piewf/pi-ext-roles/roles";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { builtinModules } from "node:module";
 import { createRequire } from "node:module";
@@ -319,9 +320,11 @@ function runnerSource(): string {
     "  const engineIndex = pathToFileURL(createRequire(pathToFileURL(join(engine.root, 'dist', 'src', 'cli.js'))).resolve('pi-extensible-workflows')).href;",
     "  const api = await import(engineIndex);",
     "  globalThis.__pi_bundle_api = api;",
+    "  const cli = await import(pathToFileURL(join(engine.root, 'dist', 'src', 'cli.js')).href);",
+    "  globalThis.__pi_bundle_roles_api = cli.roleContributionApi;",
     "  const payload = await import(pathToFileURL(join(bundleRoot, 'payload', 'workflow.mjs')).href + '?bundle=' + String(Date.now()));",
-    "  await payload.register(api.registerWorkflowExtension);",
-    "  return { api, payload };",
+    "  const roleSources = await payload.register(api.registerWorkflowExtension);",
+    "  return { api, payload, roleSources };",
     "}",
     "async function setup(argv) {",
     "  if (argv.some((arg) => arg !== '--yes' && arg !== '--help' && arg !== '-h')) throw new Error('Usage: ' + manifest.command + ' setup [--yes]');",
@@ -344,11 +347,11 @@ function runnerSource(): string {
     "  assertPiVersion(pi);",
     "  const engine = await ensureEngine(pi, false, false);",
     "  assertSetupState(pi, engine);",
-    "  const { api } = await loadPayload(engine);",
+    "  const { api, roleSources } = await loadPayload(engine);",
     "  await checkRequirements(pi, api);",
     "  const cli = await import(pathToFileURL(join(engine.root, 'dist', 'src', 'cli.js')).href);",
     "  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');",
-    "  return cli.runCli(['run', manifest.workflow.name, ...argv], { cwd: process.cwd(), agentDir, skillPaths: bundleSkillPaths(), stderr: (text) => process.stderr.write(text) });",
+    "  return cli.runCli(['run', manifest.workflow.name, ...argv], { cwd: process.cwd(), agentDir, skillPaths: bundleSkillPaths(), roleSources, stderr: (text) => process.stderr.write(text) });",
     "}",
     "const argv = process.argv.slice(2);",
     "try {",
@@ -366,29 +369,43 @@ function bundledWorkflowModule(workflow: WorkflowCatalogFunction, source: Portab
   const aliases = Object.entries(aliasTargets);
   const modules = ["./extension.mjs", ...extensionModules.map((name) => `./extensions/${name}`)];
   return [
+    "import { fileURLToPath } from 'node:url';",
     "export async function register(registerWorkflowExtension) {",
     "  const captured = [];",
+    "  const listeners = new Map();",
+    "  const pi = { events: { on(name, listener) { const list = listeners.get(name) ?? []; list.push(listener); listeners.set(name, list); return () => { const index = list.indexOf(listener); if (index >= 0) list.splice(index, 1); }; }, emit(name, event) { for (const listener of listeners.get(name) ?? []) listener(event); } } };",
     "  const previousCapture = globalThis.__pi_bundle_capture;",
-    "  globalThis.__pi_bundle_capture = (extension) => { captured.push(extension); };",
+    "  let moduleSource;",
+    "  globalThis.__pi_bundle_capture = (extension) => {",
+    "    if (Object.prototype.hasOwnProperty.call(extension, 'roleDirectories')) throw new Error('INVALID_METADATA: WorkflowExtension.roleDirectories is no longer supported. Use registerRoleContribution from @piewf/pi-ext-roles and re-export this bundle.');",
+    "    captured.push({ ...extension, source: moduleSource });",
+    "  };",
     "  try {",
-    ...modules.map((name, index) => `    const extension${String(index)} = await import(${JSON.stringify(name)});`),
+    ...modules.map((name, index) => `    moduleSource = new URL(${JSON.stringify(name)}, import.meta.url).href; const extension${String(index)} = await import(${JSON.stringify(name)});`),
     `    const factory = extension0[${JSON.stringify(source.export)}];`,
     `    if (typeof factory !== "function") throw new Error(${JSON.stringify(`Workflow extension export ${source.export} is not a function`)});`,
-    "    await factory();",
-    ...modules.slice(1).map((_name, index) => `    if (typeof extension${String(index + 1)}.default === "function") await extension${String(index + 1)}.default();`),
+    '    moduleSource = new URL("./extension.mjs", import.meta.url).href;',
+    "    await factory(pi);",
+    ...modules.slice(1).map((_name, index) => `    moduleSource = new URL(${JSON.stringify(modules[index + 1])}, import.meta.url).href; if (typeof extension${String(index + 1)}.default === "function") await extension${String(index + 1)}.default(pi);`),
     "  } finally {",
     "    if (previousCapture === undefined) delete globalThis.__pi_bundle_capture; else globalThis.__pi_bundle_capture = previousCapture;",
     "  }",
     `  const extension = captured.find((candidate) => candidate?.functions?.[${JSON.stringify(workflow.name)}]);`,
     `  if (!extension) throw new Error("Bundled extension does not register workflow ${workflow.name}");`,
     "  for (const candidate of captured) if (candidate !== extension) registerWorkflowExtension(candidate);",
+    `  const members = ${JSON.stringify(modules)}.map(name => new URL(name, import.meta.url).href);`,
+    "  const contributed = [...(globalThis.__pi_bundle_roles_api?.collectRoleContributions(pi.events, members) ?? [])];",
     "  registerWorkflowExtension({",
     "    ...extension,",
     "    source: new URL(\"./extension.mjs\", import.meta.url).href,",
     ...(aliases.length ? [`    modelAliases: { ...(extension.modelAliases ?? {}), ${aliases.map(([name, target]) => `${JSON.stringify(name)}: { resolve: () => ${JSON.stringify(target)} }`).join(", ")} },`] : []),
     `    functions: { [${JSON.stringify(workflow.name)}]: extension.functions[${JSON.stringify(workflow.name)}] },`,
-    `    roleDirectories: ${withRoles ? "[new URL(\"./roles\", import.meta.url)]" : "[]"},`,
     "  });",
+    ...(withRoles ? [
+      '  const packagedPath = fileURLToPath(new URL("./roles", import.meta.url));',
+      '  if (!contributed.some(source => source.path === packagedPath && (source.scope ?? "extension") === "extension")) contributed.push({ path: packagedPath, owner: new URL("./extension.mjs", import.meta.url).href, scope: "extension" });',
+    ] : []),
+    "  return contributed;",
     "}",
     "",
   ].join("\n");
@@ -412,7 +429,7 @@ function isPackageSpecifier(specifier: string): boolean {
 }
 
 function isAllowedExternal(specifier: string): boolean {
-  return nodeBuiltins.has(specifier) || packageName(specifier) === "pi-extensible-workflows";
+  return nodeBuiltins.has(specifier) || packageName(specifier) === "pi-extensible-workflows" || specifier === "@piewf/pi-ext-roles";
 }
 const packageNamePattern = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 
@@ -500,16 +517,27 @@ async function bundleExtension(sourcePath: string, sourceExport: string, depende
   return { source: output.text, esbuild: esbuild.version };
 }
 
-function roleMarkdown(role: AgentDefinition): string {
+function roleMarkdown(role: AgentDefinition, resources: PortableWorkflowBundleResources | undefined): string {
+  const extensions = role.extensions?.map(selector => {
+    if (!role.provenance?.path) return selector;
+    const canonical = canonicalExtensionSelector(selector, dirname(role.provenance.path));
+    const negated = canonical.startsWith("!");
+    const body = negated ? canonical.slice(1) : canonical;
+    for (const source of resources?.extensions ?? []) {
+      const suffix = relative(resolve(source), body);
+      if (suffix === "" || (!suffix.startsWith("..") && !suffix.startsWith("/"))) return `${negated ? "!" : ""}../extensions/${basename(source)}${suffix ? `/${suffix}` : ""}`;
+    }
+    return canonical;
+  });
   const metadata = ["---"];
   if (role.description !== undefined) metadata.push(`description: ${JSON.stringify(role.description)}`);
   if (role.model !== undefined) metadata.push(`model: ${JSON.stringify(role.model)}`);
-  if (role.thinking !== undefined) metadata.push(`thinking: ${JSON.stringify(role.thinking)}`);
   if (role.tools !== undefined) metadata.push(`tools: ${JSON.stringify(role.tools)}`);
   if (role.overrideSystemPrompt !== undefined) metadata.push(`overrideSystemPrompt: ${String(role.overrideSystemPrompt)}`);
   if (role.contextFiles !== undefined) metadata.push(`contextFiles: ${JSON.stringify(role.contextFiles)}`);
   if (role.skills !== undefined) metadata.push(`skills: ${JSON.stringify(role.skills)}`);
-  if (role.extensions !== undefined) metadata.push(`extensions: ${JSON.stringify(role.extensions)}`);
+  if (extensions !== undefined) metadata.push(`extensions: ${JSON.stringify(extensions)}`);
+  if (role.extensionSettings !== undefined) metadata.push(`extensionSettings: ${JSON.stringify(role.extensionSettings)}`);
   metadata.push("---");
   return `${metadata.join("\n")}\n${role.prompt ?? ""}\n`;
 }
@@ -548,7 +576,7 @@ function copyResources(root: string, resources: PortableWorkflowBundleResources 
   return Object.keys(payload).length ? payload : undefined;
 }
 
-function extensionPackageShim(paths: readonly string[], bundledSource: string): string {
+function extensionPackageShim(paths: readonly string[], bundledSource: string, roles = false): string {
   const importedNames = new Set<string>();
   const sources = paths.map((path) => {
     if (!/\.(?:c|m)?js$/.test(path)) throw new Error(`Selected extension must be a JavaScript module file: ${path}`);
@@ -556,14 +584,14 @@ function extensionPackageShim(paths: readonly string[], bundledSource: string): 
   });
   sources.push(bundledSource);
   for (const source of sources) {
-    for (const match of source.matchAll(/import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+["']pi-extensible-workflows["']/g)) {
+    for (const match of source.matchAll(new RegExp(`import\\s+(?:type\\s+)?\\{([^}]+)\\}\\s+from\\s+["']${roles ? "@piewf/pi-ext-roles" : "pi-extensible-workflows"}["']`, "g"))) {
       for (const part of (match[1] ?? "").split(",")) {
         const imported = part.trim().split(/\s+as\s+/, 1)[0]?.trim();
         if (imported && /^[A-Za-z_$][\w$]*$/.test(imported)) importedNames.add(imported);
       }
     }
   }
-  return [...importedNames].map((name) => name === "registerWorkflowExtension" ? "export const registerWorkflowExtension = (extension) => globalThis.__pi_bundle_capture ? globalThis.__pi_bundle_capture(extension) : globalThis.__pi_bundle_api.registerWorkflowExtension(extension);" : `export const ${name} = globalThis.__pi_bundle_api.${name};`).join("\n") + "\n";
+  return [...importedNames].map((name) => !roles && name === "registerWorkflowExtension" ? "export const registerWorkflowExtension = (extension) => globalThis.__pi_bundle_capture ? globalThis.__pi_bundle_capture(extension) : globalThis.__pi_bundle_api.registerWorkflowExtension(extension);" : roles ? `export const ${name} = globalThis.__pi_bundle_roles_api.${name};` : `export const ${name} = globalThis.__pi_bundle_api.${name};`).join("\n") + "\n";
 }
 
 function baseManifest(input: PortableWorkflowBundleInput, version: 1 | 2): PortableWorkflowManifest {
@@ -599,7 +627,7 @@ function writeBundleFiles(input: PortableWorkflowBundleInput, manifest: Portable
       mkdirSync(roleDirectory);
       for (const [name, role] of Object.entries(roles)) {
         if (!name || name === "." || name === ".." || name.includes("/") || name.includes("\\")) throw new Error(`Invalid role name for bundle: ${name}`);
-        writeFileSync(join(roleDirectory, `${name}.md`), roleMarkdown(role), { encoding: "utf8", mode: 0o600 });
+        writeFileSync(join(roleDirectory, `${name}.md`), roleMarkdown(role, input.resources), { encoding: "utf8", mode: 0o600 });
       }
     }
     const copiedPayload = copyResources(temporary, input.resources);
@@ -610,6 +638,10 @@ function writeBundleFiles(input: PortableWorkflowBundleInput, manifest: Portable
     mkdirSync(packageDirectory, { recursive: true });
     writeFileSync(join(packageDirectory, "package.json"), '{"type":"module","exports":"./index.mjs"}\n', { encoding: "utf8", mode: 0o600 });
     writeFileSync(join(packageDirectory, "index.mjs"), extensionPackageShim(extensionPaths, bundledExtensionSource), { encoding: "utf8", mode: 0o600 });
+    const rolesPackage = join(payload, "node_modules", "@piewf", "pi-ext-roles");
+    mkdirSync(rolesPackage, { recursive: true });
+    writeFileSync(join(rolesPackage, "package.json"), '{"type":"module","exports":"./index.mjs"}\n', { encoding: "utf8", mode: 0o600 });
+    writeFileSync(join(rolesPackage, "index.mjs"), extensionPackageShim(extensionPaths, bundledExtensionSource, true), { encoding: "utf8", mode: 0o600 });
     writeFileSync(join(temporary, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     writeFileSync(join(payload, "workflow.mjs"), workflowSource, { encoding: "utf8", mode: 0o600 });
     writeFileSync(join(payload, "runner.mjs"), runnerSource(), { encoding: "utf8", mode: 0o700 });

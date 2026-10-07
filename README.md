@@ -71,7 +71,7 @@ Runs are backgrounded by default; set `foreground: true` to wait for the final v
 The same roles that workflows use can also start a plain Pi session, without a workflow:
 
 ```sh
-npm install -g @piewf/cli
+npm install -g @piewf/pi-ext-roles
 pi-role reviewer                 # Pi with the reviewer role's model, tools, skills, and prompt
 pi-role scout -p "Where is the retry logic?"
 ```
@@ -85,7 +85,8 @@ The single core installation provides workflows, the `reviewLoop` starter for de
 ### Companion packages
 
 - [`@piewf/herdr`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/extensions/herdr) (`pi install npm:@piewf/herdr`): workflow-agent sessions in Herdr panes.
-- [`@piewf/cli`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/cli) (`npm install -g @piewf/cli`): `pi-role <role>` to start Pi as a role, and `piewf` for doctor, inspection, headless runs, export, and bundles.
+- [`@piewf/cli`](https://github.com/vekexasia/pi-extensible-workflows/tree/main/packages/cli) (`npm install -g @piewf/cli`): `piewf` for doctor, inspection, headless runs, export, and bundles.
+- [`@piewf/pi-ext-roles`](https://github.com/vekexasia/pi-ext-roles) (`npm install -g @piewf/pi-ext-roles`): `pi-role <role>` to start native Pi with role defaults. Updating core supplies the roles library automatically; a separate plugin install is not required for workflow roles.
 
 ## Development
 

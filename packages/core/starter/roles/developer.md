@@ -1,5 +1,4 @@
 ---
-model: developer-model
 description: Developer focused agent
 ---
 

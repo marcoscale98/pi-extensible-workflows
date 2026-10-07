@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import starter from "../starter/index.js";
@@ -12,7 +11,6 @@ import {
   loadingRegistry,
   parseRoleMarkdown,
   registeredWorkflowFunctions,
-  registeredWorkflowRoleDirectoryRegistrations,
   resetWorkflowRegistry,
   type WorkflowFunctionContext,
   WorkflowRegistry,
@@ -57,7 +55,7 @@ function reviewContext(
   return { context, roles };
 }
 
-void test("registers the starter function, aliases, and packaged roles", async () => {
+void test("registers the starter function and aliases without a role registry", async () => {
   const registry = registerStarter();
 
   assert.deepEqual(Object.keys(registeredWorkflowFunctions()), ["reviewLoop"]);
@@ -73,14 +71,7 @@ void test("registers the starter function, aliases, and packaged roles", async (
     { "developer-model": "example/root", "reviewer-model": "example/root", "scout-model": "example/root", "oracle-model": "example/root", "researcher-model": "example/root" },
   );
 
-  const registration = registeredWorkflowRoleDirectoryRegistrations();
-  assert.equal(registration.length, 1);
-  assert.deepEqual(
-    registration[0] && Object.keys(registration[0]).sort(),
-    ["builtin", "extension", "path"],
-  );
-  assert.match(registration[0]?.path ?? "", /starter[\\/]roles[\\/]?$/);
-  assert.equal(registration[0]?.builtin, true);
+  assert.equal("roleDirectories" in registry, false);
 });
 void test("records and validates portable workflow source metadata", () => {
   const workflow = { description: "Portable", input: { type: "object" }, output: { type: "boolean" }, run: () => true };
@@ -92,29 +83,6 @@ void test("records and validates portable workflow source metadata", () => {
   assert.throws(() => { new WorkflowRegistry().register({ ...extension, dependencies: ["typebox", "typebox"] }); }, /dependencies/);
   assert.throws(() => { new WorkflowRegistry().register({ ...extension, dependencies: ["invalid package"] }); }, /dependencies/);
 });
-void test("marks a symlinked starter roles directory as builtin", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-starter-role-link-"));
-  const link = join(root, "roles");
-  symlinkSync(fileURLToPath(new URL("../starter/roles/", import.meta.url)), link, "dir");
-  const registry = new WorkflowRegistry();
-  registry.register({ version: "1.0.0", headline: "Starter roles", roleDirectories: [link] });
-  assert.equal(registry.roleDirectoryRegistrations()[0]?.builtin, true);
-});
-void test("marks starter roles from a separate package installation as builtin", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-starter-package-"));
-  const packageRoot = join(root, "node_modules", "pi-extensible-workflows");
-  const roleDirectory = join(packageRoot, "dist", "starter", "roles");
-  mkdirSync(roleDirectory, { recursive: true });
-  writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "pi-extensible-workflows" }));
-  const registry = new WorkflowRegistry();
-  registry.register({ version: "1.0.0", headline: "Starter roles", roleDirectories: [roleDirectory] });
-  try {
-    assert.equal(registry.roleDirectoryRegistrations()[0]?.builtin, true);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 void test("reviewLoop passes after a reviewer approves", async () => {
   const { context, roles } = reviewContext([
     { pass: false, findings: ["Fix the issue"] },
@@ -149,13 +117,14 @@ void test("packages portable role settings without forbidden overrides", () => {
   const reviewer = parseRoleMarkdown(readFileSync(new URL("reviewer.md", roles), "utf8"), true);
   assert.deepEqual(
     { description: developer.description, model: developer.model, tools: developer.tools, skills: developer.skills, overrideSystemPrompt: developer.overrideSystemPrompt },
-    { description: "Developer focused agent", model: "developer-model", tools: undefined, skills: undefined, overrideSystemPrompt: undefined },
+    { description: "Developer focused agent", model: undefined, tools: undefined, skills: undefined, overrideSystemPrompt: undefined },
   );
   assert.deepEqual(
     { model: reviewer.model, tools: reviewer.tools, skills: reviewer.skills, overrideSystemPrompt: reviewer.overrideSystemPrompt },
-    { model: "reviewer-model", tools: ["!*", "read", "grep", "find", "ls"], skills: undefined, overrideSystemPrompt: undefined },
+    { model: undefined, tools: ["!*", "read", "grep", "find", "ls"], skills: undefined, overrideSystemPrompt: undefined },
   );
   assert.equal(reviewer.tools?.includes("bash"), false);
+  for (const role of ["developer", "reviewer", "scout", "oracle", "researcher"]) assert.equal(parseRoleMarkdown(readFileSync(new URL(`${role}.md`, roles), "utf8"), true).model, undefined);
 });
 
 void test("static settings aliases shadow starter dynamic aliases", async () => {
