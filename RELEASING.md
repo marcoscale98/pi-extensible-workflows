@@ -46,8 +46,10 @@ local-provider transport suite; do not replace them with argv-only assertions.
 Ship the extraction in the next workflow **major release**. The removed
 `registerWorkflowExtension({ roleDirectories })` contract is a breaking change,
 not a transparent upgrade. The independent roles package keeps its own version.
-The candidate manifests and lockfile are prepared for `6.0.0`. This plan is not
-permission to publish the workflow major.
+The `6.0.0` release was explicitly approved and published through GitHub Actions.
+Core, CLI and Herdr registry versions and provenance were verified. See the
+[post-release E2E report](docs/release-6.0.0-verification.md). Future releases
+still require explicit publication approval.
 
 ### Existing installations
 
@@ -86,7 +88,7 @@ permission to publish the workflow major.
 - [x] Verify a migrated contributor and re-exported portable bundle with actual
       local-provider execution.
 - [x] Rerun final checks, package verification and isolated native/TUI regressions.
-- [ ] Obtain the workflow publication approval, publish the shared workspace major,
+- [x] Obtain the workflow publication approval, publish the shared workspace major,
       and verify registry installation and binaries before announcing availability.
 
 Documentation ownership: the independent package roles guide, linked from its
@@ -113,9 +115,10 @@ prefix with a minimal environment, installs the actual registry versions, and
 upgrades to the candidate tarballs. It uses a local HTTP model provider for real
 model/tool/result flows, inspects regular/fullscreen TUI and reload, checks legacy
 file bytes remain unchanged, then removes the temporary installation. Logs are in
-`.tmp/roles-release/logs/`. Python 3 and a Unix PTY are required. External paid
-providers, MCP servers, Windows PTY and registry installation of the unpublished
-workflow candidate are not covered. Core runtime trust remains Pi-owned: a
+`.tmp/roles-release/logs/`. Python 3 and a Unix PTY are required. This pre-release upgrade check does not cover external paid providers, MCP
+servers, Windows PTY or registry installation of the then-unpublished workflow
+candidate. Published managed installs and hosted models were subsequently checked
+in the post-release E2E report. Core runtime trust remains Pi-owned: a
 role-only project directory does not by itself trigger Pi's native trust prompt;
 explicit `--no-approve` excludes it.
 
