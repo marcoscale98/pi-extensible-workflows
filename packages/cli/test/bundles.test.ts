@@ -6,6 +6,7 @@ import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { portableEngineVersion, writePortableWorkflowBundle } from "../src/bundles.js";
+import { canonicalPath } from "@marcoscale98/pi-extensible-workflows";
 import { readCliTestBundleState, readCliTestManifest, writeCliTestExtensionSource } from "./support.js";
 
 type BundlePayload = { register: (registerWorkflowExtension: (extension: unknown) => void) => Promise<void> };
@@ -51,7 +52,7 @@ void test("bundle loads extensions with aliased workflow API imports", async () 
     await payload.register((value: unknown) => registered.push(value));
 
     assert.equal(registered.length, 2);
-    assert.deepEqual(registered[0], { version: "1.0.0", headline: "Aliased extension", functions: {} });
+    assert.deepEqual(registered[0], { version: "1.0.0", headline: "Aliased extension", functions: {}, source: pathToFileURL(canonicalPath(join(destination, "payload", "extensions", "aliased-extension.mjs"))).href });
   } finally {
     if (previousApi === undefined) delete (globalThis as typeof globalThis & { __pi_bundle_api?: unknown }).__pi_bundle_api;
     else (globalThis as typeof globalThis & { __pi_bundle_api: unknown }).__pi_bundle_api = previousApi;
@@ -262,9 +263,9 @@ void test("portable bundle setup and launch preserve generic requirements withou
   const root = mkdtempSync(join(tmpdir(), "pi-extensible-workflows-bundle-runtime-"));
   t.after(() => { rmSync(root, { recursive: true, force: true }); });
   const agentDir = join(root, "agent");
-  const engineDirectory = join(agentDir, "npm", "node_modules", "@piewf");
+  const engineDirectory = join(agentDir, "npm", "node_modules", "@marcoscale98");
   mkdirSync(engineDirectory, { recursive: true });
-  symlinkSync(process.cwd(), join(engineDirectory, "cli"));
+  symlinkSync(process.cwd(), join(engineDirectory, "piewf-cli"));
   const workflow = { name: "bundleRuntime", version: "1.0.0", headline: "Bundle", description: "Generic bundle runtime", input: { type: "object", properties: { value: { type: "integer" } }, required: ["value"], additionalProperties: false }, output: { type: "integer" } };
   const source = writeCliTestExtensionSource(join(root, "extension.mjs"), workflow, "async run(input) { return input.value; }");
   const environment = { ...process.env, PATH: `${resolve("../../node_modules/.bin")}${delimiter}${process.env.PATH ?? ""}`, HOME: root, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" };
@@ -290,7 +291,9 @@ void test("portable bundle setup and launch preserve generic requirements withou
   assert.match(run(mismatch, ["setup", "--yes"]).stderr, /Bundle requires Pi 0\.82\.0; found 1\.0\.0/);
   const missingEngine = await create("missing-engine", { engineVersion: "0.0.0" });
   assert.match(run(missingEngine, ["7"]).stderr, /no installation is performed during launch/);
-  assert.match(run(missingEngine, ["setup"]).stderr, /compatible @piewf\/cli package is missing/);
+  assert.match(run(missingEngine, ["setup"]).stderr, /compatible workflow CLI package is missing/);
+  const missingForkEngine = await create("missing-fork-engine", { engineVersion: "6.2.1-fork.999" });
+  assert.match(run(missingForkEngine, ["setup"]).stderr, /npm:@marcoscale98\/piewf-cli@6\.2\.1-fork\.999/);
   const tools = await create("builtin-tools", { requirements: { tools: ["grep", "find", "ls"] } });
   const toolsSetup = run(tools, ["setup", "--yes"]);
   assert.equal(toolsSetup.status, 0, toolsSetup.stderr);

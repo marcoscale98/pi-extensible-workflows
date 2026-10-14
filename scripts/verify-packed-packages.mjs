@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -121,12 +121,12 @@ try {
   const smokeEnv = { ...process.env, HOME: work, PI_CODING_AGENT_DIR: resolve(work, "isolated-agent"), PI_OFFLINE: "1" };
   const importSmoke = spawnSync(process.execPath, ["--input-type=module", "-e", `
     import assert from 'node:assert/strict';
-    import * as root from 'pi-extensible-workflows';
-    import * as types from 'pi-extensible-workflows/types';
-    import * as validation from 'pi-extensible-workflows/validation';
+    import * as root from '${corePackageName}';
+    import * as types from '${corePackageName}/types';
+    import * as validation from '${corePackageName}/validation';
     for (const name of ['parseRoleMarkdown', 'discoverRoles', 'resolveRole', 'roleNameOf']) assert.equal(name in root, false);
-    await assert.rejects(import('pi-extensible-workflows/roles'), error => error.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED');
-    await assert.rejects(import('@piewf/cli/pi-role'), error => error.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED');
+    await assert.rejects(import('${corePackageName}/roles'), error => error.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED');
+    await assert.rejects(import('${cliPackageName}/pi-role'), error => error.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED');
     assert.equal(types.LAUNCH_SNAPSHOT_IDENTITY_VERSION, 6);
     assert.deepEqual(validation.validateAgentOptions({role: 42}), {role: 42});
     const registry = new root.WorkflowRegistry();

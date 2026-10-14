@@ -82,8 +82,8 @@ function setupAndLaunch(root: string, bundle: string, agentDir: string): { setup
 void test("bundled guarded registerCommand and pi.on factories set up and launch in a recipient without the source extension", (t) => {
   const { root, bundle } = bundleGuarded(t);
   const agentDir = join(root, "recipient-agent");
-  mkdirSync(join(agentDir, "npm", "node_modules", "@piewf"), { recursive: true });
-  symlinkSync(process.cwd(), join(agentDir, "npm", "node_modules", "@piewf", "cli"));
+  mkdirSync(join(agentDir, "npm", "node_modules", "@marcoscale98"), { recursive: true });
+  symlinkSync(process.cwd(), join(agentDir, "npm", "node_modules", "@marcoscale98", "piewf-cli"));
   const { setup, launch } = setupAndLaunch(root, bundle, agentDir);
   assert.equal(setup.status, 0, setup.stderr);
   assert.match(setup.stdout, /Bundle setup complete\./);
@@ -99,13 +99,13 @@ void test("packed engine sets up and launches a guarded bundle when the recipien
   for (const workspace of ["../core", "."]) execFileSync("npm", ["pack", "--ignore-scripts", "--silent", "--pack-destination", tarballs], { cwd: resolve(workspace), stdio: "pipe", timeout: 120_000 });
   const agentDir = join(root, "recipient-agent");
   const modules = join(agentDir, "npm", "node_modules");
-  const core = join(modules, "pi-extensible-workflows");
-  const engine = join(modules, "@piewf", "cli");
+  const core = join(modules, "@marcoscale98", "pi-extensible-workflows");
+  const engine = join(modules, "@marcoscale98", "piewf-cli");
   mkdirSync(core, { recursive: true });
   mkdirSync(engine, { recursive: true });
   const workspaceModules = resolve("../../node_modules");
-  for (const name of readdirSync(workspaceModules)) if (name !== "pi-extensible-workflows" && name !== "@piewf" && name !== ".bin") symlinkSync(join(workspaceModules, name), join(modules, name));
-  for (const tarball of readdirSync(tarballs)) execFileSync("tar", ["-xzf", join(tarballs, tarball), "-C", tarball.startsWith("piewf-cli-") ? engine : core, "--strip-components=1"], { stdio: "pipe" });
+  for (const name of readdirSync(workspaceModules)) if (name !== "pi-extensible-workflows" && name !== "@marcoscale98" && name !== ".bin") symlinkSync(join(workspaceModules, name), join(modules, name));
+  for (const tarball of readdirSync(tarballs)) execFileSync("tar", ["-xzf", join(tarballs, tarball), "-C", tarball.startsWith("marcoscale98-piewf-cli-") ? engine : core, "--strip-components=1"], { stdio: "pipe" });
   assert.equal(existsSync(join(engine, "dist", "src", "cli.js")), true);
   assert.equal(existsSync(join(core, "dist", "src", "index.js")), true);
   const recipientSource = writeExtension(join(root, "recipient-source"), core);
@@ -115,7 +115,7 @@ void test("packed engine sets up and launches a guarded bundle when the recipien
   rmSync(bundle, { recursive: true, force: true });
   const { setup, launch } = setupAndLaunch(root, detached, agentDir);
   assert.equal(setup.status, 0, setup.stderr);
-  assert.match(setup.stdout, /@piewf\/cli: \d+\.\d+\.\d+/);
+  assert.match(setup.stdout, /@marcoscale98\/piewf-cli: \d+\.\d+\.\d+/);
   assert.equal(launch.status, 0, launch.stderr);
   assert.equal(launch.stdout, "7\n");
   assert.match(launch.stderr, /Warning: .*recipient-source\/guarded\.mjs: .*Global name is already registered: guardedFactory/);
@@ -179,8 +179,8 @@ void test("a bundled preparation hook keeps owning its option beside an unrelate
   assert.equal(bundled.status, 0, bundled.stderr);
   const launch = async (extensions: string[]) => {
     const agentDir = join(root, `recipient-${String(extensions.length)}`);
-    mkdirSync(join(agentDir, "npm", "node_modules", "@piewf"), { recursive: true });
-    symlinkSync(process.cwd(), join(agentDir, "npm", "node_modules", "@piewf", "cli"));
+    mkdirSync(join(agentDir, "npm", "node_modules", "@marcoscale98"), { recursive: true });
+    symlinkSync(process.cwd(), join(agentDir, "npm", "node_modules", "@marcoscale98", "piewf-cli"));
     writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fixture: { baseUrl: `http://127.0.0.1:${String(address.port)}/v1`, api: "openai-completions", apiKey: "fixture", models: [{ id: "root", name: "root", reasoning: false, input: ["text"], contextWindow: 100_000, maxTokens: 1_000 }] } } }));
     writeFileSync(join(agentDir, "auth.json"), "{}");
     writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "fixture", defaultModel: "root", defaultThinkingLevel: "off", extensions }));

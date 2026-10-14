@@ -1,4 +1,4 @@
-import { decodePreparedAgentConfiguration } from "pi-extensible-workflows/persistence";
+import { decodePreparedAgentConfiguration } from "@marcoscale98/pi-extensible-workflows/persistence";
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";

@@ -49,7 +49,7 @@ export interface DoctorOptions {
   cwd?: string;
   agentDir?: string;
   settingsPath?: string;
-  agentOptions?: Readonly<Record<string, import("pi-extensible-workflows").JsonValue>>;
+  agentOptions?: Readonly<Record<string, JsonValue>>;
   prompt?: string;
   discoverPi?: (cwd: string, agentDir: string) => Promise<DoctorPiState>;
   activeTools?: readonly string[];

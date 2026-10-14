@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import console from "node:console";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const tarballs = resolve(process.argv[2] ?? "");
 assert.ok(process.argv[2], "Usage: node scripts/verify-local-roles-adapter.mjs <local-tarball-directory>");
 const packed = readdirSync(tarballs);
-const products = ["pi-extensible-workflows-", "piewf-cli-", "piewf-pi-ext-roles-"];
+const products = ["marcoscale98-pi-extensible-workflows-", "marcoscale98-piewf-cli-", "piewf-pi-ext-roles-"];
 const paths = products.map(prefix => {
   const matches = packed.filter(name => name.startsWith(prefix) && name.endsWith(".tgz"));
   assert.equal(matches.length, 1, `Expected one local ${prefix} tarball`);
@@ -65,12 +65,14 @@ try {
   const installed = await command("npm", ["install", "--ignore-scripts", "--legacy-peer-deps", "--omit=dev", ...paths]);
   assert.equal(installed.code, 0, installed.stderr);
   const modules = join(install, "node_modules");
+  // Exercise the official plugin's canonical import against the fork, never an upstream engine.
+  cpSync(join(modules, "@marcoscale98/pi-extensible-workflows"), join(modules, "pi-extensible-workflows"), { recursive: true });
   put(join(install, 'paired-types.ts'), `import type {ExtensionAPI} from '@earendil-works/pi-coding-agent'; import * as registry from 'pi-extensible-workflows/registry'; import {registerWorkflowRoles} from '@piewf/pi-ext-roles/workflow'; export function verify(pi:ExtensionAPI){registerWorkflowRoles(pi,registry);}`);
   const typecheck = await command(join(root,'node_modules/.bin/tsc'), ['--noEmit','--strict','--skipLibCheck','--module','NodeNext','--target','ES2022','paired-types.ts']);
   assert.equal(typecheck.code,0,typecheck.stdout+typecheck.stderr);
   const core = join(modules, "pi-extensible-workflows");
   const roles = join(modules, "@piewf/pi-ext-roles");
-  const cli = join(modules, "@piewf/cli/dist/src/cli.js");
+  const cli = join(modules, "@marcoscale98/piewf-cli/dist/src/cli.js");
   await new Promise(accept => server.listen(0, "127.0.0.1", accept));
   const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
   const sdkScript = join(install, "paired-sdk.mjs");
